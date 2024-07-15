@@ -1,12 +1,46 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 
 import math
 import pathlib
 import re
 
-import cinpact
+
+BCOT_DIR = pathlib.Path("C:\\Users\\U01\\Documents\\Datasets\\BCOT")
+BCOT_DATASET_DIR = BCOT_DIR / "BCOT_dataset"
+BCOT_POSE_EXPORT_DIR = BCOT_DIR / "srt3d_results_bcot"
+
+
+BCOT_BODY_NAMES = [
+    "3D Touch",  "Ape", "Auto GPS", "Bracket", "Cat", "Deadpool", "Driller",
+    "FlashLight",  "Jack",        "Lamp Clamp",                 "RJ45 Clip",
+    "Squirrel",     "Standtube",          "Stitch",         "Teapot",
+    "Vampire Queen" , "RTI Arm",      "Wall Shelf" , "Lego", "Tube", 
+]
+
+BCOT_SEQ_NAMES = [
+    "complex_movable_handheld",
+    "complex_movable_suspension",
+    "complex_static_handheld",
+    "complex_static_suspension",
+    "complex_static_trans",
+    "easy_static_handheld",
+    "easy_static_suspension",
+    "easy_static_trans",
+    "light_movable_handheld",
+    "light_movable_suspension",
+    "light_static_handheld",
+    "light_static_suspension",
+    "light_static_trans",
+    "occlusion_movable_suspension",
+    "outdoor_scene1_movable_handheld_cam1",
+    "outdoor_scene1_movable_handheld_cam2",
+    "outdoor_scene1_movable_suspension_cam1",
+    "outdoor_scene1_movable_suspension_cam2",
+    "outdoor_scene2_movable_handheld_cam1",
+    "outdoor_scene2_movable_handheld_cam2",
+    "outdoor_scene2_movable_suspension_cam1",
+    "outdoor_scene2_movable_suspension_cam2",
+]
 
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
@@ -102,3 +136,52 @@ def axisAngleListFromMats(matList):
     # print("Max difference:", np.max(np.array(differences)))
     
     return np.array(retList)
+
+class BCOT_Data_Calculator:
+    def __init__(self, bodyIndex, seqIndex, skipAmt):
+        seq = BCOT_SEQ_NAMES[seqIndex]
+        bod = BCOT_BODY_NAMES[bodyIndex]
+        
+        self.skipAmt = skipAmt
+        self.posePathGT = BCOT_DATASET_DIR / seq / bod / "pose.txt"
+
+        print("Pose path:", self.posePathGT)
+        posePathCalc = BCOT_POSE_EXPORT_DIR / ("cvOnly_skip" + str(skipAmt) + "_poses_" + seq + "_" + bod +".txt")
+
+        patternNum = r"(-?\d+\.?\d*)"
+        patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
+        patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
+
+        translationsGT = []
+        translationsCalc = []
+        rotationsGT = []
+        rotationsCalc = []
+        with open(self.posePathGT, "r") as file:
+            for line in file.readlines():
+                transMatch = patternTrans.search(line)
+                translationsGT.append(np.array([float(g) for g in transMatch.groups()]))
+                rotMatch = patternRot.search(line)
+                rotRead = np.array([float(g) for g in rotMatch.groups()])
+                rotationsGT.append(np.array(rotRead).reshape((3,3)))
+                
+        with open(posePathCalc, "r") as file:
+            for line in file.readlines():
+                transMatch = patternTrans.search(line)
+                translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
+                rotMatch = patternRot.search(line)
+                rotRead = np.array([float(g) for g in rotMatch.groups()])
+                rotationsCalc.append(np.array(rotRead).reshape((3,3)))
+
+        self.translationsGTNP = np.array(translationsGT)
+        self.translationsCalcNP = np.array(translationsCalc)
+
+        self.rotationsGTNP = axisAngleListFromMats(rotationsGT)
+        self.rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
+
+        self.issueFrames = []
+        for rotArr in [self.rotationsGTNP, self.rotationsCalcNP]:
+            for i in range(1, rotArr.shape[0]):
+                if np.dot(rotArr[i-1], rotArr[i]) < 0:
+                    self.issueFrames.append((i, rotArr[i-1], rotArr[i])) #rotArr[i] *= -1
+
+

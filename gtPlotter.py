@@ -2,107 +2,35 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
-import math
-import pathlib
-import re
-
 import cinpact
 
-from gtCommon import matFromAxisAngle, axisAngleFromMat, axisAngleListFromMats
+from gtCommon import BCOT_Data_Calculator
 
-bcotDir = pathlib.Path("D:\\DatasetsAndResults\\BCOT")
-datasetDir = bcotDir / "BCOT_dataset"
-poseExportDir = bcotDir / "srt3d_results_bcot"
-
-body_names = [
-    "3D Touch",  "Ape", "Auto GPS", "Bracket", "Cat", "Deadpool", "Driller",
-    "FlashLight",  "Jack",        "Lamp Clamp",                 "RJ45 Clip",
-    "Squirrel",     "Standtube",          "Stitch",         "Teapot",
-    "Vampire Queen" , "RTI Arm",      "Wall Shelf" , "Lego", "Tube", 
-]
-
-sequence_names = [
-    "complex_movable_handheld",
-    "complex_movable_suspension",
-    "complex_static_handheld",
-    "complex_static_suspension",
-    "complex_static_trans",
-    "easy_static_handheld",
-    "easy_static_suspension",
-    "easy_static_trans",
-    "light_movable_handheld",
-    "light_movable_suspension",
-    "light_static_handheld",
-    "light_static_suspension",
-    "light_static_trans",
-    "occlusion_movable_suspension",
-    "outdoor_scene1_movable_handheld_cam1",
-    "outdoor_scene1_movable_handheld_cam2",
-    "outdoor_scene1_movable_suspension_cam1",
-    "outdoor_scene1_movable_suspension_cam2",
-    "outdoor_scene2_movable_handheld_cam1",
-    "outdoor_scene2_movable_handheld_cam2",
-    "outdoor_scene2_movable_suspension_cam1",
-    "outdoor_scene2_movable_suspension_cam2",
-]
+bodIndex = 1
+seqIndex = 11
+skipAmount = 2
+calculator = BCOT_Data_Calculator(bodIndex, seqIndex, skipAmount)
 
 
-posePathGT = datasetDir / sequence_names[11] / body_names[1] / "pose.txt"
-print("Pose path:", posePathGT)
 
-skipAmt = 2
-posePathCalc = poseExportDir / ("cvOnly_skip" + str(skipAmt) + "_poses_" + sequence_names[11] + "_" + body_names[1] +".txt")
 
-patternNum = r"(-?\d+\.?\d*)"
-patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
-patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
-translationsGT = []
-translationsCalc = []
-rotationsGT = []
-rotationsCalc = []
-with open(posePathGT, "r") as file:
-    for line in file.readlines():
-        transMatch = patternTrans.search(line)
-        translationsGT.append(np.array([float(g) for g in transMatch.groups()]))
-        rotMatch = patternRot.search(line)
-        rotRead = np.array([float(g) for g in rotMatch.groups()])
-        rotationsGT.append(np.array(rotRead).reshape((3,3)))
-        
-with open(posePathCalc, "r") as file:
-    for line in file.readlines():
-        transMatch = patternTrans.search(line)
-        translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
-        rotMatch = patternRot.search(line)
-        rotRead = np.array([float(g) for g in rotMatch.groups()])
-        rotationsCalc.append(np.array(rotRead).reshape((3,3)))
-
-translationsGTNP = np.array(translationsGT)
-translationsCalcNP = np.array(translationsCalc)
-
-rotationsGTNP = axisAngleListFromMats(rotationsGT)
-rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
-
-issueFrames = []
-for rotArr in [rotationsGTNP, rotationsCalcNP]:
-    for i in range(1, rotArr.shape[0]):
-        if np.dot(rotArr[i-1], rotArr[i]) < 0:
-            issueFrames.append((i, rotArr[i-1], rotArr[i])) #rotArr[i] *= -1
 
 def plotGTvsCalc(gt, calc, showOnlyGT = False):
+    skipAmt = calculator.skipAmt
     x = gt[:, 0]
     y = gt[:, 1]
     z = gt[:, 2]
     w = np.arange(len(x))#translationsNP.shape[0])
 
-    lastFrameNum = len(calc) * (skipAmt + 1)
+    lastFrameNum = len(calc) * (calculator.skipAmt + 1)
 
     init_k = 10
     init_c = 10
     init_t = lastFrameNum
     init_endpt = -1
 
-    curvePts = cinpact.getSplinePts(calc, init_c, init_k, 1000)
+    curvePts = cinpact.CinpactCurve(calc, init_c, init_k, 1000).curvePoints
 
     scaled_w = (w - w.min()) / w.ptp()
     colors = plt.cm.coolwarm(scaled_w)
@@ -173,6 +101,6 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
         
     plt.show()
 
-plotGTvsCalc(rotationsGTNP, rotationsCalcNP, False)
+plotGTvsCalc(calculator.rotationsGTNP, calculator.rotationsCalcNP, False)
 
-print("Issue frames for pose path", posePathGT, "are:", issueFrames)
+print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)
