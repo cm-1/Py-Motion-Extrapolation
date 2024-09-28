@@ -19,7 +19,7 @@ uVals = np.linspace(uInterval[0], uInterval[1], len(ptsToFit))
 delta = SPLINE_DEGREE
 for r in range(len(ptsToFit)):
     u = uVals[r]
-    while (delta < len(ptsToFit) - 1 and u >= uVals[delta + 1]):
+    while (delta < NUM_CTRL_PTS - 1 and u >= knotList[delta + 1]):
         delta = delta + 1 # muList[delta + 1]
     for c in range(NUM_CTRL_PTS):
         mat[r][c] = bspline.bSplineInner(
