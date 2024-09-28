@@ -230,11 +230,12 @@ def ptsFromNURBS(spline, numSegments, genEquidistantPoints):
                 muList.append(1)
             uList.append(currentU)
     else:
+        spaceBetween = 1.0
         # Basic/default/simple uniform knot sequence
         for i in range(numKnots):
-            currentU += spaceBetween
             muList.append(1)
             uList.append(currentU)
+            currentU += spaceBetween
 
     paramVals = np.zeros(numSegments + 1)
     # Check that there's enough ctrl points to make a curve.
@@ -305,6 +306,8 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
     # pts = spline.points
     # bpy.context.scene.objects.active
 
+# Tangents are calculated as the derivatives of the interpolating polynomial
+# for five consecutive points containing a given point.
 def tangentsFromPoints(pVals):
     numPts = pVals.shape[0]
 
@@ -332,7 +335,9 @@ def tangentsFromPoints(pVals):
 
     return tangentValsNP
 
-def normalFromUnitTangents(tangentVals):
+# Only calculates the first normal vector, with the expectation that it would
+# be propogated.
+def firstNormalFromUnitTangents(tangentVals):
     # We estimate the first normal using the same technique to estimate tangents.
     estN = (-25)*tangentVals[0] + 48*tangentVals[1] - 36*tangentVals[2] + 16*tangentVals[3] - 3*tangentVals[4]
 
