@@ -46,6 +46,8 @@ BCOT_SEQ_NAMES = [
 # Uses common formula that you can google if need-be.
 def matFromAxisAngle(scaledAxis):
     angle = np.linalg.norm(scaledAxis)
+    if angle == 0.0:
+        return np.identity(3)
     unitAxis = scaledAxis / angle
     x, y, z = unitAxis.flatten()
     skewed = np.array([
@@ -66,8 +68,11 @@ def axisAngleFromMat(matrix, lastAngle, lastAxis):
     ])
     
     # The angle of rotation about the above axis direction.
-    # Outputs of acos are constrained to [0, pi], which will impact later code. 
-    angle = math.acos((matrix.trace() - 1)/2.0)
+    # Outputs of acos are constrained to [0, pi], which will impact later code.
+    # Input needs to be clamped to [-1, 1] in case fp precision causes it to
+    # exit that interval and, thus, the domain for acos. 
+    acosInput = max(-1.0, min((matrix.trace() - 1)/2.0, 1.0))
+    angle = math.acos(acosInput)
 
     # TL;DR: Detect axis flips and increment/decrement angle to prevent jumps.
     # Can skip longer explanation below if you want or need to.
@@ -117,7 +122,9 @@ def axisAngleFromMat(matrix, lastAngle, lastAxis):
     # the angle AND we use this scaling to flip the axis dir if need-be, then
     # we save on a few extra calculations.
     nonUnitAxisLen = 2.0 * math.sin(angle)
-    
+    if nonUnitAxisLen == 0.0: # Separate return statement here to avoid div-by-0
+        return 0, np.zeros(3)
+
     return angle, (angle / nonUnitAxisLen) * nonUnitAxisDir
 
 
