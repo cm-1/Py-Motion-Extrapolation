@@ -202,8 +202,8 @@ def ptsFromNURBS(spline, numSegments, genEquidistantPoints):
 
     # Weights are the fourth/"W" coordinate following XYZ
     ctrlPtsWithWeights = np.array([np.array(pt.co) for pt in spline.points])
-    ctrlPtCoords = ctrlPtsWithWeights[:, :3]
-    weights = ctrlPtsWithWeights[:, 3]
+    ctrlPtCoords = ctrlPtsWithWeights[:, :-1]
+    weights = ctrlPtsWithWeights[:, -1]
 
     ctrlPtRadii = np.array([pt.radius for pt in spline.points])
     

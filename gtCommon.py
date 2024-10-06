@@ -3,6 +3,7 @@ import numpy as np
 import math
 import pathlib
 import re
+import os # TODO: replace fully with pathlib.
 
 
 BCOT_DIR = pathlib.Path("C:\\Users\\U01\\Documents\\Datasets\\BCOT")
@@ -160,18 +161,42 @@ def axisAngleListFromMats(matList):
     
     return np.array(retList)
 
+def isBodySeqPairValid(bodyIndex, seqIndex):
+    seq = BCOT_SEQ_NAMES[seqIndex]
+    bod = BCOT_BODY_NAMES[bodyIndex]
+    
+    posePathGT = BCOT_DATASET_DIR / seq / bod
+    return os.path.isdir(posePathGT)
+
+
+
 class BCOT_Data_Calculator:
     def __init__(self, bodyIndex, seqIndex, skipAmt):
-        seq = BCOT_SEQ_NAMES[seqIndex]
-        bod = BCOT_BODY_NAMES[bodyIndex]
+
         
         self.skipAmt = skipAmt
-        self.posePathGT = BCOT_DATASET_DIR / seq / bod / "pose.txt"
+        self.issueFrames = []
+
+        self._seq = BCOT_SEQ_NAMES[seqIndex]
+        self._bod = BCOT_BODY_NAMES[bodyIndex]
+        
+        self.posePathGT = BCOT_DATASET_DIR / self._seq / self._bod / "pose.txt"
+
+        self.translationsGTNP = np.array([])
+        self.translationsCalcNP = np.array([])
+
+        self.rotationsGTNP = np.array([])
+        self.rotationsCalcNP = np.array([])
+        self._dataLoaded = False
+    
+    def loadData(self):
+        if self._dataLoaded:
+            return
 
         print("Pose path:", self.posePathGT)
-        posePathCalc = BCOT_POSE_EXPORT_DIR / ("cvOnly_skip" + str(skipAmt) + "_poses_" + seq + "_" + bod +".txt")
+        posePathCalc = BCOT_POSE_EXPORT_DIR / ("cvOnly_skip" + str(self.skipAmt) + "_poses_" + self._seq + "_" + self._bod +".txt")
 
-        patternNum = r"(-?\d+\.?\d*)"
+        patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
         patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
@@ -187,24 +212,40 @@ class BCOT_Data_Calculator:
                 rotRead = np.array([float(g) for g in rotMatch.groups()])
                 rotationsGT.append(np.array(rotRead).reshape((3,3)))
                 
-        with open(posePathCalc, "r") as file:
-            for line in file.readlines():
-                transMatch = patternTrans.search(line)
-                translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
-                rotMatch = patternRot.search(line)
-                rotRead = np.array([float(g) for g in rotMatch.groups()])
-                rotationsCalc.append(np.array(rotRead).reshape((3,3)))
+        if os.path.exists(posePathCalc):
+            with open(posePathCalc, "r") as file:
+                for line in file.readlines():
+                    transMatch = patternTrans.search(line)
+                    translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
+                    rotMatch = patternRot.search(line)
+                    rotRead = np.array([float(g) for g in rotMatch.groups()])
+                    rotationsCalc.append(np.array(rotRead).reshape((3,3)))
 
-        self.translationsGTNP = np.array(translationsGT)
-        self.translationsCalcNP = np.array(translationsCalc)
+        self._translationsGTNP = np.array(translationsGT)
+        self._translationsCalcNP = np.array(translationsCalc)
 
-        self.rotationsGTNP = axisAngleListFromMats(rotationsGT)
-        self.rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
+        self._rotationsGTNP = axisAngleListFromMats(rotationsGT)
+        self._rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
 
-        self.issueFrames = []
         for rotArr in [self.rotationsGTNP, self.rotationsCalcNP]:
             for i in range(1, rotArr.shape[0]):
                 if np.dot(rotArr[i-1], rotArr[i]) < 0:
                     self.issueFrames.append((i, rotArr[i-1], rotArr[i])) #rotArr[i] *= -1
 
+        self._dataLoaded = True
 
+
+    def getTranslationsGTNP(self, useSkipAmt):
+        self.loadData()
+        step = (1 + self.skipAmt) if useSkipAmt else 1
+        return self._translationsGTNP[::step]
+    def getTranslationsCalcNP(self):
+        self.loadData()
+        return self._translationsCalcNP
+    def getRotationsGTNP(self, useSkipAmt):
+        self.loadData()
+        step = (1 + self.skipAmt) if useSkipAmt else 1
+        return self._rotationsGTNP[::step]
+    def getRotationsCalcNP(self):
+        self.loadData()
+        return self._rotationsCalcNP
