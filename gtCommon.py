@@ -6,7 +6,7 @@ import re
 
 
 BCOT_DIR = pathlib.Path("C:\\Users\\U01\\Documents\\Datasets\\BCOT")
-BCOT_DATASET_DIR = BCOT_DIR / "BCOT_dataset"
+BCOT_DATASET_DIR = BCOT_DIR / "BCOT_Dataset"
 BCOT_POSE_EXPORT_DIR = BCOT_DIR / "srt3d_results_bcot"
 
 
@@ -42,10 +42,28 @@ BCOT_SEQ_NAMES = [
     "outdoor_scene2_movable_suspension_cam2",
 ]
 
+def shortBodyNameBCOT(longName):
+    maxLen = 11
+    if len(longName) < maxLen:
+        return longName
+    return longName[:maxLen - 3] + "..."
+
+def shortSeqNameBCOT(longName):
+    words = longName.split("_")
+    retVal = ""
+    for w in words:
+        retVal += w[0]
+        if w[-1] in "12":
+            retVal += w[-1]
+        retVal += "_"
+    return retVal[:-1]
+
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
 def matFromAxisAngle(scaledAxis):
     angle = np.linalg.norm(scaledAxis)
+    if angle == 0.0:
+        return np.identity(3)
     unitAxis = scaledAxis / angle
     x, y, z = unitAxis.flatten()
     skewed = np.array([
@@ -66,8 +84,11 @@ def axisAngleFromMat(matrix, lastAngle, lastAxis):
     ])
     
     # The angle of rotation about the above axis direction.
-    # Outputs of acos are constrained to [0, pi], which will impact later code. 
-    angle = math.acos((matrix.trace() - 1)/2.0)
+    # Outputs of acos are constrained to [0, pi], which will impact later code.
+    # Input needs to be clamped to [-1, 1] in case fp precision causes it to
+    # exit that interval and, thus, the domain for acos. 
+    acosInput = max(-1.0, min((matrix.trace() - 1)/2.0, 1.0))
+    angle = math.acos(acosInput)
 
     # TL;DR: Detect axis flips and increment/decrement angle to prevent jumps.
     # Can skip longer explanation below if you want or need to.
@@ -117,7 +138,9 @@ def axisAngleFromMat(matrix, lastAngle, lastAxis):
     # the angle AND we use this scaling to flip the axis dir if need-be, then
     # we save on a few extra calculations.
     nonUnitAxisLen = 2.0 * math.sin(angle)
-    
+    if nonUnitAxisLen == 0.0: # Separate return statement here to avoid div-by-0
+        return 0, np.zeros(3)
+
     return angle, (angle / nonUnitAxisLen) * nonUnitAxisDir
 
 
