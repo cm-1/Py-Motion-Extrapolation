@@ -6,7 +6,7 @@ import re
 
 
 BCOT_DIR = pathlib.Path("C:\\Users\\U01\\Documents\\Datasets\\BCOT")
-BCOT_DATASET_DIR = BCOT_DIR / "BCOT_dataset"
+BCOT_DATASET_DIR = BCOT_DIR / "BCOT_Dataset"
 BCOT_POSE_EXPORT_DIR = BCOT_DIR / "srt3d_results_bcot"
 
 
@@ -41,6 +41,22 @@ BCOT_SEQ_NAMES = [
     "outdoor_scene2_movable_suspension_cam1",
     "outdoor_scene2_movable_suspension_cam2",
 ]
+
+def shortBodyNameBCOT(longName):
+    maxLen = 11
+    if len(longName) < maxLen:
+        return longName
+    return longName[:maxLen - 3] + "..."
+
+def shortSeqNameBCOT(longName):
+    words = longName.split("_")
+    retVal = ""
+    for w in words:
+        retVal += w[0]
+        if w[-1] in "12":
+            retVal += w[-1]
+        retVal += "_"
+    return retVal[:-1]
 
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
