@@ -11,8 +11,8 @@ seqIndex = 11
 skipAmount = 2
 calculator = BCOT_Data_Calculator(bodIndex, seqIndex, skipAmount)
 
-translations = calculator.translationsGTNP[::skipAmount]
-rotations = calculator.rotationsGTNP[::skipAmount]
+translations = calculator.getTranslationsGTNP(True)
+rotations = calculator.getRotationsGTNP(True)
 
 numTimestamps = len(translations)
 timestamps = np.arange(numTimestamps)

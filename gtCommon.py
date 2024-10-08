@@ -182,11 +182,11 @@ class BCOT_Data_Calculator:
         
         self.posePathGT = BCOT_DATASET_DIR / self._seq / self._bod / "pose.txt"
 
-        self.translationsGTNP = np.array([])
-        self.translationsCalcNP = np.array([])
+        self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
+        self._translationsCalcNP = np.zeros((0,3), dtype=np.float64)
 
-        self.rotationsGTNP = np.array([])
-        self.rotationsCalcNP = np.array([])
+        self._rotationsGTNP = np.zeros((0,3), dtype=np.float64)
+        self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
         self._dataLoaded = False
     
     def loadData(self):
@@ -201,9 +201,7 @@ class BCOT_Data_Calculator:
         patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
         translationsGT = []
-        translationsCalc = []
         rotationsGT = []
-        rotationsCalc = []
         with open(self.posePathGT, "r") as file:
             for line in file.readlines():
                 transMatch = patternTrans.search(line)
@@ -214,20 +212,21 @@ class BCOT_Data_Calculator:
                 
         if os.path.exists(posePathCalc):
             with open(posePathCalc, "r") as file:
+                translationsCalc = []
+                rotationsCalc = []
                 for line in file.readlines():
                     transMatch = patternTrans.search(line)
                     translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
                     rotMatch = patternRot.search(line)
                     rotRead = np.array([float(g) for g in rotMatch.groups()])
                     rotationsCalc.append(np.array(rotRead).reshape((3,3)))
+                    self._translationsCalcNP = np.array(translationsCalc)
+                    self._rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
 
         self._translationsGTNP = np.array(translationsGT)
-        self._translationsCalcNP = np.array(translationsCalc)
-
         self._rotationsGTNP = axisAngleListFromMats(rotationsGT)
-        self._rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
 
-        for rotArr in [self.rotationsGTNP, self.rotationsCalcNP]:
+        for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
             for i in range(1, rotArr.shape[0]):
                 if np.dot(rotArr[i-1], rotArr[i]) < 0:
                     self.issueFrames.append((i, rotArr[i-1], rotArr[i])) #rotArr[i] *= -1

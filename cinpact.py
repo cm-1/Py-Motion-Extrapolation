@@ -4,6 +4,13 @@ import numpy as np
 class CinpactCurve:
     def __init__(self, ctrlPts, supportRad: float, k: float, numSubdivPts: int):
         numCtrlPts = len(ctrlPts)
+
+        # If ctrlPts is empty, just leave the curve empty.
+        if numCtrlPts == 0:
+            self.curvePoints = np.zeros((0,3), dtype=np.float64)
+            self.paramVals = np.array([], dtype=np.float64)
+            return
+        
         maxRad = float((numCtrlPts - 1) >> 1)
 
         step = (numCtrlPts - 1.0)/(numSubdivPts - 1.0)

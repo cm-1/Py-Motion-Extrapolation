@@ -23,7 +23,10 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
     z = gt[:, 2]
     w = np.arange(len(x))#translationsNP.shape[0])
 
-    lastFrameNum = len(calc) * (calculator.skipAmt + 1)
+    lastFrameNum = len(gt) - (len(gt) % (calculator.skipAmt + 1))
+    # TODO: Remove the below sanity check after I get a chance to test with real data again.
+    if len(calc) > 0 and lastFrameNum != len(calc) * (calculator.skipAmt + 1):
+        raise Exception("Logic error in frame num calc!")
 
     init_k = 10
     init_c = 10
@@ -86,7 +89,7 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 
         def updatePts(_):
             global curvePts
-            curvePts = cinpact.getSplinePts(calc[:init_endpt], cSlider.val, kSlider.val, 1000)
+            curvePts = cinpact.CinpactCurve(calc[:init_endpt], cSlider.val, kSlider.val, 1000).curvePoints
             end = int(tSlider.val)
             line[0].set_data_3d(
                 curvePts[:end, 0], curvePts[:end, 1], curvePts[:end, 2]
@@ -101,6 +104,6 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
         
     plt.show()
 
-plotGTvsCalc(calculator.rotationsGTNP, calculator.rotationsCalcNP, False)
+plotGTvsCalc(calculator.getTranslationsGTNP(False), calculator.getTranslationsCalcNP(), False)
 
 print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)
