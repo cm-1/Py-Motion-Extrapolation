@@ -20,6 +20,7 @@ import gtCommon
 # ng - n <= 1 - k
 # g <= 1 - (k-1)/n
 
+FRAME_SKIP_AMT = 2
 SPLINE_DEGREE = 2
 PTS_USED_TO_CALC_LAST = 6 # Must be at least spline's degree + 1.
 NUM_OUTPUT_PREDICTIONS = 1
@@ -60,16 +61,22 @@ class AxLines:
     vel_line: typing.Any
     accel_line: typing.Any
 
-@dataclass
 class ObjSeqData:
-    bodID: int
-    seqID: int
-    calculator: typing.Any
-    plot_data: typing.Any = None
-    pred_data: typing.Any = None
+    def __init__(self, bodID: int, seqID: int):
+        self.bodID = bodID
+        self.seqID = seqID
+        self.calculator = gtCommon.BCOT_Data_Calculator(bodID, seqID, FRAME_SKIP_AMT)
+        self.lastKnownPtIndex = 40# SPLINE_DEGREE
+        self.plot_data = None
+        self.pred_data = None
+        self.y_window = (-2.0, 2.0)
+
+    # Returns [xmin, xmax, ymin, ymax]
+    def getWindowVals(self):
+        x_max = self.lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS + 1
+        x_min = self.lastKnownPtIndex - 3
+        return [x_min, x_max, self.y_window[0], self.y_window[1]]
     # data_col_keys: typing.Any = field(default_factory=list)
-    y_window: typing.Tuple[float, float] = (-2.0, 2.0)
-    # unused_lastKnownPtIndex: int = 0 
     # needs_reset: bool = True # TODO: Make "False" have an affect.
 
 
@@ -77,8 +84,6 @@ axLinesDict = dict()
 buttonIndexToDataRow = {
     (0,0): 0, (1,0): 1, (2,0): 2, (0,4): 3, (1,4): 4, (2,4): 5
 }
-
-lastKnownPtIndex = 40
 
 # nonRandomHeights = np.array([0.9, 0.8, 0.99, 1.2, 0.5, 0.1, 0.135])
 # def randErr(numPts, low = -1, high = 1):
@@ -93,10 +98,7 @@ for seqIndex in range(len(gtCommon.BCOT_SEQ_NAMES)):
     bodList = []
     for bodIndex in range(len(gtCommon.BCOT_BODY_NAMES)):
         if gtCommon.isBodySeqPairValid(bodIndex, seqIndex):
-            bodList.append(ObjSeqData(
-                bodIndex, seqIndex, 
-                gtCommon.BCOT_Data_Calculator(bodIndex, seqIndex, 2)
-            ))
+            bodList.append(ObjSeqData(bodIndex, seqIndex))
         else:
             bodList.append(None)
     objSeqDataGrid.append(bodList)
@@ -130,12 +132,14 @@ def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
 
 
 fig, ax = plt.subplots(figsize=(8, 6))
-axisVals = [0, 5, -2, 2]
-ax.axis(axisVals)
+ax.axis([-1, 1, -1, 1])
 
 def on_press(event):
     x_shift = 0
     y_shift = 0
+    bInd = int(slider1.val + 0.001)
+    sInd = int(slider2.val + 0.001)
+    selectedObjInfo = objSeqDataGrid[sInd][bInd]
     if event.key == 'a':
         x_shift = -1
     elif event.key == 'd':
@@ -144,14 +148,16 @@ def on_press(event):
         y_shift = 1
     elif event.key == 'x':
         y_shift = -1
-    if x_shift!= 0 or y_shift != 0:
-        axisVals[0] += x_shift
-        axisVals[1] += x_shift
-        axisVals[2] += y_shift
-        axisVals[3] += y_shift
-        ax.axis(axisVals)
-        fig.canvas.draw()
-
+    if x_shift != 0 or y_shift != 0 and selectedObjInfo is not None:
+        selectedObjInfo.lastKnownPtIndex += x_shift
+        prevYRange = selectedObjInfo.y_window
+        newYRange = (prevYRange[0] + y_shift, prevYRange[1] + y_shift)
+        selectedObjInfo.y_window = newYRange
+        if x_shift != 0:
+            update(None)
+        else:
+            ax.axis(selectedObjInfo.getWindowVals())
+            fig.canvas.draw_idle()
 
 fig.canvas.mpl_connect('key_press_event', on_press)
 
@@ -211,7 +217,7 @@ button_states = np.full((len(row_labels), len(column_labels)), False) # Initial 
 
 
 
-def updatePredictionData(lastKnownPtIndex, objSeqDataInfo):
+def updatePredictionData(objSeqDataInfo):
 
     bcotDataObj = objSeqDataGrid[objSeqDataInfo.seqID][objSeqDataInfo.bodID]
     if bcotDataObj is None or not np.any(button_states):
@@ -236,10 +242,11 @@ def updatePredictionData(lastKnownPtIndex, objSeqDataInfo):
 
     objSeqDataInfo.plot_data = PlotData(np.arange(len(ptsData)), ptsData)
 
-    lastKnownSplineIndex = min(lastKnownPtIndex, len(ptsData) - NUM_OUTPUT_PREDICTIONS - 1)
+    lkpi_ceiling = len(ptsData) - NUM_OUTPUT_PREDICTIONS - 1
+    lastKnownSplineIndex = min(objSeqDataInfo.lastKnownPtIndex, lkpi_ceiling)
     lastKnownSplineIndex = max(lastKnownSplineIndex, SPLINE_DEGREE)
 
-    lastKnownVelIndex = min(lastKnownPtIndex, len(ptsData) - 2)
+    lastKnownVelIndex = min(objSeqDataInfo.lastKnownPtIndex, len(ptsData) - 2)
     lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel
 
     startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
@@ -324,7 +331,7 @@ def clearAndRedraw(objSeqDataInfo):
         line_vel = ax.plot(pred_data.x_vel, pred_data.y_vel[:, i], "-.")[0]
         line_accel = ax.plot(pred_data.x_accel, [pred_data.y_accel[i]], "s")[0]
         axLinesDict[k] = AxLines(line_true, line_spline, line_vel, line_accel)
-    ax.axis(axisVals)
+    ax.axis(objSeqDataInfo.getWindowVals())
     ax.legend()
     fig.canvas.draw_idle()
 
@@ -335,7 +342,7 @@ def update(val):
     slider2.label.set_text(gtCommon.shortSeqNameBCOT(gtCommon.BCOT_SEQ_NAMES[sInd]))
 
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
-    updatePredictionData(lastKnownPtIndex, objSeqDataInfo)
+    updatePredictionData(objSeqDataInfo)
 
     objPts = objSeqDataInfo.plot_data
     objPreds = objSeqDataInfo.pred_data
@@ -353,15 +360,18 @@ def update(val):
             else:
                 axLineK.true_line.set_ydata(objPts.y_vals[:, i])
 
-            if spline_diff:
-                axLineK.spline_line.set_data(
-                    [objPreds.x_spline, objPreds.y_spline[:, i]]
-                )
-            else:
-                axLineK.spline_line.set_ydata(objPreds.y_spline[:, i])
+            # TODO: Is it worth checking if an x_shift occurred, and if not,
+            # then only shifting the y_data?
+            axLineK.spline_line.set_data([
+                objPreds.x_spline, objPreds.y_spline[:, i]
+            ])
+            
 
-            axLineK.vel_line.set_ydata(objPreds.y_vel[:, i])
-            axLineK.accel_line.set_ydata([objPreds.y_accel[i]])
+            axLineK.vel_line.set_data([objPreds.x_vel, objPreds.y_vel[:, i]])
+            axLineK.accel_line.set_data([
+                objPreds.x_accel, [objPreds.y_accel[i]]
+            ])
+        ax.axis(objSeqDataInfo.getWindowVals())
 
         fig.canvas.draw_idle()
 
@@ -387,7 +397,7 @@ def on_button_clicked(event, row, col, button):
     bInd = int(slider1.val + 0.001)
     sInd = int(slider2.val + 0.001)
     bcotDataObj = objSeqDataGrid[sInd][bInd]
-    updatePredictionData(lastKnownPtIndex, bcotDataObj)
+    updatePredictionData(bcotDataObj)
     
     clearAndRedraw(bcotDataObj)
 
