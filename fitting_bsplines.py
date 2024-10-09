@@ -1,6 +1,6 @@
 # TODO: Look at https://matplotlib.org/stable/gallery/widgets/menu.html#sphx-glr-gallery-widgets-menu-py
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import typing
 
 import numpy as np
@@ -40,23 +40,45 @@ class PlotData:
     # componentKey: typing.Tuple[int, int]
     x_vals: typing.Any
     y_vals: typing.Any
-    x_preds: typing.Any
-    y_preds: typing.Any
 
 @dataclass
-class AxLineData:
-    num_true_vals: int
-    num_pred_vals: int
+class PredictionData:
+    x_spline: typing.Any = field(default_factory=list)
+    y_spline: typing.Any = field(default_factory=list)
+    x_static: typing.Any = field(default_factory=list)
+    y_static: typing.Any = field(default_factory=list)
+    x_vel: typing.Any = field(default_factory=list)
+    y_vel: typing.Any = field(default_factory=list)
+    x_accel: typing.Any = field(default_factory=list)
+    y_accel: typing.Any = field(default_factory=list)
+
+@dataclass
+class AxLines:
     true_line: typing.Any
-    pred_line: typing.Any
+    spline_line: typing.Any
+    # static_line: typing.Any
+    vel_line: typing.Any
+    accel_line: typing.Any
+
+@dataclass
+class ObjSeqData:
+    bodID: int
+    seqID: int
+    calculator: typing.Any
+    plot_data: typing.Any = None
+    pred_data: typing.Any = None
+    # data_col_keys: typing.Any = field(default_factory=list)
+    y_window: typing.Tuple[float, float] = (-2.0, 2.0)
+    # unused_lastKnownPtIndex: int = 0 
+    # needs_reset: bool = True # TODO: Make "False" have an affect.
+
 
 axLinesDict = dict()
+buttonIndexToDataRow = {
+    (0,0): 0, (1,0): 1, (2,0): 2, (0,4): 3, (1,4): 4, (2,4): 5
+}
 
-lastKnownPtIndex = 40 #41
-lastPtIndex = lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS
-
-
-
+lastKnownPtIndex = 40
 
 # nonRandomHeights = np.array([0.9, 0.8, 0.99, 1.2, 0.5, 0.1, 0.135])
 # def randErr(numPts, low = -1, high = 1):
@@ -66,15 +88,18 @@ lastPtIndex = lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS
 # ptsToFit0 = np.concatenate((randErr(RANDS), nonRandomHeights, randErr(RANDS)))
 # ptsToFit1 = randErr(RANDS + len(nonRandomHeights) + RANDS)
 
-bcotDataObjects = []
+objSeqDataGrid = []
 for seqIndex in range(len(gtCommon.BCOT_SEQ_NAMES)):
     bodList = []
     for bodIndex in range(len(gtCommon.BCOT_BODY_NAMES)):
         if gtCommon.isBodySeqPairValid(bodIndex, seqIndex):
-            bodList.append(gtCommon.BCOT_Data_Calculator(bodIndex, seqIndex, 2))
+            bodList.append(ObjSeqData(
+                bodIndex, seqIndex, 
+                gtCommon.BCOT_Data_Calculator(bodIndex, seqIndex, 2)
+            ))
         else:
             bodList.append(None)
-    bcotDataObjects.append(bodList)
+    objSeqDataGrid.append(bodList)
 
 
 
@@ -101,16 +126,6 @@ def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
     fitted_ctrl_pts = np.linalg.lstsq(mat, ptsToFit, rcond = None)[0]
     return fitted_ctrl_pts
 
-startInd = max(0, lastKnownPtIndex - PTS_USED_TO_CALC_LAST + 1)
-uInterval = (SPLINE_DEGREE, lastKnownPtIndex + 1 - startInd)
-ctrlPtCount = min(lastKnownPtIndex + 1, DESIRED_CTRL_PTS)
-
-# Interval over which basis functions sum to 1, assuming uniform knot seq.
-knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
-uInterval = (knotList[SPLINE_DEGREE], knotList[-SPLINE_DEGREE - 1])
-numTotal = lastKnownPtIndex + 1 - startInd + NUM_OUTPUT_PREDICTIONS
-uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
-# uVals = uInterval[1] - gap*np.arange(numTotal - 1, -1, -1)
 
 
 
@@ -152,8 +167,10 @@ fig.canvas.mpl_connect('key_press_event', on_press)
 row_labels = ['x', 'y', 'z']
 column_labels = [str(i) for i in range(4)] + ["AA"]
 
-def componentLabel(valIndex, axisIndex):
-    return column_labels[axisIndex] + "," + row_labels[valIndex]
+# vectorRowIndex is either x, y, or z.
+# axisIndex refers to the origin, or the angle-axis vector, etc.
+def componentLabel(vectorRowIndex, axisIndex):
+    return column_labels[axisIndex] + "," + row_labels[vectorRowIndex]
 
 # ------------------------------------------------------------------------------
 # Now comes all of the axes layout code.
@@ -194,26 +211,22 @@ button_states = np.full((len(row_labels), len(column_labels)), False) # Initial 
 
 
 
-def plotSelected():
+def updatePredictionData(lastKnownPtIndex, objSeqDataInfo):
 
-    bInd = int(slider1.val + 0.001)
-    sInd = int(slider2.val + 0.001)
-    bcotDataObj = bcotDataObjects[sInd][bInd]
-    retVal = dict()
+    bcotDataObj = objSeqDataGrid[objSeqDataInfo.seqID][objSeqDataInfo.bodID]
     if bcotDataObj is None or not np.any(button_states):
-        return retVal
+        return
+    
+
+    selectedCalc = bcotDataObj.calculator
 
     # Flatten needed here or else array looks like [[0], [2], ...]
-    originComponents = np.argwhere(button_states[:, 0]).flatten()
-    originData = bcotDataObj.getTranslationsGTNP(True)[:, originComponents]
-    retIndices = [(0, i) for i in originComponents]
+    originData = selectedCalc.getTranslationsGTNP(True)
 
     # IGNORE MIDDLE BUTTON COLUMNS FOR NOW!
 
     # Flatten needed here for same reason as before.
-    aaComponents = np.argwhere(button_states[:, 4]).flatten()
-    aaData = bcotDataObj.getRotationsGTNP(True)[:, aaComponents]
-    retIndices += [(4, i) for i in aaComponents]
+    aaData = selectedCalc.getRotationsGTNP(True)
 
     # Points stored such that each row is a timestamp and each column is a
     # component of either the origin, the axis-angle rotation, or another pt
@@ -221,55 +234,96 @@ def plotSelected():
     ptsData = np.hstack((originData, aaData))
 
 
-    for i, tupVal in enumerate(retIndices):
-        retVal[tupVal] = PlotData(np.arange(len(ptsData)), ptsData[:, i], [], [])
+    objSeqDataInfo.plot_data = PlotData(np.arange(len(ptsData)), ptsData)
+
+    lastKnownSplineIndex = min(lastKnownPtIndex, len(ptsData) - NUM_OUTPUT_PREDICTIONS - 1)
+    lastKnownSplineIndex = max(lastKnownSplineIndex, SPLINE_DEGREE)
+
+    lastKnownVelIndex = min(lastKnownPtIndex, len(ptsData) - 2)
+    lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel
+
+    startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
+    uInterval = (SPLINE_DEGREE, lastKnownSplineIndex + 1 - startInd)
+    ctrlPtCount = min(lastKnownSplineIndex + 1, DESIRED_CTRL_PTS)
+
+
+    # Interval over which basis functions sum to 1, assuming uniform knot seq.
+    knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
+    uInterval = (knotList[SPLINE_DEGREE], knotList[-SPLINE_DEGREE - 1])
+    numTotal = lastKnownSplineIndex + 1 - startInd + NUM_OUTPUT_PREDICTIONS
+    uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
+    # uVals = uInterval[1] - gap*np.arange(numTotal - 1, -1, -1)
 
     # Need an "empty" array with the right number of rows to hstack with.
     ctrlPts = np.empty((ctrlPtCount, 0)) 
+
+    # We'll keep track of velocities at two timesteps, <finish doc later>
+    velPts = np.empty((2, 6)) 
+    accelPt = np.empty((6, )) 
     
-    if lastKnownPtIndex >= SPLINE_DEGREE: # TODO: Replace with a clamp on index
-        for i in range(ptsData.shape[1]):
-            ptsToFit_i = ptsData[:, i]
-            ptSubsetToFit = ptsToFit_i[startInd:lastKnownPtIndex + 1]
+    for i in range(ptsData.shape[1]):
+        ptsToFit_i = ptsData[:, i]
+        ptSubsetToFit = ptsToFit_i[startInd:lastKnownSplineIndex + 1]
 
-            ctrlPts1D = fitBSpline(
-                ctrlPtCount, SPLINE_DEGREE + 1, ptSubsetToFit, uVals, knotList,
-                NUM_OUTPUT_PREDICTIONS
-            )
-            # print(ctrl_pts)
-            ctrlPts = np.hstack((ctrlPts, ctrlPts1D.reshape((ctrlPtCount, 1))))
+        ctrlPts1D = fitBSpline(
+            ctrlPtCount, SPLINE_DEGREE + 1, ptSubsetToFit, uVals, knotList,
+            NUM_OUTPUT_PREDICTIONS
+        )
+        # print(ctrl_pts)
+        ctrlPts = np.hstack((ctrlPts, ctrlPts1D.reshape((ctrlPtCount, 1))))
 
-        ctrlPts = np.hstack((ctrlPts, np.ones((len(ctrlPts), 1)))) # Weights
+        velPts[1, i] = ptsToFit_i[lastKnownVelIndex] - ptsToFit_i[lastKnownVelIndex - 1]
+        velPts[0, i] = ptsToFit_i[lastKnownVelIndex - 1] - ptsToFit_i[lastKnownVelIndex - 2]
+    accelPt = velPts[1] - velPts[0]
+    constAccelPt = ptsData[lastKnownVelIndex] + velPts[1] + 0.5 * accelPt
 
-        ctrlPtDumbWrap = [bspline.MotionPoint(c) for c in ctrlPts]
-        spline = bspline.MotionBSpline(ctrlPtDumbWrap, SPLINE_DEGREE + 1, False)
-        spline_result = bspline.ptsFromNURBS(spline, 100, False)
+    ctrlPts = np.hstack((ctrlPts, np.ones((len(ctrlPts), 1)))) # Weights
 
-        spline_result.params -= uInterval[0]
-        spline_result.params *= ((lastPtIndex - startInd)/(uInterval[1] - uInterval[0]))
-        spline_result.params += startInd
+    ctrlPtDumbWrap = [bspline.MotionPoint(c) for c in ctrlPts]
+    spline = bspline.MotionBSpline(ctrlPtDumbWrap, SPLINE_DEGREE + 1, False)
+    spline_result = bspline.ptsFromNURBS(spline, 100, False)
 
-        for i, tupVal in enumerate(retIndices):
-            retVal[tupVal].x_preds = spline_result.params
-            retVal[tupVal].y_preds = spline_result.points[:, i]
-    return retVal
+    splineInputLen = lastKnownSplineIndex + NUM_OUTPUT_PREDICTIONS - startInd
+    spline_result.params -= uInterval[0]
+    spline_result.params *= (splineInputLen/(uInterval[1] - uInterval[0]))
+    spline_result.params += startInd
+
+
+    pred_data = PredictionData()
+    pred_data.x_spline = spline_result.params
+    pred_data.y_spline = spline_result.points
+
+    velXRange = (lastKnownVelIndex - 1, lastKnownVelIndex + 1)
+    velInputYPrev = ptsData[velXRange[0]]
+    newPointsYFromVel = velInputYPrev + 2 * velPts[1]
+
+    pred_data.x_vel = np.array(velXRange)
+    pred_data.y_vel = np.stack((velInputYPrev, newPointsYFromVel))
+    pred_data.x_accel = pred_data.x_vel[1:]
+    pred_data.y_accel = constAccelPt
+
+    objSeqDataInfo.pred_data = pred_data
+    return
 
     #         ptsToFitChoice = ptsToFit0 if dropdown.value == 0 else ptsToFit1
     #         line1.set_ydata(ptsToFitChoice)
 
-def clearAndRedraw(componentDataDict):
+def clearAndRedraw(objSeqDataInfo):
     ax.clear()
     axLinesDict.clear()
-    for k in componentDataDict:
-        plotData = componentDataDict[k]
+    onButtonIndices = [tuple(btn_ind) for btn_ind in np.argwhere(button_states)]
+    plot_data = objSeqDataInfo.plot_data
+    pred_data = objSeqDataInfo.pred_data
+    for k in onButtonIndices:
+        i = buttonIndexToDataRow[k]
         line_true, = ax.plot(
-            plotData.x_vals, plotData.y_vals, 'o',
-            label=componentLabel(k[1], k[0])
+            plot_data.x_vals, plot_data.y_vals[:, i], 'o',
+            label=componentLabel(k[0], k[1])
         )
-        line_pred, = ax.plot(plotData.x_preds, plotData.y_preds)
-        axLinesDict[k] = AxLineData(
-            len(plotData.x_vals), len(plotData.x_preds), line_true, line_pred
-        )
+        line_spline, = ax.plot(pred_data.x_spline, pred_data.y_spline[:, i])
+        line_vel = ax.plot(pred_data.x_vel, pred_data.y_vel[:, i], "-.")[0]
+        line_accel = ax.plot(pred_data.x_accel, [pred_data.y_accel[i]], "s")[0]
+        axLinesDict[k] = AxLines(line_true, line_spline, line_vel, line_accel)
     ax.axis(axisVals)
     ax.legend()
     fig.canvas.draw_idle()
@@ -280,26 +334,36 @@ def update(val):
     slider1.label.set_text(gtCommon.shortBodyNameBCOT(gtCommon.BCOT_BODY_NAMES[bInd]))
     slider2.label.set_text(gtCommon.shortSeqNameBCOT(gtCommon.BCOT_SEQ_NAMES[sInd]))
 
-    componentDataDict = plotSelected()
+    objSeqDataInfo = objSeqDataGrid[sInd][bInd]
+    updatePredictionData(lastKnownPtIndex, objSeqDataInfo)
 
-    if len(componentDataDict.keys()) > 0:
-        needsClearing = False
-        for k in componentDataDict:
-            firstComp = componentDataDict[k]
-            firstAxLineData = axLinesDict[k]
-            true_diff = len(firstComp.x_vals) != firstAxLineData.num_true_vals
-            pred_diff = len(firstComp.x_preds) != firstAxLineData.num_pred_vals
-            needsClearing = needsClearing or true_diff or pred_diff
-        if needsClearing:
-            clearAndRedraw(componentDataDict)
-        else:
-            for k in componentDataDict:
-                plotData = componentDataDict[k]
-                axLineDataVal = axLinesDict[k]
-                axLineDataVal.true_line.set_ydata(plotData.y_vals)
-                axLineDataVal.pred_line.set_ydata(plotData.y_preds)
+    objPts = objSeqDataInfo.plot_data
+    objPreds = objSeqDataInfo.pred_data
+    if len(axLinesDict.keys()) > 0:
+        for k in axLinesDict.keys():
+            i = buttonIndexToDataRow[k]
+            axLineK = axLinesDict[k]
+            true_diff = len(objPts.x_vals) != len(axLineK.true_line.get_xdata())
+            spline_diff = len(objPreds.x_spline) != len(axLineK.spline_line.get_xdata())
 
-            fig.canvas.draw_idle()
+            # I haven't profiled how fast set_data is compared to set_y_data,
+            # but there's no real point in doing unnecessary setting.
+            if true_diff:
+                axLineK.true_line.set_data([objPts.x_vals, objPts.y_vals[:, i]])
+            else:
+                axLineK.true_line.set_ydata(objPts.y_vals[:, i])
+
+            if spline_diff:
+                axLineK.spline_line.set_data(
+                    [objPreds.x_spline, objPreds.y_spline[:, i]]
+                )
+            else:
+                axLineK.spline_line.set_ydata(objPreds.y_spline[:, i])
+
+            axLineK.vel_line.set_ydata(objPreds.y_vel[:, i])
+            axLineK.accel_line.set_ydata([objPreds.y_accel[i]])
+
+        fig.canvas.draw_idle()
 
 
 slider1.on_changed(update)
@@ -320,9 +384,12 @@ def on_button_clicked(event, row, col, button):
         else:
             button.color = BUTTON_OFF_COLOR
 
-    componentDataDict = plotSelected()
+    bInd = int(slider1.val + 0.001)
+    sInd = int(slider2.val + 0.001)
+    bcotDataObj = objSeqDataGrid[sInd][bInd]
+    updatePredictionData(lastKnownPtIndex, bcotDataObj)
     
-    clearAndRedraw(componentDataDict)
+    clearAndRedraw(bcotDataObj)
 
 
 
