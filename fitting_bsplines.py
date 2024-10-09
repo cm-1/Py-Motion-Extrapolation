@@ -140,7 +140,22 @@ def on_press(event):
     bInd = int(slider1.val + 0.001)
     sInd = int(slider2.val + 0.001)
     selectedObjInfo = objSeqDataGrid[sInd][bInd]
-    if event.key == 'a':
+    if event.key == 'z':
+        curr_window = selectedObjInfo.getWindowVals()
+        rowsForStretch = [buttonIndexToDataRow[k] for k in axLinesDict.keys()]
+        dataSlice = selectedObjInfo.plot_data.y_vals[
+            curr_window[0]:(curr_window[1] + 1), rowsForStretch
+        ]
+        minFromSlice = dataSlice.min()
+        maxFromSlice = dataSlice.max()
+        sliceHalfHeight = 0.55 *  (maxFromSlice - minFromSlice)
+        midFromSlice = (maxFromSlice + minFromSlice)/2.0
+        selectedObjInfo.y_window = (
+            midFromSlice - sliceHalfHeight, midFromSlice + sliceHalfHeight)
+        ax.axis(selectedObjInfo.getWindowVals())
+        fig.canvas.draw_idle()
+        return
+    elif event.key == 'a':
         x_shift = -1
     elif event.key == 'd':
         x_shift = 1
