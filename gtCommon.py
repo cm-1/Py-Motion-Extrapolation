@@ -2,7 +2,6 @@ import numpy as np
 
 import math
 import pathlib
-import re
 import os # TODO: replace fully with pathlib.
 
 
@@ -196,36 +195,29 @@ class BCOT_Data_Calculator:
         print("Pose path:", self.posePathGT)
         posePathCalc = BCOT_POSE_EXPORT_DIR / ("cvOnly_skip" + str(self.skipAmt) + "_poses_" + self._seq + "_" + self._bod +".txt")
 
-        patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
-        patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
-        patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
+        #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
+        #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
+        #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
-        translationsGT = []
-        rotationsGT = []
-        with open(self.posePathGT, "r") as file:
-            for line in file.readlines():
-                transMatch = patternTrans.search(line)
-                translationsGT.append(np.array([float(g) for g in transMatch.groups()]))
-                rotMatch = patternRot.search(line)
-                rotRead = np.array([float(g) for g in rotMatch.groups()])
-                rotationsGT.append(np.array(rotRead).reshape((3,3)))
-                
+        gtMatData = BCOT_Data_Calculator.matrixDataFromFile(self.posePathGT)
+        self._translationsGTNP = gtMatData[1]
+
+        self._rotationsGTNP = axisAngleListFromMats(gtMatData[0])
+
+        # Check if file for CV-calculated pose data exists; if so, load it too.
         if os.path.exists(posePathCalc):
-            with open(posePathCalc, "r") as file:
-                translationsCalc = []
-                rotationsCalc = []
-                for line in file.readlines():
-                    transMatch = patternTrans.search(line)
-                    translationsCalc.append(np.array([float(g) for g in transMatch.groups()]))
-                    rotMatch = patternRot.search(line)
-                    rotRead = np.array([float(g) for g in rotMatch.groups()])
-                    rotationsCalc.append(np.array(rotRead).reshape((3,3)))
-                    self._translationsCalcNP = np.array(translationsCalc)
-                    self._rotationsCalcNP = axisAngleListFromMats(rotationsCalc)
+            calcMatData = BCOT_Data_Calculator.matrixDataFromFile(posePathCalc)
+            self._translationsCalcNP = calcMatData[1]
+            self._rotationsCalcNP = axisAngleListFromMats(calcMatData[0])
+        
 
-        self._translationsGTNP = np.array(translationsGT)
-        self._rotationsGTNP = axisAngleListFromMats(rotationsGT)
-
+        # Our earlier attempts to make sure the axis-angle calculations do not
+        # result in an axis flip between consecutive frames should have worked.
+        # But if not, we'll keep track of the frames that are an issue for the
+        # sake of debugging.
+        # TODO: Should probably remove this code at some point, because I don't
+        # think any issues have been detected in any of my runs on the whole
+        # dataset at this point.
         for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
             for i in range(1, rotArr.shape[0]):
                 if np.dot(rotArr[i-1], rotArr[i]) < 0:
@@ -233,6 +225,16 @@ class BCOT_Data_Calculator:
 
         self._dataLoaded = True
 
+    # Returns (rotation mat data, translation data) tuple, where each element is
+    # a numpy array, the former with shape (n,3,3), the latter with shape (n,3).
+    def matrixDataFromFile(filepath):
+        data = np.loadtxt(filepath)
+    
+        # Assumes that each line has 12 floats, where the first 9 are the 3x3
+        # rotation matrix entries and the last 3 are the translation.
+        rotations = data[:, :9].reshape((-1, 3, 3)) 
+        translations = data[:, 9:12]
+        return (rotations, translations)
 
     def getTranslationsGTNP(self, useSkipAmt):
         self.loadData()
