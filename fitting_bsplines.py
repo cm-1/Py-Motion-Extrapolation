@@ -70,12 +70,16 @@ class ObjSeqData:
         self.plot_data = None
         self.pred_data = None
         self.y_window = (-2.0, 2.0)
+        x_max = self.lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS + 1
+        x_min = self.lastKnownPtIndex - 3
+        self.x_window = (x_min, x_max)
 
     # Returns [xmin, xmax, ymin, ymax]
     def getWindowVals(self):
-        x_max = self.lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS + 1
-        x_min = self.lastKnownPtIndex - 3
-        return [x_min, x_max, self.y_window[0], self.y_window[1]]
+        return [
+            self.x_window[0], self.x_window[1],
+            self.y_window[0], self.y_window[1]
+        ]
     # data_col_keys: typing.Any = field(default_factory=list)
     # needs_reset: bool = True # TODO: Make "False" have an affect.
 
@@ -135,6 +139,7 @@ fig, ax = plt.subplots(figsize=(8, 6))
 ax.axis([-1, 1, -1, 1])
 
 def on_press(event):
+    shiftIsDown = False
     x_shift = 0
     y_shift = 0
     bInd = int(slider1.val + 0.001)
@@ -155,22 +160,39 @@ def on_press(event):
         ax.axis(selectedObjInfo.getWindowVals())
         fig.canvas.draw_idle()
         return
+    elif event.key == '1':
+        slider1.set_val(max(slider1.val - 1, 0))
+    elif event.key == '2':
+        slider1.set_val(min(slider1.val + 1, len(gtCommon.BCOT_BODY_NAMES) - 1))
+    elif event.key == '4':
+        slider2.set_val(max(slider2.val - 1, 0))
+    elif event.key == '5':
+        slider2.set_val(min(slider2.val + 1, len(gtCommon.BCOT_SEQ_NAMES) - 1))
     elif event.key == 'a':
         x_shift = -1
+    elif event.key == 'A':
+        x_shift = -1
+        shiftIsDown = True
     elif event.key == 'd':
         x_shift = 1
+    elif event.key == 'D':
+        x_shift = 1
+        shiftIsDown = True
     elif event.key == 'w':
         y_shift = 1
-    elif event.key == 'x':
+    elif event.key == 'x' and ax.get_navigate_mode() is None:
         y_shift = -1
     if x_shift != 0 or y_shift != 0 and selectedObjInfo is not None:
-        selectedObjInfo.lastKnownPtIndex += x_shift
         prevYRange = selectedObjInfo.y_window
         newYRange = (prevYRange[0] + y_shift, prevYRange[1] + y_shift)
         selectedObjInfo.y_window = newYRange
-        if x_shift != 0:
+        if x_shift != 0 and shiftIsDown:
+            selectedObjInfo.lastKnownPtIndex += x_shift
             update(None)
         else:
+            prevXRange = selectedObjInfo.x_window
+            newXRange = (prevXRange[0] + x_shift, prevXRange[1] + x_shift)
+            selectedObjInfo.x_window = newXRange
             ax.axis(selectedObjInfo.getWindowVals())
             fig.canvas.draw_idle()
 
