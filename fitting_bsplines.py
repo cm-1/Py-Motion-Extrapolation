@@ -35,6 +35,9 @@ if DESIRED_CTRL_PTS < SPLINE_DEGREE + 1:
 BUTTON_OFF_COLOR = 'lightcoral'
 BUTTON_ON_COLOR = 'lightgreen'
 
+# TODO: Change "6" to something not hardcoded!
+def getEmptyYData():
+    return np.empty((0,6))
 
 @dataclass
 class PlotData:
@@ -45,13 +48,13 @@ class PlotData:
 @dataclass
 class PredictionData:
     x_spline: typing.Any = field(default_factory=list)
-    y_spline: typing.Any = field(default_factory=list)
+    y_spline: typing.Any = field(default_factory=getEmptyYData)
     x_static: typing.Any = field(default_factory=list)
-    y_static: typing.Any = field(default_factory=list)
+    y_static: typing.Any = field(default_factory=getEmptyYData)
     x_vel: typing.Any = field(default_factory=list)
-    y_vel: typing.Any = field(default_factory=list)
+    y_vel: typing.Any = field(default_factory=getEmptyYData)
     x_accel: typing.Any = field(default_factory=list)
-    y_accel: typing.Any = field(default_factory=list)
+    y_accel: typing.Any = field(default_factory=getEmptyYData)
 
 @dataclass
 class AxLines:
@@ -65,10 +68,16 @@ class ObjSeqData:
     def __init__(self, bodID: int, seqID: int):
         self.bodID = bodID
         self.seqID = seqID
-        self.calculator = gtCommon.BCOT_Data_Calculator(bodID, seqID, FRAME_SKIP_AMT)
+        self.hasData = False
+        self.calculator = None
+        if gtCommon.isBodySeqPairValid(bodID, seqID):
+            self.hasData = True
+            self.calculator = gtCommon.BCOT_Data_Calculator(
+                bodID, seqID, FRAME_SKIP_AMT
+            )
         self.lastKnownPtIndex = 40# SPLINE_DEGREE
-        self.plot_data = None
-        self.pred_data = None
+        self.plot_data = PlotData([], getEmptyYData())
+        self.pred_data = PredictionData()
         self.y_window = (-2.0, 2.0)
         x_max = self.lastKnownPtIndex + NUM_OUTPUT_PREDICTIONS + 1
         x_min = self.lastKnownPtIndex - 3
@@ -101,10 +110,7 @@ objSeqDataGrid = []
 for seqIndex in range(len(gtCommon.BCOT_SEQ_NAMES)):
     bodList = []
     for bodIndex in range(len(gtCommon.BCOT_BODY_NAMES)):
-        if gtCommon.isBodySeqPairValid(bodIndex, seqIndex):
-            bodList.append(ObjSeqData(bodIndex, seqIndex))
-        else:
-            bodList.append(None)
+        bodList.append(ObjSeqData(bodIndex, seqIndex))
     objSeqDataGrid.append(bodList)
 
 
@@ -145,9 +151,19 @@ def on_press(event):
     bInd = int(slider1.val + 0.001)
     sInd = int(slider2.val + 0.001)
     selectedObjInfo = objSeqDataGrid[sInd][bInd]
-    if event.key == 'z':
+    # Pressing "z" will fit the view height to the data visible on screen.
+    if event.key == 'z' and selectedObjInfo.hasData:
         curr_window = selectedObjInfo.getWindowVals()
         rowsForStretch = [buttonIndexToDataRow[k] for k in axLinesDict.keys()]
+        # Make sure the current window has data on-screen before attempting to
+        # fit the view to the visible data.
+        if curr_window[0] >= len(selectedObjInfo.plot_data.y_vals):
+            xcess = len(selectedObjInfo.plot_data.y_vals) - 1 - curr_window[0]
+            selectedObjInfo.x_window = (
+                curr_window[0] + xcess, curr_window[1] + xcess
+            )
+            curr_window = selectedObjInfo.getWindowVals()
+
         dataSlice = selectedObjInfo.plot_data.y_vals[
             curr_window[0]:(curr_window[1] + 1), rowsForStretch
         ]
@@ -182,7 +198,7 @@ def on_press(event):
         y_shift = 1
     elif event.key == 'x' and ax.get_navigate_mode() is None:
         y_shift = -1
-    if x_shift != 0 or y_shift != 0 and selectedObjInfo is not None:
+    if x_shift != 0 or y_shift != 0 and selectedObjInfo.hasData:
         prevYRange = selectedObjInfo.y_window
         newYRange = (prevYRange[0] + y_shift, prevYRange[1] + y_shift)
         selectedObjInfo.y_window = newYRange
@@ -256,12 +272,11 @@ button_states = np.full((len(row_labels), len(column_labels)), False) # Initial 
 
 def updatePredictionData(objSeqDataInfo):
 
-    bcotDataObj = objSeqDataGrid[objSeqDataInfo.seqID][objSeqDataInfo.bodID]
-    if bcotDataObj is None or not np.any(button_states):
+    if (not objSeqDataInfo.hasData) or (not np.any(button_states)):
         return
     
 
-    selectedCalc = bcotDataObj.calculator
+    selectedCalc = objSeqDataInfo.calculator
 
     # Flatten needed here or else array looks like [[0], [2], ...]
     originData = selectedCalc.getTranslationsGTNP(True)
@@ -284,7 +299,9 @@ def updatePredictionData(objSeqDataInfo):
     lastKnownSplineIndex = max(lastKnownSplineIndex, SPLINE_DEGREE)
 
     lastKnownVelIndex = min(objSeqDataInfo.lastKnownPtIndex, len(ptsData) - 2)
-    lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel
+    lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel.
+    # TODO: Might need to change this if using different limits for accel index:
+    objSeqDataInfo.lastKnownPtIndex = lastKnownVelIndex 
 
     startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
     uInterval = (SPLINE_DEGREE, lastKnownSplineIndex + 1 - startInd)
@@ -301,9 +318,12 @@ def updatePredictionData(objSeqDataInfo):
     # Need an "empty" array with the right number of rows to hstack with.
     ctrlPts = np.empty((ctrlPtCount, 0)) 
 
-    # We'll keep track of velocities at two timesteps, <finish doc later>
+    # We'll keep track of velocities at two timesteps; the velocity at index 1
+    # will be the "current" velocity, and the velocity at index 0 will be the
+    # previous velocity (needed to approximate acceleration).
+    # TODO: Replace hardcoded "6" with something automatic.
     velPts = np.empty((2, 6)) 
-    accelPt = np.empty((6, )) 
+    accelPt = np.empty((1, 6)) 
     
     for i in range(ptsData.shape[1]):
         ptsToFit_i = ptsData[:, i]
@@ -318,8 +338,8 @@ def updatePredictionData(objSeqDataInfo):
 
         velPts[1, i] = ptsToFit_i[lastKnownVelIndex] - ptsToFit_i[lastKnownVelIndex - 1]
         velPts[0, i] = ptsToFit_i[lastKnownVelIndex - 1] - ptsToFit_i[lastKnownVelIndex - 2]
-    accelPt = velPts[1] - velPts[0]
-    constAccelPt = ptsData[lastKnownVelIndex] + velPts[1] + 0.5 * accelPt
+    accelPt[0] = velPts[1] - velPts[0]
+    constAccelPt = ptsData[lastKnownVelIndex] + velPts[1] + 0.5 * accelPt[0]
 
     ctrlPts = np.hstack((ctrlPts, np.ones((len(ctrlPts), 1)))) # Weights
 
@@ -344,7 +364,7 @@ def updatePredictionData(objSeqDataInfo):
     pred_data.x_vel = np.array(velXRange)
     pred_data.y_vel = np.stack((velInputYPrev, newPointsYFromVel))
     pred_data.x_accel = pred_data.x_vel[1:]
-    pred_data.y_accel = constAccelPt
+    pred_data.y_accel = np.array([constAccelPt])
 
     objSeqDataInfo.pred_data = pred_data
     return
@@ -366,7 +386,7 @@ def clearAndRedraw(objSeqDataInfo):
         )
         line_spline, = ax.plot(pred_data.x_spline, pred_data.y_spline[:, i])
         line_vel = ax.plot(pred_data.x_vel, pred_data.y_vel[:, i], "-.")[0]
-        line_accel = ax.plot(pred_data.x_accel, [pred_data.y_accel[i]], "s")[0]
+        line_accel = ax.plot(pred_data.x_accel, pred_data.y_accel[:, i], "s")[0]
         axLinesDict[k] = AxLines(line_true, line_spline, line_vel, line_accel)
     ax.axis(objSeqDataInfo.getWindowVals())
     ax.legend()
@@ -381,9 +401,9 @@ def update(val):
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
     updatePredictionData(objSeqDataInfo)
 
-    objPts = objSeqDataInfo.plot_data
-    objPreds = objSeqDataInfo.pred_data
     if len(axLinesDict.keys()) > 0:
+        objPts = objSeqDataInfo.plot_data
+        objPreds = objSeqDataInfo.pred_data
         for k in axLinesDict.keys():
             i = buttonIndexToDataRow[k]
             axLineK = axLinesDict[k]
@@ -406,7 +426,7 @@ def update(val):
 
             axLineK.vel_line.set_data([objPreds.x_vel, objPreds.y_vel[:, i]])
             axLineK.accel_line.set_data([
-                objPreds.x_accel, [objPreds.y_accel[i]]
+                objPreds.x_accel, objPreds.y_accel[:, i]
             ])
         ax.axis(objSeqDataInfo.getWindowVals())
 
