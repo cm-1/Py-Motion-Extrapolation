@@ -57,6 +57,15 @@ def shortSeqNameBCOT(longName):
         retVal += "_"
     return retVal[:-1]
 
+def quatsFromAxisAngles(axisAngleVals):
+    angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
+
+    normed = axisAngleVals / angles
+
+    quaternions = np.hstack((np.cos(angles / 2), np.sin(angles / 2) * normed))
+    return quaternions
+
+
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
 def matFromAxisAngle(scaledAxis):
