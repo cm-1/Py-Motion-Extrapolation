@@ -4,7 +4,7 @@ import pathlib
 import os # TODO: replace fully with pathlib.
 
 
-BCOT_DIR = pathlib.Path("C:\\Users\\U01\\Documents\\Datasets\\BCOT")
+BCOT_DIR = pathlib.Path("D:\\Datasets\\BCOT")
 BCOT_DATASET_DIR = BCOT_DIR / "BCOT_Dataset"
 BCOT_CV_POSE_EXPORT_DIR = BCOT_DIR / "srt3d_results_bcot"
 
@@ -83,51 +83,164 @@ def matFromAxisAngle(scaledAxis):
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
-def axisAngleFromMatArray(matrix):
-    # Vec3 representing the direction of our rotation axis. Not yet unit length.
-    nonUnitAxisDirs = np.stack([
-        matrix[...,2,1] - matrix[...,1,2],
-        matrix[...,0,2] - matrix[...,2,0],
-        matrix[...,1,0] - matrix[...,0,1]
-    ], axis=-1) # Axis specification needed for input being a list of matrices.
+def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
+    # TODO: Replace instances of np.stack(...), np.concat(...), and similar with
+    # np.empty(...) followed by assigning to slices. I'm guessing it'd be more
+    # efficient? Less allocating/freeing of memory, right?
+
+    # --------------------------------------------------------------------------
+    # We'll start by using Shepperd's algorithm to obtain initial results:
+    #   Shepperd, Stanley W. "Quaternion from rotation matrix."
+    #   Journal of guidance and control 1.3 (1978): 223-224.
+    #   doi:10.2514/3.55767b
+    # Then we'll modify the initial results to remove discontinuous jumps
+    # between consecutive axis-angle vectors, as described later.
+    # --------------------------------------------------------------------------
+    # In Shepperd's algorithm, we take different steps for each rotation matrix
+    # depending on whether the trace or a diagonal entry is larger. We'll 
+    # use numpy slices to accomplish this.
+
+    # --------------------------------------------------------------------------
+    # Shepperd's Algorithm: Initial Setup
+    # --------------------------------------------------------------------------
+
+
+    # We'll specify the trace axes so that we can get the trace of each rotation
+    # matrix from an array of them and still get correct output.
+    matrixTraceVals = matrixArray.trace(axis1 = -2, axis2 = -1)
+    # np.diagonal(...) makes no copy, so this should be reasonably efficient.
+    matrixDiags = np.diagonal(matrixArray, axis1 = -2, axis2 = -1)
     
+    angles = np.empty(matrixArray.shape[:-2]) # Storage for resulting angles.
+    nonUnitAxes = np.empty(matrixDiags.shape) # Storage for resulting axes.
+
+    # Get largest diagonal entries' locations. We'll reuse this later on too.
+    whereMaxDiag = np.argmax(matrixDiags, axis = -1, keepdims=True)
+    # Extract the value of the largest diagonal entry.
+    # Earlier numpy versions don't have `take_along_axis`; in that case, you'd
+    # use something like arr[np.arange(len(...)), colIndices].
+    diagMaxes = np.take_along_axis(matrixDiags, whereMaxDiag, axis = -1)[..., 0]
+
+    # Slice indices for applying different steps to different rotation matrices.
+    useTrace = np.greater(matrixTraceVals, diagMaxes)
+    useDiag = np.invert(useTrace)
+
+    # --------------------------------------------------------------------------
+    # Shepperd's Algorithm: Case Where Trace Was Greater.
+    # --------------------------------------------------------------------------
+
     # The angle of rotation about the above axis direction.
     # Outputs of acos are constrained to [0, pi], which will impact later code.
     # Input needs to be clamped to [-1, 1] in case fp precision causes it to
     # exit that interval and, thus, the domain for acos.
-    # We'll specify the trace axes so that we can get the trace of each rotation
-    # matrix from an array of them and still get correct output.
-    matrixTraces = matrix.trace(axis1 = -2, axis2 = -1)
-    acosInput = np.clip((matrixTraces - 1.0)/2.0, -1.0, 1.0)
-    angles = np.arccos(acosInput)
+    acosInput = np.clip((matrixTraceVals[useTrace] - 1.0)/2.0, -1.0, 1.0)
+    angles[useTrace] = np.arccos(acosInput)
 
-    
+    useTraceAndNonzero = np.greater(angles[useTrace], zeroAngleThresh)
+    matrixOffDiags = matrixArray[useTrace][useTraceAndNonzero]
 
-    # TL;DR: Angles, as output of acos, start out in interval [0, pi]. Thus,
-    # similar rotations [pi - epsilon, 0, 0] and [pi + epsilon, 0, 0] will be
-    # represented by distant vectors (pi - epsilon)[+1, 0, 0] and 
-    # (pi - epsilon)[-1, 0 0]. We detect when this happens by observing the axes
-    # and then we correct angles (e.g., adding 2pi multiples, i.e. taus) to fix.
+
+    # Vec3 representing the direction of our rotation axis. Not yet unit length.
+    nonUnitAxes[useTrace][useTraceAndNonzero] = np.stack([
+        matrixOffDiags[...,2,1] - matrixOffDiags[...,1,2],
+        matrixOffDiags[...,0,2] - matrixOffDiags[...,2,0],
+        matrixOffDiags[...,1,0] - matrixOffDiags[...,0,1]
+    ], axis=-1) # Axis specification needed for input being a list of matrices.
+
+
     # --------------------------------------------------------------------------
-    # If we now just return `angle/(2*sin(angle)) * unnormalizedAxis`, we would
-    # have an *accurate* angle-axis result stored as a vec3. However, because
-    # acos only returns values in [0, pi], you can get axis-angle vec3 "jumps"
-    # like above over small rotation changes. So, we look at the unnormalized
-    # axes for flips like that, and we start our corrections by negating
-    # corresponding angles. Now, you might be thinking this either (a) generates
-    # an incorrect result, or (b) does nothing. You might think (a) because
-    # obviously rotations by +alpha and -alpha about the same axis differ. But
-    # in a later step, we get our final axis-angle vec3 by multiplying
-    # `(angle/(2*sin(angle))) * nonUnitAxisDirs`. Because
-    # `angle/sin(angle) == (-angle)/sin(-angle)`, there would be zero effect on
-    # our output if we took no further steps. Which may lead to one thinking
-    # that (b) applies. HOWEVER, now angles are set up for corrections by adding
-    # taus. E.g., in our "pi + epsilon" example, after negation, our consecutive
-    # angles will become "pi - epsilon" and "-(pi - epsilon)"; we can correct
-    # the latter by adding 2pi to get "pi + epsilon", which is the "best" way to
+    # Shepperd's Algorithm: Case Where a Diagonal Entry Was Greater.
+    # --------------------------------------------------------------------------
+
+    i_s = whereMaxDiag[useDiag][:, 0]
+    j_s = (i_s + 1) % 3
+    k_s = (j_s + 1) % 3
+
+    matsWhereDiagUsed = matrixArray[useDiag]
+    # The only way I know of to slice with variable last-axis-indices is to pass
+    # in an arange for the first axis; simply using `[:, i_s, j_s]` FAILS!
+    # Maybe there's a better way I'm unaware of, though.
+    arangeUseDiag = np.arange(len(i_s))
+    Aij = matsWhereDiagUsed[arangeUseDiag, i_s, j_s]
+    Aji = matsWhereDiagUsed[arangeUseDiag, j_s, i_s]
+    Aik = matsWhereDiagUsed[arangeUseDiag, i_s, k_s]
+    Aki = matsWhereDiagUsed[arangeUseDiag, k_s, i_s]
+    Ajk = matsWhereDiagUsed[arangeUseDiag, j_s, k_s]
+    Akj = matsWhereDiagUsed[arangeUseDiag, k_s, j_s]
+
+    diagMaxSubset = diagMaxes[useDiag]
+    useDiagNonUnitAxes = nonUnitAxes[useDiag]
+    # The below is `2sin(angle/2) * axis`
+    sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
+    ax_i = np.sqrt(np.fmax(0.0, sqrtInput)) # fmax to protect from fp issues.
+    useDiagNonUnitAxes[arangeUseDiag, i_s] = ax_i
+    useDiagNonUnitAxes[arangeUseDiag, j_s] = (Aij + Aji)/ax_i
+    useDiagNonUnitAxes[arangeUseDiag, i_s] = (Aik + Aki)/ax_i
+
+    # Again, we need to clamp/clip in case of fp precision causing problems.
+    acosInput = np.clip((Ajk - Akj)/(ax_i + ax_i), -1.0, 1.0)
+    halfAngles = np.arccos(acosInput)
+    angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
+
+    # --------------------------------------------------------------------------
+    # "Corrections" Proceeding Shepperd's Algorithm
+    # --------------------------------------------------------------------------
+
+    # For reasons described shortly, we may want to use an axis other than the
+    # default [0, 0, 0] to represent a rotation by `2*n*pi` radians.
+    # To fix this, we'll choose to propagate the last nonzero axis.
+    # Note: if the FIRST axes are all [0, 0, 0], that's okay; we don't need to
+    # worry about propagating BACKWARDS, just FORWARDS. We'll  use the technique
+    # proposed in a 2015-05-27 StackOverflow answer by user "jme" (1231929/jme)
+    # to a 2015-05-27 question, "Fill zero values of 1d numpy array with last
+    # non-zero values" (https://stackoverflow.com/q/30488961) by user "mgab"
+    # (3406913/mgab). A 2016-12-16 edit to "Most efficient way to forward-fill 
+    # NaN values in numpy array" by user Xukrao (7306999/xukrao) shows this to
+    # be more efficient than similar for-loop, numba, pandas, etc. solutions.
+    # I've just adapted the technique to work with a higher dimension number.
+    angleInds = np.indices(angles.shape)
+    # At this step, all angles SHOULD be positive.
+    zeroAngleInds = angles < zeroAngleThresh
+    angleInds[-1][zeroAngleInds] = 0
+    angleInds[-1] = np.maximum.accumulate(angleInds[-1], axis = -1)
+    nonUnitAxes[zeroAngleInds] = nonUnitAxes[angleInds[zeroAngleInds]]
+
+
+    # TODO: Remove this test:
+    if np.any(angles < 0):
+        raise Exception("I was wrong about all pos angles at this step!")
+
+    # TL;DR: Angles for the 1st case of Shepperd's algorithm, as output of acos,
+    # start out in interval [0, pi]. Thus, the similar rotations
+    # [pi - epsilon, 0, 0] and [pi + epsilon, 0, 0] will be represented by
+    # distant vectors (pi - epsilon)[+1, 0, 0] and (pi - epsilon)[-1, 0, 0].
+    # Similar *could* happen for the 2nd case too, though is "less guaranteed".
+    # Anyway, we detect when this happens by observing the axes and then we
+    # correct the angles (e.g., adding 2pi multiples, i.e. taus) to fix.
+    # --------------------------------------------------------------------------
+    # Let `norm = angle/2sin(angle)` for the 1st case of Shepperd's algorithm,
+    # and let `norm = angle/2sin(angle/2)` for the 2nd. If we now just return
+    # `norm * nonUnitAxes`, we would have *accurate* angle-axis results stored 
+    # as vec3s. However, you can get axis-angle vec3 "jumps", like we described
+    # above, over small rotation changes. So, we look at the unnormalized axes
+    # for such flips, and we start our corrections by negating corresponding
+    # angles. Now, you might think this either (a) generates incorrect results,
+    # or (b) does nothing. You might think (a) because obviously rotations by
+    # +alpha and -alpha about the same axis differ. But in a later step, because
+    # we get our final axis-angle vec3s by multiplying `norm * nonUnitAxes`, and
+    # because `angle/sin(angle) == (-angle)/sin(-angle)`, this would have no
+    # effect on our output if we took no further steps. Which may lead one to
+    # think that (b) applies. BUT, now angles are set up for correction by 
+    # adding taus: in our "pi + epsilon" example, our consecutive angles become
+    # "pi - epsilon" and "-(pi - epsilon)" after negation; we can correct the
+    # latter by adding 2pi to get "pi + epsilon", which is the "best" way to
     # represent those consecutive rotations!
     # We'll only add taus s.t. angles become within pi distance of each other.
     # E.g., consecutive angles +epsilon and -epsilon would not be affected.
+    # Unfortunately, because `sin((angle + tau)/2) = -sin(angle/2)`, an extra
+    # negation gets introduced into the later normalization of the axes for the
+    # 2nd case of Shepperd's algorithm. SO, we should normalize the axes AFTER
+    # negating angles but BEFORE adding taus!!!
     # --------------------------------------------------------------------------
     # If you still doubt any of the above, please at least be very careful in
     # making any "corrections". I've thought about this quite thoroughly, but I 
@@ -157,10 +270,30 @@ def axisAngleFromMatArray(matrix):
     # out. This is why we use an accumulation of xors; it sort of functions like
     # mod 2 addition, but I'm hoping it's cheaper.
     angle_dots = np.einsum(
-        'ij,ij->i', nonUnitAxisDirs[1:], nonUnitAxisDirs[:-1]
+        '...ij,...ij->...i', nonUnitAxes[..., 1:, :], nonUnitAxes[..., :-1, :]
     ) # Dot products along 'j' axis; preserve existence of the 'i' axis.
     needs_flip = np.logical_xor.accumulate(angle_dots < 0)
     angles[1:][needs_flip] = -angles[1:][needs_flip]
+
+    # (!!!) PLEASE DO NOT MOVE THIS LINE WITHOUT READING EARLIER COMMENTS
+    #       EXPLAINING WHY IT SHOULD BE *EXACTLY* HERE!
+    # Now comes the axis normalization/flipping. We have 2 cases to consider:
+    #   1. Axes that need dividing by 2sin(angle) or 2sin(angle/2). For these,
+    #      as shown before, no further action is required in terms of sign flips
+    #      and whatnot if we normalize NOW, before adding taus.
+    #   2. Axes for angles 2pi*n, which copied the last non-zero-angle axis.
+    #      For these, we'll just copy over the normalized axes.
+    unitAxes = np.empty(matrixDiags.shape) # Storage for resulting axes.
+    # First, we'll handle Shepperd's Algorithm case 1:
+    sinVals = np.sin(angles[useTrace][useTraceAndNonzero])
+    sinVals += sinVals
+    unitAxes[useTrace][useTraceAndNonzero] = \
+        nonUnitAxes[useTrace][useTraceAndNonzero] / sinVals
+    # Then Shepperd's Algorithm case 2:
+    sinVals = np.sin(angles[useDiag]/2.0)
+    unitAxes[useDiag] = nonUnitAxes[useDiag] / (sinVals + sinVals)
+    # Then zero-angle:
+    unitAxes[zeroAngleInds] = unitAxes[angleInds[zeroAngleInds]]
 
     # Now we add 2pi multiples to make angles within pi of each other.
     # We want the following difference-to-correction mapping:
@@ -179,22 +312,8 @@ def axisAngleFromMatArray(matrix):
     if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
         raise Exception("Numpification of AA code resulted in angle diff > pi!")
         
-    
-    # (!!!) PLEASE READ THIS COMMENT BEFORE MOVING/EDITING THIS LINE!
-    # Our final vec3 output will be `angle * unitAxis`,
-    # where `unitAxis = nonUnitAxis/2sin(angle)`.
-    # In above comments, we noted that we're "allowed" to replace `angle` with
-    # `-1*angle` in the first step of our angle corrections, because
-    # `angle/sin(angle) == -angle/sin(-angle)` (and then of course adding taus
-    # also preserves accuracy). IF WE MOVE THE DIVISION BY 2SIN EARLIER, WE LOSE
-    # THIS ABILITY that comes  from the negation of the angle and the sin(angle)
-    # cancelling out; we'd have to take a separate step to flip required axes!
-    nonUnitAxisLen = 2.0 * np.sin(angles)
-
-    # zeroDivIndices = (nonUnitAxisLen != 0.0)
-
-    angle_scale_amt = angles / nonUnitAxisLen
-    return np.einsum('i,ij->ij', angle_scale_amt, nonUnitAxisDirs)
+    # Now we combine the angles and unit axes into a final array of vec3s.
+    return np.einsum('...i,...ij->...ij', angles, unitAxes)
 
 
 
@@ -274,10 +393,10 @@ class BCOT_Data_Calculator:
         for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
             flipPlaces = np.einsum('ij,ij->i', rotArr[1:], rotArr[:-1]) <= 0
             if np.any(flipPlaces):
-                flipInds = 1 + np.argwhere(flipPlaces)
-                self.issueFrames = np.hstack((
-                    flipInds, rotArr[flipInds], rotArr[flipInds - 1]
-                ))
+                self.issueFrames = 1 + np.argwhere(flipPlaces)
+                # self.issueFrames = np.hstack((
+                #     flipInds, rotArr[flipInds], rotArr[flipInds - 1]
+                # ))
                 print("Issue frames:", self.issueFrames)
         self._dataLoaded = True
 
