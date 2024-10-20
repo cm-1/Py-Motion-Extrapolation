@@ -84,9 +84,21 @@ def matFromAxisAngle(scaledAxis):
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
 def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
+    # TODO: I think the only parts of the code below that do not yet support
+    # more than 3 dimensions are the handling of axes for angles of zero.
+    # There may not yet be a *benefit* to full support, but noting just in case.
+    if matrixArray.ndim > 3:
+        raise Exception("Input array of matrices must have (n,3,3) shape!")
+
     # TODO: Replace instances of np.stack(...), np.concat(...), and similar with
     # np.empty(...) followed by assigning to slices. I'm guessing it'd be more
     # efficient? Less allocating/freeing of memory, right?
+    # TODO: Last I checked (2024-10-19), it's fine, but if changed since, see if
+    # supporting a arrays with more dims than shape (n,3,3) leads to any 
+    # inefficiency; if so, remove, or use an "if" to switch to better "flat"
+    # version, because I don't know of a practical purpose off-hand for
+    # supporting more dims than that. In fact, it'd possibly hinder multicore 
+    # processing, which may be the better and/or faster approach for more dims.
 
     # --------------------------------------------------------------------------
     # We'll start by using Shepperd's algorithm to obtain initial results:
@@ -122,8 +134,12 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     diagMaxes = np.take_along_axis(matrixDiags, whereMaxDiag, axis = -1)[..., 0]
 
     # Slice indices for applying different steps to different rotation matrices.
-    useTrace = np.greater(matrixTraceVals, diagMaxes)
-    useDiag = np.invert(useTrace)
+    useTraceBool = np.greater(matrixTraceVals, diagMaxes)
+    useDiagBool = np.invert(useTraceBool)
+    # I think indices are oft faster than bool indexing. But needs confirming.
+    useTrace = np.nonzero(useTraceBool)
+    useDiag = np.nonzero(useDiagBool)
+    
 
     # --------------------------------------------------------------------------
     # Shepperd's Algorithm: Case Where Trace Was Greater.
@@ -136,12 +152,11 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     acosInput = np.clip((matrixTraceVals[useTrace] - 1.0)/2.0, -1.0, 1.0)
     angles[useTrace] = np.arccos(acosInput)
 
-    useTraceAndNonzero = np.greater(angles[useTrace], zeroAngleThresh)
-    matrixOffDiags = matrixArray[useTrace][useTraceAndNonzero]
+    matrixOffDiags = matrixArray[useTrace]
 
 
     # Vec3 representing the direction of our rotation axis. Not yet unit length.
-    nonUnitAxes[useTrace][useTraceAndNonzero] = np.stack([
+    nonUnitAxes[useTrace] = np.stack([
         matrixOffDiags[...,2,1] - matrixOffDiags[...,1,2],
         matrixOffDiags[...,0,2] - matrixOffDiags[...,2,0],
         matrixOffDiags[...,1,0] - matrixOffDiags[...,0,1]
@@ -157,8 +172,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     k_s = (j_s + 1) % 3
 
     matsWhereDiagUsed = matrixArray[useDiag]
-    # The only way I know of to slice with variable last-axis-indices is to pass
-    # in an arange for the first axis; simply using `[:, i_s, j_s]` FAILS!
+    # The only way I know of to slice with variable last-axis-indices is to
+    # pass in an arange for the first axis; simply using `[:, i_s, j_s]` FAILS!
     # Maybe there's a better way I'm unaware of, though.
     arangeUseDiag = np.arange(len(i_s))
     Aij = matsWhereDiagUsed[arangeUseDiag, i_s, j_s]
@@ -169,18 +184,22 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     Akj = matsWhereDiagUsed[arangeUseDiag, k_s, j_s]
 
     diagMaxSubset = diagMaxes[useDiag]
-    useDiagNonUnitAxes = nonUnitAxes[useDiag]
+    
     # The below is `2sin(angle/2) * axis`
     sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
     ax_i = np.sqrt(np.fmax(0.0, sqrtInput)) # fmax to protect from fp issues.
-    useDiagNonUnitAxes[arangeUseDiag, i_s] = ax_i
-    useDiagNonUnitAxes[arangeUseDiag, j_s] = (Aij + Aji)/ax_i
-    useDiagNonUnitAxes[arangeUseDiag, i_s] = (Aik + Aki)/ax_i
+    nonUnitAxes[useDiag, i_s] = ax_i
+    nonUnitAxes[useDiag, j_s] = (Aij + Aji)/ax_i
+    nonUnitAxes[useDiag, k_s] = (Aik + Aki)/ax_i
 
     # Again, we need to clamp/clip in case of fp precision causing problems.
-    acosInput = np.clip((Ajk - Akj)/(ax_i + ax_i), -1.0, 1.0)
+    acosInput = np.clip((Akj - Ajk)/(ax_i + ax_i), -1.0, 1.0)
     halfAngles = np.arccos(acosInput)
     angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
+
+    # TODO: Remove this test:
+    if np.any(angles < 0):
+        raise Exception("I was wrong about all pos angles at this step!")
 
     # --------------------------------------------------------------------------
     # "Corrections" Proceeding Shepperd's Algorithm
@@ -197,18 +216,24 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     # (3406913/mgab). A 2016-12-16 edit to "Most efficient way to forward-fill 
     # NaN values in numpy array" by user Xukrao (7306999/xukrao) shows this to
     # be more efficient than similar for-loop, numba, pandas, etc. solutions.
-    # I've just adapted the technique to work with a higher dimension number.
-    angleInds = np.indices(angles.shape)
+    # --------------------------------------------------------------------------
+    # The below only works for a flat list of angles! *Might* be neat to
+    # consider more dimensions (but efficiency?). I think this could work by:
+    #  * `inds = np.tile(np.arange(angles.shape[-1]), angles.shape[:-1] + (1,))`
+    #    * An array with same shape as angles, but with aranges on last axis.
+    #  * Do the zero-setting and max accumulation similar to before.
+    #  * For copying, could use something like `put_along_axis`, but that's
+    #    copying way more items than need-be. Could instead maybe do:
+    #      * `where = np.argwhere(angles < zeroThresh).transpose()`
+    #      * `where[-1] = accumulated_inds[angles < zeroThresh]`
+    #      * `axes[angles < zeroThresh] = axes[tuple(where)]`
+    #  * Or could flatten earlier and accept weirdness if first angles are 0.
+    angleInds = np.arange(len(angles))
     # At this step, all angles SHOULD be positive.
-    zeroAngleInds = angles < zeroAngleThresh
-    angleInds[-1][zeroAngleInds] = 0
-    angleInds[-1] = np.maximum.accumulate(angleInds[-1], axis = -1)
+    zeroAngleInds = np.nonzero(angles < zeroAngleThresh)
+    angleInds[zeroAngleInds] = 0
+    angleInds = np.maximum.accumulate(angleInds, axis = -1)
     nonUnitAxes[zeroAngleInds] = nonUnitAxes[angleInds[zeroAngleInds]]
-
-
-    # TODO: Remove this test:
-    if np.any(angles < 0):
-        raise Exception("I was wrong about all pos angles at this step!")
 
     # TL;DR: Angles for the 1st case of Shepperd's algorithm, as output of acos,
     # start out in interval [0, pi]. Thus, the similar rotations
@@ -272,8 +297,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     angle_dots = np.einsum(
         '...ij,...ij->...i', nonUnitAxes[..., 1:, :], nonUnitAxes[..., :-1, :]
     ) # Dot products along 'j' axis; preserve existence of the 'i' axis.
-    needs_flip = np.logical_xor.accumulate(angle_dots < 0)
-    angles[1:][needs_flip] = -angles[1:][needs_flip]
+    needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
+    angles[..., 1:][needs_flip] = -angles[..., 1:][needs_flip]
 
     # (!!!) PLEASE DO NOT MOVE THIS LINE WITHOUT READING EARLIER COMMENTS
     #       EXPLAINING WHY IT SHOULD BE *EXACTLY* HERE!
@@ -284,16 +309,25 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     #   2. Axes for angles 2pi*n, which copied the last non-zero-angle axis.
     #      For these, we'll just copy over the normalized axes.
     unitAxes = np.empty(matrixDiags.shape) # Storage for resulting axes.
+    
     # First, we'll handle Shepperd's Algorithm case 1:
-    sinVals = np.sin(angles[useTrace][useTraceAndNonzero])
+    sinVals = np.sin(angles[useTrace])
     sinVals += sinVals
-    unitAxes[useTrace][useTraceAndNonzero] = \
-        nonUnitAxes[useTrace][useTraceAndNonzero] / sinVals
+    unitAxes[useTrace] = \
+        nonUnitAxes[useTrace] / sinVals[..., np.newaxis]
     # Then Shepperd's Algorithm case 2:
     sinVals = np.sin(angles[useDiag]/2.0)
-    unitAxes[useDiag] = nonUnitAxes[useDiag] / (sinVals + sinVals)
+    unitAxes[useDiag] = nonUnitAxes[useDiag] / (sinVals + sinVals)[..., np.newaxis]
     # Then zero-angle:
     unitAxes[zeroAngleInds] = unitAxes[angleInds[zeroAngleInds]]
+    # If the first rotations are zero-angle, then they have no previous axis to
+    # copy. So they'll still be NaNs or whatever, so we should fix those.
+    numIssueAxesAtFront = 0
+    while numIssueAxesAtFront < len(angles):
+        if angles[numIssueAxesAtFront] >= zeroAngleThresh:
+            break
+        numIssueAxesAtFront += 1
+    unitAxes[:numIssueAxesAtFront] = 0.0
 
     # Now we add 2pi multiples to make angles within pi of each other.
     # We want the following difference-to-correction mapping:
@@ -305,12 +339,14 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     # We need to accumulate the correction sum because, if two angles are within
     # pi of each other, and the former gets incremented by n*tau, the latter 
     # must also be incremented by n*tau so that they stay within pi distance.
-    angle_corrections = np_tau * np.cumsum(tau_facs)
-    angles[1:] -= angle_corrections
+    angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
+    angles[..., 1:] -= angle_corrections
 
     # TODO: Remove this after sufficient testing!
     if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
         raise Exception("Numpification of AA code resulted in angle diff > pi!")
+        
+    print("Reminder to remove Exception checks and look @ other TODOs.")
         
     # Now we combine the angles and unit axes into a final array of vec3s.
     return np.einsum('...i,...ij->...ij', angles, unitAxes)
