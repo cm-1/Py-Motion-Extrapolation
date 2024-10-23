@@ -235,6 +235,11 @@ def componentLabel(vectorRowIndex, axisIndex):
 # Now comes all of the axes layout code.
 
 plt.subplots_adjust(left=0.2, bottom=0.3, right=0.95, top=0.9)
+noDataTextAxis = plt.axes((0.2, 0.5, 0.1, 0.1), frameon=False)
+noDataTextAxis.text(1.0, 1.0, "No data for obj/seq pair!")
+noDataTextAxis.get_xaxis().set_visible(False)
+noDataTextAxis.get_yaxis().set_visible(False)
+
 
 coord_table_margin = 0.05
 coord_cell_w = 0.03
@@ -401,6 +406,9 @@ def update(val):
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
     updatePredictionData(objSeqDataInfo)
 
+    noDataTextAxis.set_visible(not objSeqDataInfo.hasData)
+        
+
     if len(axLinesDict.keys()) > 0:
         objPts = objSeqDataInfo.plot_data
         objPreds = objSeqDataInfo.pred_data
@@ -481,6 +489,10 @@ for i in range(len(row_labels) + 1):
     buttons.append(button_row)
 
 on_button_clicked(None, 0, 0, None)
+
+startingObj = objSeqDataGrid[int(slider2.val)][int(slider1.val)]
+noDataTextAxis.set_visible(not startingObj.hasData)
+
 
 # Show the plot
 plt.show()
