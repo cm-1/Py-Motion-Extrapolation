@@ -70,7 +70,7 @@ class ObjSeqData:
         self.seqID = seqID
         self.hasData = False
         self.calculator = None
-        if gtCommon.isBodySeqPairValid(bodID, seqID):
+        if gtCommon.BCOT_Data_Calculator.isBodySeqPairValid(bodID, seqID):
             self.hasData = True
             self.calculator = gtCommon.BCOT_Data_Calculator(
                 bodID, seqID, FRAME_SKIP_AMT

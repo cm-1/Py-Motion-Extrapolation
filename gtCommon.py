@@ -1,12 +1,8 @@
 import numpy as np
 
 import pathlib
-import os # TODO: replace fully with pathlib.
+import json
 
-
-BCOT_DIR = pathlib.Path("D:\\Datasets\\BCOT")
-BCOT_DATASET_DIR = BCOT_DIR / "BCOT_Dataset"
-BCOT_CV_POSE_EXPORT_DIR = BCOT_DIR / "srt3d_results_bcot"
 
 
 BCOT_BODY_NAMES = [
@@ -368,18 +364,18 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     
 #     return np.array(retList)
 
-def isBodySeqPairValid(bodyIndex, seqIndex):
-    seq = BCOT_SEQ_NAMES[seqIndex]
-    bod = BCOT_BODY_NAMES[bodyIndex]
-    
-    posePathGT = BCOT_DATASET_DIR / seq / bod
-    return os.path.isdir(posePathGT)
+
 
 
 
 class BCOT_Data_Calculator:
-    def __init__(self, bodyIndex, seqIndex, skipAmt):
 
+    _DATASET_DIR = None
+    _CV_POSE_EXPORT_DIR = None
+    _dir_paths_initialized = False
+
+    def __init__(self, bodyIndex, seqIndex, skipAmt):
+        BCOT_Data_Calculator._setupPosePaths()
         
         self.skipAmt = skipAmt
         self.issueFrames = []
@@ -387,7 +383,8 @@ class BCOT_Data_Calculator:
         self._seq = BCOT_SEQ_NAMES[seqIndex]
         self._bod = BCOT_BODY_NAMES[bodyIndex]
         
-        self.posePathGT = BCOT_DATASET_DIR / self._seq / self._bod / "pose.txt"
+        self.posePathGT = BCOT_Data_Calculator._DATASET_DIR / self._seq \
+            / self._bod / "pose.txt"
 
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._translationsCalcNP = np.zeros((0,3), dtype=np.float64)
@@ -395,14 +392,39 @@ class BCOT_Data_Calculator:
         self._rotationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
         self._dataLoaded = False
-    
+
+    def _setupPosePaths():
+        if BCOT_Data_Calculator._dir_paths_initialized:
+            return
+        settingsDir = pathlib.Path(__file__).parent.parent.resolve()
+        jsonPath = settingsDir / "local.config.json"
+        with open(jsonPath) as f:
+            d = json.load(f)
+            BCOT_Data_Calculator._DATASET_DIR = pathlib.Path(
+                d["dataset_directory"]
+            )
+            BCOT_Data_Calculator._CV_POSE_EXPORT_DIR = pathlib.Path(
+                d["result_directory"]
+            )
+            
+    def isBodySeqPairValid(bodyIndex, seqIndex):
+        BCOT_Data_Calculator._setupPosePaths()
+
+        seq = BCOT_SEQ_NAMES[seqIndex]
+        bod = BCOT_BODY_NAMES[bodyIndex]
+        
+        posePathGT = BCOT_Data_Calculator._DATASET_DIR / seq / bod
+        return posePathGT.is_dir()
+
     def loadData(self):
         if self._dataLoaded:
             return
 
-        print("Pose path:", self.posePathGT)
-        posePathCalc = BCOT_CV_POSE_EXPORT_DIR / ("cvOnly_skip" + str(self.skipAmt) + "_poses_" + self._seq + "_" + self._bod +".txt")
+        calcFName = "cvOnly_skip" + str(self.skipAmt) + "_poses_" \
+            + self._seq + "_" + self._bod +".txt"
 
+        print("Pose path:", self.posePathGT)
+        posePathCalc = BCOT_Data_Calculator._CV_POSE_EXPORT_DIR / calcFName
         #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
@@ -414,7 +436,7 @@ class BCOT_Data_Calculator:
         self._rotationsGTNP = axisAngleFromMatArray(gtMatData[0])
 
         # Check if file for CV-calculated pose data exists; if so, load it too.
-        if os.path.exists(posePathCalc):
+        if posePathCalc.is_file():
             calcMatData = BCOT_Data_Calculator.matrixDataFromFile(posePathCalc)
             self._translationsCalcNP = calcMatData[1]
             self._rotationsCalcNP = axisAngleFromMatArray(calcMatData[0])
