@@ -4,29 +4,9 @@ from matplotlib.collections import LineCollection
 
 import cinpact
 
+import gtCommon
 from gtCommon import BCOT_Data_Calculator, quatsFromAxisAngles
 
-bodIndex = 1
-seqIndex = 11
-skipAmount = 2
-calculator = BCOT_Data_Calculator(bodIndex, seqIndex, skipAmount)
-
-translations = calculator.getTranslationsGTNP(True)
-rotations = calculator.getRotationsGTNP(True)
-
-numTimestamps = len(translations)
-timestamps = np.arange(numTimestamps)
-
-translations_vel = np.diff(translations[:-1], axis=0)
-rotations_vel = np.diff(rotations[:-1], axis=0)
-
-t_vel_pred = translations[1:-1] + translations_vel
-r_vel_pred = rotations[1:-1] + rotations_vel
-
-tx_coords = np.stack((timestamps, translations[:, 0]), axis = -1)
-ptx_coords = np.stack((timestamps[2:], t_vel_pred[:, 0]), axis = -1)
-
-v_line_coords = np.hstack((tx_coords[:-2], ptx_coords)).reshape((len(ptx_coords), 2, 2))
 
 
 
@@ -58,28 +38,86 @@ def getPredictionError(values, predictions, treatAsRotations: bool):
         err_dists = np.linalg.norm(pred_diffs, axis=1) # Norm for each vec3
     return err_dists
 
-t_static_errors = getPredictionError(translations, translations[:-1], False)
-t_vel_errors = getPredictionError(translations, t_vel_pred, False)
-t_perfect_errors = getPredictionError(translations, translations[1:], False)
+def getTranslationScore(translations, preds):
+    errs = getPredictionError(translations, preds, False)
+    return (errs <= 50.0).mean()
 
-t_static_score = (t_static_errors <= 50.0).mean()
-t_vel_score = (t_vel_errors <= 50.0).mean()
-t_perfect_score = (t_perfect_errors <= 0.0001).mean()
 
-r_static_errors = getPredictionError(rotations, rotations[:-1], True)
-r_static_score = (r_static_errors <= np.deg2rad(5)).mean()
-r_perfect_rrors = getPredictionError(rotations, rotations[1:], True)
-r_perfect_score = (r_perfect_rrors <= 0.00001).mean()
 
-print("Scores:", t_perfect_score, t_static_score, t_vel_score, r_perfect_score, r_static_score)
+def CompileTranslationScores(static, vel, acc, accLerp, translations):
+    t_perfect_errors = getPredictionError(translations, translations[1:], False)
+    perfect_score = (t_perfect_errors <= 0.0001).mean()
 
+    return np.array(
+        [perfect_score] + [getTranslationScore(translations, p) for p in [
+            static, vel, acc, accLerp
+        ]]
+    )
+
+combos = []
+for b in range(len(gtCommon.BCOT_BODY_NAMES)):
+    for s in range(len(gtCommon.BCOT_SEQ_NAMES)):
+        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+            combos.append((b,s))
+
+t_scores = np.empty((len(combos), 5))
+r_scores = np.empty((len(combos), 3))
+skipAmount = 2
+for i, combo in enumerate(combos):
+    calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
+
+    translations = calculator.getTranslationsGTNP(True)
+    rotations = calculator.getRotationsGTNP(True)
+
+    numTimestamps = len(translations)
+    timestamps = np.arange(numTimestamps)
+
+    translations_vel = np.diff(translations[:-1], axis=0)
+    rotations_vel = np.diff(rotations[:-1], axis=0)
+
+    translations_acc = np.diff(translations_vel, axis=0)
+
+    t_vel_preds = translations[1:-1] + translations_vel
+    r_vel_pred = rotations[1:-1] + rotations_vel
+
+    t_acc_delta = translations_vel[1:] + (0.5 * translations_acc)
+    t_acc_preds = translations[2:-1] + t_acc_delta
+    t_accLERP_preds = translations[2:-1] + 0.25 * t_acc_delta
+    t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
+    t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
+
+    tx_coords = np.stack((timestamps, translations[:, 0]), axis = -1)
+    ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 0]), axis = -1)
+
+    v_line_coords = np.hstack((tx_coords[:-2], ptx_coords)).reshape((len(ptx_coords), 2, 2))
+
+    
+
+    r_static_errors = getPredictionError(rotations, rotations[:-1], True)
+    r_static_score = (r_static_errors <= np.deg2rad(5)).mean()
+    r_perfect_rrors = getPredictionError(rotations, rotations[1:], True)
+    r_perfect_score = (r_perfect_rrors <= 0.00001).mean()
+
+    # Dumb comment.
+    t_scores[i] = CompileTranslationScores(
+        translations[:-1], t_vel_preds, t_acc_preds, t_accLERP_preds,
+        translations
+    )
+    r_scores[i] = np.array([r_perfect_score, 0, r_static_score])
+print("T Scores:", t_scores.mean(axis=0))
+print("R Scores:", r_scores.mean(axis=0))
+
+
+#%%
+fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
+fig.clear() # Good to do for iPython running, if running a plot cell again.
+ax = fig.subplots()
 
 vlc = LineCollection(v_line_coords)
 
-
-fig, ax = plt.subplots()
 ax.add_collection(vlc)
 ax.autoscale()
 ax.margins(0.1)
-plt.show()
+
+plt.show()#block=True) # block=True used for separate-window iPython plotting.
 
