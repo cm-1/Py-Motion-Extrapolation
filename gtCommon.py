@@ -183,7 +183,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     
     # The below is `2sin(angle/2) * axis`
     sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
-    ax_i = np.sqrt(np.fmax(0.0, sqrtInput)) # fmax to protect from fp issues.
+    # Because max-diag-element >= trace, the sqrt input >= 1; no fp concerns.
+    ax_i = np.sqrt(sqrtInput)
     nonUnitAxes[useDiag, i_s] = ax_i
     nonUnitAxes[useDiag, j_s] = (Aij + Aji)/ax_i
     nonUnitAxes[useDiag, k_s] = (Aik + Aki)/ax_i
