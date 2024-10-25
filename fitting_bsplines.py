@@ -48,13 +48,13 @@ class PlotData:
 @dataclass
 class PredictionData:
     x_spline: typing.Any = field(default_factory=list)
-    y_spline: typing.Any = field(default_factory=getEmptyYData)
+    y_spline: np.ndarray = field(default_factory=getEmptyYData)
     x_static: typing.Any = field(default_factory=list)
-    y_static: typing.Any = field(default_factory=getEmptyYData)
+    y_static: np.ndarray = field(default_factory=getEmptyYData)
     x_vel: typing.Any = field(default_factory=list)
-    y_vel: typing.Any = field(default_factory=getEmptyYData)
+    y_vel: np.ndarray = field(default_factory=getEmptyYData)
     x_accel: typing.Any = field(default_factory=list)
-    y_accel: typing.Any = field(default_factory=getEmptyYData)
+    y_accel: np.ndarray = field(default_factory=getEmptyYData)
 
 @dataclass
 class AxLines:
