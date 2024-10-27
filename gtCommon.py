@@ -61,6 +61,41 @@ def quatsFromAxisAngles(axisAngleVals):
     quaternions = np.hstack((np.cos(angles / 2), np.sin(angles / 2) * normed))
     return quaternions
 
+# The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
+# two rotations (i.e., the angle of the rotation from one to another). If you
+# look at the formula for the scalar component of quaternion multiplication for 
+# the desired rotation `q1*q0(^-1)`, it is clearly just dot(q0, q1). So, 
+# cos(angle/2) == dot(q0,q1). The abs of that is cos(angle/2) if angle/2 is in
+# [-pi/2, pi/2] and is otherwise cos(+-(pi - angle/2)); picture a unit circle to
+# see why. Then 2acos is either abs(angle) or abs(2pi - angle); either way, it
+# will be the correct angle between 0 and pi.
+def anglesBetweenQuats(quats0, quats1):
+    vals_preds_dot = np.einsum('ij,ij->i', quats0, quats1)
+    half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
+    return half_angle + half_angle
+
+def quatSlerp(quats0, quats1, t: float, zeroAngleThresh: float = 0.0001):
+    retVal = np.empty(quats0.shape)
+    angles = anglesBetweenQuats(quats0, quats1)
+    # No abs needed for next step, as prev call guaranteed to be positive, since
+    # np.acos is guaranteed to be positive.
+    zero_angle_bools = np.greater(zeroAngleThresh, angles)
+
+    # For angles of zero, should just copy one of the quaternions.
+    # For the others, normal quaternion SLERP applies.
+    pos_angle_bools = np.invert(zero_angle_bools)
+    zero_angle_inds = np.nonzero(zero_angle_bools)
+    pos_angle_inds = np.nonzero(pos_angle_bools)
+    pos_angles = angles[pos_angle_inds, np.newaxis]
+
+    retVal[zero_angle_inds] = quats0[zero_angle_inds]
+    
+    sin_vals = np.sin(pos_angles)
+    scales0 = np.sin((1 - t) * pos_angles) / sin_vals
+    scales1 = np.sin(t * pos_angles) / sin_vals
+    retVal[pos_angle_inds] = scales0 * quats0[pos_angle_inds] + scales1 * quats1[pos_angle_inds]
+    return retVal
+
 # def axisAnglesFromQuats(quatVals):
 #     halfAngles = np.acrcos(quatVals[:, 0:1])
 #     angles = halfAngles + halfAngles
