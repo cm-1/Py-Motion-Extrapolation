@@ -61,6 +61,22 @@ def quatsFromAxisAngles(axisAngleVals):
     quaternions = np.hstack((np.cos(angles / 2), np.sin(angles / 2) * normed))
     return quaternions
 
+# def axisAnglesFromQuats(quatVals):
+#     halfAngles = np.acrcos(quatVals[:, 0:1])
+#     angles = halfAngles + halfAngles
+#     axes = quatVals[:, 1:] / np.sin(halfAngles)
+
+def multiplyQuatLists(q0, q1):
+    e = np.empty((4, len(q0)), dtype=np.float64)
+    q0w, q0x, q0y, q0z = q0.transpose()
+    q1w, q1x, q1y, q1z = q1.transpose()
+ 
+    e[0] = q0w*q1w - q0x*q1x - q0y*q1y - q0z*q1z
+    e[1] = q0w*q1x + q0x*q1w + q0y*q1z - q0z*q1y
+    e[2] = q0w*q1y - q0x*q1z + q0y*q1w + q0z*q1x
+    e[3] = q0w*q1z + q0x*q1y - q0y*q1x + q0z*q1w
+    return e.transpose()
+
 
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
@@ -347,7 +363,6 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
         
     # Now we combine the angles and unit axes into a final array of vec3s.
     return np.einsum('...i,...ij->...ij', angles, unitAxes)
-
 
 
 # def axisAngleListFromMats(matList):
