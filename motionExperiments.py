@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from dataclasses import dataclass, field
+import typing
 
 import bspline
 
@@ -34,51 +36,148 @@ def getRandomQuatError(shape, max_err_rads):
     error_quats[..., 1:] = np.sin(half_angles) * unit_axes
     return error_quats
 
-# For predictions that require multiple prior points, they may lack a prediction
-# for the 2nd point, 3rd point, etc. In this case, the CV algorithm would just
-# assume no motion for those frames, so we'll reflect that here as well.
-def prependMissingPredictions(values, predictions):
-    numMissing = (len(values) - 1) - len(predictions)
-    return np.vstack((values[0:numMissing], predictions))
 
-# Note: returns errors in radians!
-def getQuatError(values, predictions):
-    full_predictions = prependMissingPredictions(values, predictions)
-    return gtCommon.anglesBetweenQuats(values[1:], full_predictions)
+@dataclass
+class PredictionResult:
+    name: str
+    # predictions: np.ndarray
+    errors: typing.List[np.ndarray]
+    scores: typing.List[float]
 
-# Note: returns errors in radians!
-def getAxisAngleError(values, predictions): 
-    v_qs = quatsFromAxisAngles(values)
-    p_qs = quatsFromAxisAngles(predictions)
-    return getQuatError(v_qs, p_qs)
+class ConsolidatedResults:
+    def __init__(self): #, numScenarios: int):
+        self.translation_results = dict() # Name -> PredictionResult
+        self.rotation_results = dict() # Name -> PredictionResult
 
-def getTranslationError(values, predictions):
-    full_predictions = prependMissingPredictions(values, predictions)
+        # Order in which to display results.
+        self._ordered_translation_result_names = []
+        self._ordered_rotation_result_names = []
 
-    pred_diffs = values[1:] - full_predictions
-    return np.linalg.norm(pred_diffs, axis=1) # Norm for each vec3
+        # self.body_seq_to_row = dict() # (bodyID: int , seqID: int) -> int
 
-def getTranslationScore(translations, preds):
-    errs = getTranslationError(translations, preds)
-    return (errs <= TRANSLATION_THRESH).mean()
+        self._translations_gt = None
+        self._axisangles_gt = None
+        self._quaternions_gt = None
 
-def getAxisAngleScore(rotations, preds):
-    r_errors = getAxisAngleError(rotations, preds)
-    return (r_errors <= ROTATION_THRESH_RAD).mean()
+    # Predictions that require multiple prior points may lack a prediction for
+    # the 2nd point, 3rd point, etc. In this case, the CV version of the code
+    # would use a different prediction method (including assuming no motion).
+    def prependMissingPredictions(backup_predictions, predictions):
+        numMissing = (len(backup_predictions) - 1) - len(predictions)
+        return np.vstack((backup_predictions[0:numMissing], predictions))
 
-def getQuaternionScore(rotations, preds):
-    r_errors = getQuatError(rotations, preds)
-    return (r_errors <= ROTATION_THRESH_RAD).mean()
+    # Note: returns errors in radians!
+    def getQuatError(values, predictions):
+        full_predictions = ConsolidatedResults.prependMissingPredictions(
+            values, predictions
+        )
+        return gtCommon.anglesBetweenQuats(values[1:], full_predictions)
 
-def CompileTranslationScores(static, vel, acc, accLerp, spline, translations):
-    t_perfect_errors = getTranslationError(translations, translations[1:])
-    perfect_score = (t_perfect_errors <= 0.0001).mean()
+    # Note: returns errors in radians!
+    def getAxisAngleError(values, predictions): 
+        v_qs = quatsFromAxisAngles(values)
+        p_qs = quatsFromAxisAngles(predictions)
+        return ConsolidatedResults.getQuatError(v_qs, p_qs)
 
-    return np.array(
-        [perfect_score] + [getTranslationScore(translations, p) for p in [
-            static, vel, acc, accLerp, spline
-        ]]
-    )
+    def getTranslationError(values, predictions):
+        full_predictions = ConsolidatedResults.prependMissingPredictions(
+            values, predictions
+        )
+
+        return values[1:] - full_predictions
+    
+    def updateGroundTruth(self, translations, axisangles, quats): # bod_ID, seq_ID)
+        # self.current_ID = (bod_ID, seq_ID)
+        self._translations_gt = translations
+        self._axisangles_gt = axisangles
+        self._quaternions_gt = quats
+        t_perfect_errs = ConsolidatedResults.getTranslationError(
+            translations, translations[1:]
+        )
+        t_perfect_score = (t_perfect_errs <= 0.00001).mean()
+        self._addPredictionResult(
+            self.translation_results, self._ordered_translation_result_names, 
+            "Perfect", t_perfect_errs, t_perfect_score
+        )
+
+        r_perfect_errs = ConsolidatedResults.getAxisAngleError(
+            axisangles, axisangles[1:]
+        )
+        r_perfect_score = (r_perfect_errs <= 0.00001).mean()
+        self._addPredictionResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            "Perfect", r_perfect_errs, r_perfect_score
+        )
+
+        # self.body_seq_to_row[self.current_ID] = self.curr_row_count
+        # self.curr_row_count += 1
+
+    def addTranslationResult(self, name, predictions):
+        errs = ConsolidatedResults.getTranslationError(
+            self._translations_gt, predictions
+        )
+        # Get the norm of each vec3, and find the ratio under the threshold.
+        score = (np.linalg.norm(errs, axis = -1) <= TRANSLATION_THRESH).mean()
+        self._addPredictionResult(
+            self.translation_results, self._ordered_translation_result_names,
+            name, errs, score
+        )
+
+    def addAxisAngleResult(self, name, predictions):
+        errs = ConsolidatedResults.getAxisAngleError(
+            self._axisangles_gt, predictions
+        )
+        score = (errs <= ROTATION_THRESH_RAD).mean()
+        self._addPredictionResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            name, errs, score)
+
+    def addQuaternionResult(self, name, predictions):
+        errs = ConsolidatedResults.getQuatError(
+            self._quaternions_gt, predictions
+        )
+        score = (errs <= ROTATION_THRESH_RAD).mean()
+        self._addPredictionResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            name, errs, score
+        )
+
+    def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
+        if name in all_results_dict.keys():
+            all_results_dict[name].errors.append(errs)
+            all_results_dict[name].scores.append(score)
+        else:
+            all_results_dict[name] = PredictionResult(name, [errs], [score])
+            name_order_list.append(name)
+
+    def _printTable(names, results_for_names):
+        name_lens = []
+        for name in names:
+            # We want each printed column to be at least 10 digits plus 2 spaces
+            # because the default numpy precision in printing is 8, which means
+            # that to match it, we want at least 10 chars for the number in the
+            # next row, plus a space.
+            print("{:>10} ".format(name), end = "")
+            name_lens.append(max(10, len(name)))
+        print() # Newline after row.
+        for i, name in enumerate(names):
+            scores = results_for_names[name].scores
+            # Calculate mean and round it to Numpy's default float print digits.
+            mean_score = round(np.array(scores).mean(), 8)
+
+            print("{val:>{width}} ".format(val=str(mean_score), width=name_lens[i]), end = "")
+        print() # Newline after row.
+
+
+    def printResults(self):
+        print("Translation Results:")
+        ConsolidatedResults._printTable(
+            self._ordered_translation_result_names, self.translation_results
+        )
+        print("\nRotation Results:")
+        ConsolidatedResults._printTable(
+            self._ordered_rotation_result_names, self.rotation_results
+        )
 
 combos = []
 for b in range(len(gtCommon.BCOT_BODY_NAMES)):
@@ -86,8 +185,6 @@ for b in range(len(gtCommon.BCOT_BODY_NAMES)):
         if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
-t_scores = np.empty((len(combos), 6))
-r_scores = np.empty((len(combos), 8))
 skipAmount = 2
 
 splineMats = []
@@ -105,12 +202,13 @@ for i in range(SPLINE_DEGREE, PTS_USED_TO_CALC_LAST):
         ctrlPtCount, SPLINE_DEGREE + 1, i + 1, uVals, knotList
     ))
 
+consolidatedResultObj = ConsolidatedResults()#len(combos))
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
     translations_gt = calculator.getTranslationsGTNP(True)
-    rotations_gt = calculator.getRotationsGTNP(True)
-    rotations_gt_quats = gtCommon.quatsFromAxisAngles(rotations_gt)
+    rotations_aa_gt = calculator.getRotationsGTNP(True)
+    rotations_gt_quats = gtCommon.quatsFromAxisAngles(rotations_aa_gt)
 
 
     translations = translations_gt + np.random.uniform(-4, 4, translations_gt.shape)
@@ -118,7 +216,11 @@ for i, combo in enumerate(combos):
         getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
         rotations_gt_quats
     )
-    rotations = rotations_gt # TODO: Apply quat error to these.
+    rotations = rotations_aa_gt # TODO: Apply quat error to these.
+
+    consolidatedResultObj.updateGroundTruth(
+        translations_gt, rotations_aa_gt, rotations_gt_quats
+    )
 
     numTimestamps = len(translations_gt)
     timestamps = np.arange(numTimestamps)
@@ -201,28 +303,25 @@ for i, combo in enumerate(combos):
         r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
     t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
 
-    r_static_score = getAxisAngleScore(rotations_gt, rotations[:-1])
-    r_perfect_rrors = getAxisAngleError(rotations_gt, rotations[1:])
-    r_perfect_score = (r_perfect_rrors <= 0.00001).mean()
-    r_vel_score = getQuaternionScore(rotations_gt_quats, r_vel_preds)
-    r_slerp_score = getQuaternionScore(rotations_gt_quats, r_slerp_preds)
+    consolidatedResultObj.addAxisAngleResult("Static", rotations[:-1])
+    consolidatedResultObj.addQuaternionResult("QuatVel", r_vel_preds)
+    consolidatedResultObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
 
-    r_aa_vel_score = getAxisAngleScore(rotations_gt, r_aa_vel_preds)
-    r_aa_acc_score = getAxisAngleScore(rotations_gt, r_aa_acc_preds)
-    r_aa_accLERP_score = getAxisAngleScore(rotations_gt, r_aa_accLERP_preds)
-    r_aa_spline_score = getAxisAngleScore(rotations_gt, r_aa_spline_preds)
+    consolidatedResultObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
+    consolidatedResultObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
+    consolidatedResultObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
+    consolidatedResultObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+
 
     # Dumb comment.
-    t_scores[i] = CompileTranslationScores(
-        translations[:-1], t_vel_preds, t_acc_preds, t_accLERP_preds, t_spline_preds,
-        translations_gt
-    )
-    r_scores[i] = np.array([
-        r_perfect_score, r_static_score, r_vel_score, r_slerp_score, 
-        r_aa_vel_score, r_aa_acc_score, r_aa_accLERP_score, r_aa_spline_score
-    ])
-print("T Scores:", t_scores.mean(axis=0))
-print("R Scores:", r_scores.mean(axis=0))
+    consolidatedResultObj.addTranslationResult("Static", translations[:-1])
+    consolidatedResultObj.addTranslationResult("Vel", t_vel_preds)
+    consolidatedResultObj.addTranslationResult("Acc", t_acc_preds)
+    consolidatedResultObj.addTranslationResult("AccLERP", t_accLERP_preds)
+    consolidatedResultObj.addTranslationResult("Spline", t_spline_preds)
+
+
+consolidatedResultObj.printResults()
 
 tx_coords = np.stack((timestamps, translations[:, 2]), axis = -1)
 ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 2]), axis = -1)
