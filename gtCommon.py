@@ -61,6 +61,18 @@ def quatsFromAxisAngles(axisAngleVals):
     quaternions = np.hstack((np.cos(angles / 2), np.sin(angles / 2) * normed))
     return quaternions
 
+def einsumDot(vecs0, vecs1):
+    # Einsum is used to perform a dot product between consecutive axes.
+    # Dot products occur along 'j' axis; preserves existence of the 'i' axis.
+    # For understanding einsum, this ref might be handy:
+    # https://ajcr.net/Basic-guide-to-einsum/
+    # Here's a StackOverflow post suggesting that einsum might be faster than
+    # doing `(arr[1:] * arr[:-1]).sum(axis=1)`:
+    # https://stackoverflow.com/questions/15616742/vectorized-way-of-calculating-row-wise-dot-product-two-matrices-with-scipy
+    # (see answer with plots further down page)
+
+    return np.einsum('...ij,...ij->...i', vecs0, vecs1)
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -70,7 +82,7 @@ def quatsFromAxisAngles(axisAngleVals):
 # see why. Then 2acos is either abs(angle) or abs(2pi - angle); either way, it
 # will be the correct angle between 0 and pi.
 def anglesBetweenQuats(quats0, quats1):
-    vals_preds_dot = np.einsum('ij,ij->i', quats0, quats1)
+    vals_preds_dot = einsumDot(quats0, quats1)
     half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
     return half_angle + half_angle
 
@@ -328,9 +340,6 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     # --------------------------------------------------------------------------
 
     # Numpy-styled axis-flip-detection:
-    # Einsum is used to perform a dot product between consecutive axes. For
-    # understanding einsum, this ref might be handy:
-    # https://ajcr.net/Basic-guide-to-einsum/
     # Here's a StackOverflow post suggesting that einsum might be faster than
     # doing `(arr[1:] * arr[:-1]).sum(axis=1)`:
     # https://stackoverflow.com/questions/15616742/vectorized-way-of-calculating-row-wise-dot-product-two-matrices-with-scipy
@@ -342,9 +351,7 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     # I.e., we "accumulate" the number of flips needed, and even numbers cancel
     # out. This is why we use an accumulation of xors; it sort of functions like
     # mod 2 addition, but I'm hoping it's cheaper.
-    angle_dots = np.einsum(
-        '...ij,...ij->...i', nonUnitAxes[..., 1:, :], nonUnitAxes[..., :-1, :]
-    ) # Dot products along 'j' axis; preserve existence of the 'i' axis.
+    angle_dots = einsumDot(nonUnitAxes[..., 1:, :], nonUnitAxes[..., :-1, :]) 
     needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
     angles[..., 1:][needs_flip] = -angles[..., 1:][needs_flip]
 
@@ -500,7 +507,7 @@ class BCOT_Data_Calculator:
         # break. But SOON, I should either remove this or look at euclidean
         # distance between vectors instead!
         for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
-            flipPlaces = np.einsum('ij,ij->i', rotArr[1:], rotArr[:-1]) <= 0
+            flipPlaces = einsumDot(rotArr[1:], rotArr[:-1]) <= 0
             if np.any(flipPlaces):
                 self.issueFrames = 1 + np.argwhere(flipPlaces)
                 # self.issueFrames = np.hstack((

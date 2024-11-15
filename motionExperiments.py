@@ -6,12 +6,12 @@ import typing
 
 import bspline
 
-import gtCommon
+import gtCommon as gtc
 from gtCommon import BCOT_Data_Calculator, quatsFromAxisAngles
 
-TRANSLATION_THRESH = 50.0
+TRANSLATION_THRESH = 20.0#50.0
 
-ROTATION_THRESH_RAD = np.deg2rad(5)
+ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
 SPLINE_DEGREE = 2
 PTS_USED_TO_CALC_LAST = 6 # Must be at least spline's degree + 1.
@@ -71,7 +71,7 @@ class ConsolidatedResults:
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
         )
-        return gtCommon.anglesBetweenQuats(values[1:], full_predictions)
+        return gtc.anglesBetweenQuats(values[1:], full_predictions)
 
     # Note: returns errors in radians!
     def getAxisAngleError(values, predictions): 
@@ -150,7 +150,7 @@ class ConsolidatedResults:
             all_results_dict[name] = PredictionResult(name, [errs], [score])
             name_order_list.append(name)
 
-    def _printTable(names, results_for_names):
+    def printTable(names, results_for_names):
         name_lens = []
         for name in names:
             # We want each printed column to be at least 10 digits plus 2 spaces
@@ -160,28 +160,36 @@ class ConsolidatedResults:
             print("{:>10} ".format(name), end = "")
             name_lens.append(max(10, len(name)))
         print() # Newline after row.
-        for i, name in enumerate(names):
-            scores = results_for_names[name].scores
+        for i in range(len(names)):
             # Calculate mean and round it to Numpy's default float print digits.
-            mean_score = round(np.array(scores).mean(), 8)
+            mean_score = round(results_for_names[i], 8)
 
             print("{val:>{width}} ".format(val=str(mean_score), width=name_lens[i]), end = "")
         print() # Newline after row.
 
 
     def printResults(self):
+        ordered_t_score_means = [
+            np.array(self.translation_results[n].scores).mean()
+            for n in self._ordered_translation_result_names
+        ]
+        ordered_r_score_means = [
+            np.array(self.rotation_results[n].scores).mean()
+            for n in self._ordered_rotation_result_names
+        ]
+
         print("Translation Results:")
-        ConsolidatedResults._printTable(
-            self._ordered_translation_result_names, self.translation_results
+        ConsolidatedResults.printTable(
+            self._ordered_translation_result_names, ordered_t_score_means
         )
         print("\nRotation Results:")
-        ConsolidatedResults._printTable(
-            self._ordered_rotation_result_names, self.rotation_results
+        ConsolidatedResults.printTable(
+            self._ordered_rotation_result_names, ordered_r_score_means
         )
 
 combos = []
-for b in range(len(gtCommon.BCOT_BODY_NAMES)):
-    for s in range(len(gtCommon.BCOT_SEQ_NAMES)):
+for b in range(len(gtc.BCOT_BODY_NAMES)):
+    for s in range(len(gtc.BCOT_SEQ_NAMES)):
         if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
@@ -200,28 +208,39 @@ for i in range(SPLINE_DEGREE, PTS_USED_TO_CALC_LAST):
     matA = bspline.bSplineFittingMat(
         ctrlPtCount, SPLINE_DEGREE + 1, i + 1, uVals, knotList
     )
-    # print(matA)
+
     pseudoInv = np.linalg.inv(matA.transpose() @ matA) @ matA.transpose()
 
     splineMats.append(pseudoInv)
 
-consolidatedResultObj = ConsolidatedResults()
+allResultsObj = ConsolidatedResults()#len(combos))
+
+egFound = False
+sampleAccErrs = None
+sampleDeltas = None
+
+# A vector that will hold a subset of translations between frames, using these
+# to figure out the best fraction to take for the acceleration deltas.
+gt_for_accel_deltas = np.empty((0,3))
+all_accel_deltas = np.empty((0,3))
+
+all_vel_ratios = np.zeros((0,))
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_aa_gt = calculator.getRotationsGTNP(True)
-    rotations_gt_quats = gtCommon.quatsFromAxisAngles(rotations_aa_gt)
+    rotations_gt_quats = gtc.quatsFromAxisAngles(rotations_aa_gt)
 
 
-    translations = translations_gt + np.random.uniform(-4, 4, translations_gt.shape)
-    rotations_quats = gtCommon.multiplyQuatLists(
+    translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
+    rotations_quats = gtc.multiplyQuatLists(
         getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
         rotations_gt_quats
     )
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
 
-    consolidatedResultObj.updateGroundTruth(
+    allResultsObj.updateGroundTruth(
         translations_gt, rotations_aa_gt, rotations_gt_quats
     )
 
@@ -239,25 +258,17 @@ for i, combo in enumerate(combos):
 
 
 
-    rotations_vel = gtCommon.multiplyQuatLists(rotations_quats[1:-1], rev_rotations_quats[:-2])
-
-
-    testQuats = gtCommon.multiplyQuatLists(rotations_vel, rotations_quats[:-2])
-    testQuatDiff = testQuats - rotations_quats[1:-1]
-    maxTestDiff = testQuatDiff.max()
-    if (maxTestDiff) > 0.0001:
-        raise Exception("Error!")
-    #print(maxTestDiff)
+    rotations_vel = gtc.multiplyQuatLists(rotations_quats[1:-1], rev_rotations_quats[:-2])
 
     translations_acc = np.diff(translations_vel, axis=0)
     rotations_aa_acc = np.diff(rotations_aa_vel, axis=0)
 
     t_vel_preds = translations[1:-1] + translations_vel
     # r_vel_pred = rotations[1:-1] + rotations_vel
-    r_vel_preds = gtCommon.multiplyQuatLists(rotations_vel, rotations_quats[1:-1])
+    r_vel_preds = gtc.multiplyQuatLists(rotations_vel, rotations_quats[1:-1])
     r_aa_vel_preds = rotations[1:-1] + rotations_aa_vel
 
-    r_slerp_preds = gtCommon.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
+    r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
     t_acc_delta = translations_vel[1:] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
@@ -271,6 +282,15 @@ for i, combo in enumerate(combos):
     r_aa_acc_preds = np.vstack((r_aa_vel_preds[:1], r_aa_acc_preds))
     r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
+
+    vel_sq_lens = gtc.einsumDot(translations_vel[:-1], translations_vel[:-1])
+    vel_dots = gtc.einsumDot(translations_vel[1:], translations_vel[:-1])
+    vel_proj_scalars = vel_dots / vel_sq_lens
+    all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
+
+    vel_lens = np.sqrt(vel_sq_lens[1:])
+    acc_vel_dots = gtc.einsumDot(translations_vel[1:], translations_acc)
+    acc_parallels = (acc_vel_dots / vel_sq_lens[1:])
 
 
     num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
@@ -303,30 +323,97 @@ for i, combo in enumerate(combos):
         r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
     t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
 
-    consolidatedResultObj.addAxisAngleResult("Static", rotations[:-1])
-    consolidatedResultObj.addQuaternionResult("QuatVel", r_vel_preds)
-    consolidatedResultObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
+    allResultsObj.addAxisAngleResult("Static", rotations[:-1])
+    allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
+    allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
 
-    consolidatedResultObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
-    consolidatedResultObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
-    consolidatedResultObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
-    consolidatedResultObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+    allResultsObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
+    allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
+    allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
+    allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
 
 
     # Dumb comment.
-    consolidatedResultObj.addTranslationResult("Static", translations[:-1])
-    consolidatedResultObj.addTranslationResult("Vel", t_vel_preds)
-    consolidatedResultObj.addTranslationResult("Acc", t_acc_preds)
-    consolidatedResultObj.addTranslationResult("AccLERP", t_accLERP_preds)
-    consolidatedResultObj.addTranslationResult("Spline", t_spline_preds)
+    allResultsObj.addTranslationResult("Static", translations[:-1])
+    allResultsObj.addTranslationResult("Vel", t_vel_preds)
+    allResultsObj.addTranslationResult("Acc", t_acc_preds)
+    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
+    allResultsObj.addTranslationResult("Spline", t_spline_preds)
+    
+    if (not egFound):
+        lastLerpScore = allResultsObj.translation_results["AccLERP"].scores[-1]
+        accResult = allResultsObj.translation_results["Acc"]
+        lastAccScore = accResult.scores[-1]
+        if lastLerpScore > lastAccScore:
+            egFound = True
+
+            sampleAccErrs = accResult.errors[-1]
+            t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
+            sampleDeltas = t_acc_delta / t_deltas_n
+
+print("All vel ratios stats:")
+vel_stat_headers = ["Mean", "Min", "Max", "Median", "std"]
+vel_stat_results = [
+    all_vel_ratios.mean(), all_vel_ratios.min(), all_vel_ratios.max(),
+    np.median(all_vel_ratios), np.std(all_vel_ratios)
+]
+
+ConsolidatedResults.printTable(vel_stat_headers, vel_stat_results)
+print()
+
+fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
+fig.clear() # Good to do for iPython running, if running a plot cell again.
+ax = fig.subplots()
+ax.hist(all_vel_ratios, bins=80)
+plt.show()
 
 
-consolidatedResultObj.printResults()
+
+allResultsObj.printResults()
 
 tx_coords = np.stack((timestamps, translations[:, 2]), axis = -1)
 ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 2]), axis = -1)
 
 v_line_coords = np.hstack((tx_coords[:-2], ptx_coords)).reshape((len(ptx_coords), 2, 2))
+
+#%%
+acc_err_x = np.einsum('ij,ij->i', sampleDeltas, sampleAccErrs[2:])
+acc_err_sqr_len = np.einsum('ij,ij->i', sampleAccErrs[2:], sampleAccErrs[2:])
+acc_err_y = np.sqrt(acc_err_sqr_len - (acc_err_x**2))
+
+
+# Randomly negate about half of the y values.
+negate_mask = np.random.rand(len(acc_err_y)) < 0.5
+acc_err_y[negate_mask] *= -1
+
+# Create line segments from (0, 0) to each (x, y).
+points = np.column_stack((acc_err_x, acc_err_y))
+origin = np.array([0, 0])
+segments = np.array([[origin, point] for point in points])
+
+# Create the LineCollection with a colormap that encodes the frame numbers.
+colors = (skipAmount + 1) * np.arange(len(acc_err_x))
+lc = LineCollection(segments, cmap='viridis', array=colors, linewidths=2)
+fig = plt.figure(0, figsize=(8, 8))
+fig.clear()
+ax = fig.subplots()
+ax.add_collection(lc)
+cbar = plt.colorbar(lc, ax=ax, orientation='vertical')
+cbar.set_label('Frame number')
+
+# Set the viewport to show all lines.
+ax.set_xlim(min(acc_err_x) - 1, max(acc_err_x) + 1)
+ax.set_ylim(min(acc_err_y) - 1, max(acc_err_y) + 1)
+ax.set_aspect('equal', 'box')
+
+
+
+plt.title('Errors relative to extrapolation vector')
+plt.xlabel('Parallel to extrapolation')
+plt.ylabel('Orthogonal to extrapolation')
+plt.grid(True)
+plt.show()
+
 #%%
 fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
 fig.clear() # Good to do for iPython running, if running a plot cell again.
