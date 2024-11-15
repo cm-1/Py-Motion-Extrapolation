@@ -204,6 +204,8 @@ for i in range(SPLINE_DEGREE, PTS_USED_TO_CALC_LAST):
     pseudoInv = np.linalg.inv(matA.transpose() @ matA) @ matA.transpose()
 
     splineMats.append(pseudoInv)
+
+consolidatedResultObj = ConsolidatedResults()
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
