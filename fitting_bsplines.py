@@ -304,8 +304,8 @@ def updatePredictionData(objSeqDataInfo):
     objSeqDataInfo.lastKnownPtIndex = lastKnownVelIndex 
 
     startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
-    uInterval = (SPLINE_DEGREE, lastKnownSplineIndex + 1 - startInd)
     ctrlPtCount = min(lastKnownSplineIndex + 1, DESIRED_CTRL_PTS)
+    uInterval = (SPLINE_DEGREE, ctrlPtCount)
 
 
     # Interval over which basis functions sum to 1, assuming uniform knot seq.
@@ -341,11 +341,15 @@ def updatePredictionData(objSeqDataInfo):
     accelPt[0] = velPts[1] - velPts[0]
     constAccelPt = ptsData[lastKnownVelIndex] + velPts[1] + 0.5 * accelPt[0]
 
-    ctrlPts = np.hstack((ctrlPts, np.ones((len(ctrlPts), 1)))) # Weights
-
-    ctrlPtDumbWrap = [bspline.MotionPoint(c) for c in ctrlPts]
-    spline = bspline.MotionBSpline(ctrlPtDumbWrap, SPLINE_DEGREE + 1, False)
-    spline_result = bspline.ptsFromNURBS(spline, 100, False)
+    spline_ones = np.ones(len(ctrlPts), dtype=int)
+    dumb_mus = np.ones(len(knotList), dtype=int)
+    # spline = bspline.MotionBSpline(ctrlPtDumbWrap, SPLINE_DEGREE + 1, False)
+    # spline_result = bspline.ptsFromNURBS(spline, 100, False)
+    u_graph_vals = np.linspace(uInterval[0], uInterval[1], 100)
+    spline_result = bspline.specifiedPtsFromNURBS(
+        ctrlPts, spline_ones, len(ctrlPts) - 1, SPLINE_DEGREE + 1,
+        knotList, dumb_mus, u_graph_vals, spline_ones
+    )
 
     splineInputLen = lastKnownSplineIndex + NUM_OUTPUT_PREDICTIONS - startInd
     spline_result.params -= uInterval[0]
