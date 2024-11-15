@@ -48,13 +48,13 @@ class PlotData:
 @dataclass
 class PredictionData:
     x_spline: typing.Any = field(default_factory=list)
-    y_spline: typing.Any = field(default_factory=getEmptyYData)
+    y_spline: np.ndarray = field(default_factory=getEmptyYData)
     x_static: typing.Any = field(default_factory=list)
-    y_static: typing.Any = field(default_factory=getEmptyYData)
+    y_static: np.ndarray = field(default_factory=getEmptyYData)
     x_vel: typing.Any = field(default_factory=list)
-    y_vel: typing.Any = field(default_factory=getEmptyYData)
+    y_vel: np.ndarray = field(default_factory=getEmptyYData)
     x_accel: typing.Any = field(default_factory=list)
-    y_accel: typing.Any = field(default_factory=getEmptyYData)
+    y_accel: np.ndarray = field(default_factory=getEmptyYData)
 
 @dataclass
 class AxLines:
@@ -115,28 +115,6 @@ for seqIndex in range(len(gtCommon.BCOT_SEQ_NAMES)):
 
 
 
-def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
-    if (len(ptsToFit) + numUnknownPts) != len(uVals):
-        raise Exception(
-            "Number of u values does not match number of known + unknown points!"
-        )
-
-    numInputPts = len(ptsToFit)
-
-    mat = np.zeros((numInputPts, numCtrlPts))
-
-    iden = np.identity(numCtrlPts)
-
-    delta = order - 1
-    for r in range(numInputPts):
-        u = uVals[r]
-        while (delta < numCtrlPts - 1 and u >= knotVals[delta + 1]):
-            delta = delta + 1 # muList[delta + 1]
-        for c in range(numCtrlPts):
-            mat[r][c] = bspline.bSplineInner(u, order, delta, iden[c], knotVals)
-
-    fitted_ctrl_pts = np.linalg.lstsq(mat, ptsToFit, rcond = None)[0]
-    return fitted_ctrl_pts
 
 
 
@@ -334,7 +312,7 @@ def updatePredictionData(objSeqDataInfo):
         ptsToFit_i = ptsData[:, i]
         ptSubsetToFit = ptsToFit_i[startInd:lastKnownSplineIndex + 1]
 
-        ctrlPts1D = fitBSpline(
+        ctrlPts1D = bspline.fitBSpline(
             ctrlPtCount, SPLINE_DEGREE + 1, ptSubsetToFit, uVals, knotList,
             NUM_OUTPUT_PREDICTIONS
         )
