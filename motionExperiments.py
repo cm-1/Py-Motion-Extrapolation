@@ -225,6 +225,7 @@ gt_for_accel_deltas = np.empty((0,3))
 all_accel_deltas = np.empty((0,3))
 
 all_vel_ratios = np.zeros((0,))
+all_acc_angles = np.zeros((0,))
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
@@ -247,7 +248,7 @@ for i, combo in enumerate(combos):
     numTimestamps = len(translations_gt)
     timestamps = np.arange(numTimestamps)
 
-    translations_vel = np.diff(translations[:-1], axis=0)
+    translation_diffs = np.diff(translations, axis=0)
     rotations_aa_vel = np.diff(rotations[:-1], axis=0)
 
     
@@ -260,17 +261,17 @@ for i, combo in enumerate(combos):
 
     rotations_vel = gtc.multiplyQuatLists(rotations_quats[1:-1], rev_rotations_quats[:-2])
 
-    translations_acc = np.diff(translations_vel, axis=0)
+    translations_acc = np.diff(translation_diffs[:-1], axis=0)
     rotations_aa_acc = np.diff(rotations_aa_vel, axis=0)
 
-    t_vel_preds = translations[1:-1] + translations_vel
+    t_vel_preds = translations[1:-1] + translation_diffs[:-1]
     # r_vel_pred = rotations[1:-1] + rotations_vel
     r_vel_preds = gtc.multiplyQuatLists(rotations_vel, rotations_quats[1:-1])
     r_aa_vel_preds = rotations[1:-1] + rotations_aa_vel
 
     r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
-    t_acc_delta = translations_vel[1:] + (0.5 * translations_acc)
+    t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
     t_accLERP_preds = translations[2:-1] + 0.75 * t_acc_delta
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
@@ -283,15 +284,21 @@ for i, combo in enumerate(combos):
     r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
 
-    vel_sq_lens = gtc.einsumDot(translations_vel[:-1], translations_vel[:-1])
-    vel_dots = gtc.einsumDot(translations_vel[1:], translations_vel[:-1])
-    vel_proj_scalars = vel_dots / vel_sq_lens
+    complete_vel_sq_lens = gtc.einsumDot(
+        translation_diffs, translation_diffs
+    ) # (1-0)^2, (2-1)^2, ...
+    prev_vel_sq_lens = complete_vel_sq_lens[:-1]
+    vel_dots = gtc.einsumDot(translation_diffs[1:], translation_diffs[:-1])
+    # (1-0)*(2-1), (2-1)*(3-2), ...
+    vel_proj_scalars = vel_dots / prev_vel_sq_lens
+    # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
     all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
 
-    vel_lens = np.sqrt(vel_sq_lens[1:])
-    acc_vel_dots = gtc.einsumDot(translations_vel[1:], translations_acc)
-    acc_parallels = (acc_vel_dots / vel_sq_lens[1:])
+    acc_vel_dots = gtc.einsumDot(translations_acc, translation_diffs[1:-1])
+    # (2-0)*(2-1), (3-1)*(3-2), ...
+    acc_parallel_scalars = acc_vel_dots / prev_vel_sq_lens[1:]
 
+    all_acc_angles = np.concatenate((all_acc_angles, acc_parallel_scalars))
 
     num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
     t_spline_preds = np.empty((num_spline_preds, 3))
