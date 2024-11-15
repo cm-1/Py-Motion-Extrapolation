@@ -190,19 +190,20 @@ skipAmount = 2
 splineMats = []
 for i in range(SPLINE_DEGREE, PTS_USED_TO_CALC_LAST):
     # startInd = max(0, i - PTS_USED_TO_CALC_LAST + 1)
-    uInterval = (SPLINE_DEGREE, i + 1)# - startInd)
     ctrlPtCount = min(i + 1, DESIRED_CTRL_PTS)
     numTotal = i + 2 #1 - startInd + 1
     knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
 
-
+    uInterval = (SPLINE_DEGREE, ctrlPtCount)# - startInd)
     uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
 
-    splineMats.append(bspline.bSplineFittingMat(
+    matA = bspline.bSplineFittingMat(
         ctrlPtCount, SPLINE_DEGREE + 1, i + 1, uVals, knotList
-    ))
+    )
+    # print(matA)
+    pseudoInv = np.linalg.inv(matA.transpose() @ matA) @ matA.transpose()
 
-consolidatedResultObj = ConsolidatedResults()#len(combos))
+    splineMats.append(pseudoInv)
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
@@ -275,8 +276,8 @@ for i, combo in enumerate(combos):
     r_aa_spline_preds = np.empty((num_spline_preds, 3))
     for j in range(SPLINE_DEGREE, len(translations) - 1):
         startInd = max(0, j - PTS_USED_TO_CALC_LAST + 1)
-        uInterval = (SPLINE_DEGREE, j + 1 - startInd)
         ctrlPtCount = min(j + 1, DESIRED_CTRL_PTS)
+        uInterval = (SPLINE_DEGREE, ctrlPtCount)#j + 1 - startInd)
         numTotal = j + 1 - startInd + 1
         knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
     
@@ -287,14 +288,11 @@ for i, combo in enumerate(combos):
         ptsToFit_j[:, :3] = translations[startInd:(j+1)]
         ptsToFit_j[:, 3:] = rotations[startInd:(j+1)]
         ctrlPts = np.empty((ctrlPtCount, 0)) 
+        # Note: Use of pseudoinverse is much faster than calling linalg.lstsqr
+        # each iteration and gives results that, so far, seem identical.
         mat = splineMats[min(j - (SPLINE_DEGREE), len(splineMats) - 1)]
 
-        for k in range(6):
-            
-            ptsToFit1D = ptsToFit_j[:, k]
-
-            ctrlPts1D = np.linalg.lstsq(mat, ptsToFit1D, rcond = None)[0]
-            ctrlPts = np.hstack((ctrlPts, ctrlPts1D.reshape((-1, 1))))
+        ctrlPts = (mat @ ptsToFit_j)
 
         next_spline_pt = bspline.bSplineInner(
             uVals[-1], SPLINE_DEGREE + 1, ctrlPtCount - 1, ctrlPts, knotList
