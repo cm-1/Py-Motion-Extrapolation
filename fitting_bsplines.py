@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button, Slider
 
 import bspline
+from bspline_approximation import fitBSpline
 import gtCommon
 
 
@@ -312,7 +313,7 @@ def updatePredictionData(objSeqDataInfo):
         ptsToFit_i = ptsData[:, i]
         ptSubsetToFit = ptsToFit_i[startInd:lastKnownSplineIndex + 1]
 
-        ctrlPts1D = bspline.fitBSpline(
+        ctrlPts1D = fitBSpline(
             ctrlPtCount, SPLINE_DEGREE + 1, ptSubsetToFit, uVals, knotList,
             NUM_OUTPUT_PREDICTIONS
         )

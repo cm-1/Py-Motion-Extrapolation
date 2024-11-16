@@ -4,6 +4,7 @@ from matplotlib.collections import LineCollection
 from dataclasses import dataclass, field
 import typing
 
+from bspline_approximation import bSplineFittingMat, BSplineFitCalculator
 import bspline
 
 import gtCommon as gtc
@@ -195,23 +196,10 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 
 skipAmount = 2
 
-splineMats = []
-for i in range(SPLINE_DEGREE, PTS_USED_TO_CALC_LAST):
-    # startInd = max(0, i - PTS_USED_TO_CALC_LAST + 1)
-    ctrlPtCount = min(i + 1, DESIRED_CTRL_PTS)
-    numTotal = i + 2 #1 - startInd + 1
-    knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
 
-    uInterval = (SPLINE_DEGREE, ctrlPtCount)# - startInd)
-    uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
-
-    matA = bspline.bSplineFittingMat(
-        ctrlPtCount, SPLINE_DEGREE + 1, i + 1, uVals, knotList
-    )
-
-    pseudoInv = np.linalg.inv(matA.transpose() @ matA) @ matA.transpose()
-
-    splineMats.append(pseudoInv)
+spline_pred_calculator = BSplineFitCalculator(
+    SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST
+)
 
 allResultsObj = ConsolidatedResults()#len(combos))
 
@@ -283,6 +271,7 @@ for i, combo in enumerate(combos):
     r_aa_acc_preds = np.vstack((r_aa_vel_preds[:1], r_aa_acc_preds))
     r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
+    # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
     complete_vel_sq_lens = gtc.einsumDot(
         translation_diffs, translation_diffs
@@ -300,35 +289,42 @@ for i, combo in enumerate(combos):
 
     all_acc_angles = np.concatenate((all_acc_angles, acc_parallel_scalars))
 
-    num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
-    t_spline_preds = np.empty((num_spline_preds, 3))
-    r_aa_spline_preds = np.empty((num_spline_preds, 3))
-    for j in range(SPLINE_DEGREE, len(translations) - 1):
-        startInd = max(0, j - PTS_USED_TO_CALC_LAST + 1)
-        ctrlPtCount = min(j + 1, DESIRED_CTRL_PTS)
-        uInterval = (SPLINE_DEGREE, ctrlPtCount)#j + 1 - startInd)
-        numTotal = j + 1 - startInd + 1
-        knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
+    # t_spline_preds = np.empty((num_spline_preds, 3))
+    # r_aa_spline_preds = np.empty((num_spline_preds, 3))
+    # for j in range(SPLINE_DEGREE, len(translations) - 1):
+    #     startInd = max(0, j - PTS_USED_TO_CALC_LAST + 1)
+    #     ctrlPtCount = min(j + 1, DESIRED_CTRL_PTS)
+    #     uInterval = (SPLINE_DEGREE, ctrlPtCount)#j + 1 - startInd)
+    #     numTotal = j + 1 - startInd + 1
+    #     knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
     
     
-        uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
+    #     uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
 
-        ptsToFit_j = np.empty((j + 1 - startInd, 6))
-        ptsToFit_j[:, :3] = translations[startInd:(j+1)]
-        ptsToFit_j[:, 3:] = rotations[startInd:(j+1)]
-        ctrlPts = np.empty((ctrlPtCount, 0)) 
-        # Note: Use of pseudoinverse is much faster than calling linalg.lstsqr
-        # each iteration and gives results that, so far, seem identical.
-        mat = splineMats[min(j - (SPLINE_DEGREE), len(splineMats) - 1)]
+    #     ptsToFit_j = np.empty((j + 1 - startInd, 6))
+    #     ptsToFit_j[:, :3] = translations[startInd:(j+1)]
+    #     ptsToFit_j[:, 3:] = rotations[startInd:(j+1)]
+    #     ctrlPts = np.empty((ctrlPtCount, 0)) 
+    #     # Note: Use of pseudoinverse is much faster than calling linalg.lstsqr
+    #     # each iteration and gives results that, so far, seem identical.
+    #     mat = splineMats[min(j - (SPLINE_DEGREE), len(splineMats) - 1)]
 
-        ctrlPts = (mat @ ptsToFit_j)
+    #     ctrlPts = (mat @ ptsToFit_j)
 
-        next_spline_pt = bspline.bSplineInner(
-            uVals[-1], SPLINE_DEGREE + 1, ctrlPtCount - 1, ctrlPts, knotList
-        )
-        t_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[:3]
-        r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
-    t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
+    #     next_spline_pt = bspline.bSplineInner(
+    #         uVals[-1], SPLINE_DEGREE + 1, ctrlPtCount - 1, ctrlPts, knotList
+    #     )
+    #     t_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[:3]
+    #     r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
+
+    all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
+        translations, rotations
+    )))
+    t_spline_preds = all_spline_preds[:, :3]
+    r_aa_spline_preds = all_spline_preds[:, 3:]
+
+    # t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
+    
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)

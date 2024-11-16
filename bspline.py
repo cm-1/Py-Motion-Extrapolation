@@ -306,31 +306,6 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
     # pts = spline.points
     # bpy.context.scene.objects.active
 
-def bSplineFittingMat(numCtrlPts, order, numInputPts, uVals, knotVals):
-    mat = np.zeros((numInputPts, numCtrlPts))
-
-    iden = np.identity(numCtrlPts)
-
-    delta = order - 1
-    for r in range(numInputPts):
-        u = uVals[r]
-        while (delta < numCtrlPts - 1 and u >= knotVals[delta + 1]):
-            delta = delta + 1 # muList[delta + 1]
-        for c in range(numCtrlPts):
-            mat[r][c] = bSplineInner(u, order, delta, iden[c], knotVals)
-
-    return mat
-
-def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
-    if (len(ptsToFit) + numUnknownPts) != len(uVals):
-        raise Exception(
-            "Number of u values does not match number of known + unknown points!"
-        )
-
-    mat = bSplineFittingMat(numCtrlPts, order, len(ptsToFit), uVals, knotVals)
-
-    fitted_ctrl_pts = np.linalg.lstsq(mat, ptsToFit, rcond = None)[0]
-    return fitted_ctrl_pts
 
 # Tangents are calculated as the derivatives of the interpolating polynomial
 # for five consecutive points containing a given point.
