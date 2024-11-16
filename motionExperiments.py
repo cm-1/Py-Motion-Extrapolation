@@ -14,9 +14,9 @@ TRANSLATION_THRESH = 20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
-SPLINE_DEGREE = 2
-PTS_USED_TO_CALC_LAST = 6 # Must be at least spline's degree + 1.
-DESIRED_CTRL_PTS = 5
+SPLINE_DEGREE = 1
+PTS_USED_TO_CALC_LAST = 5 # Must be at least spline's degree + 1.
+DESIRED_CTRL_PTS = 4
 if (PTS_USED_TO_CALC_LAST < SPLINE_DEGREE + 1):
     raise Exception("Need at least order=k=(degree + 1) input pts for calc!")
 if DESIRED_CTRL_PTS > PTS_USED_TO_CALC_LAST:
@@ -213,7 +213,19 @@ gt_for_accel_deltas = np.empty((0,3))
 all_accel_deltas = np.empty((0,3))
 
 all_vel_ratios = np.zeros((0,))
+all_vel_graphing_ratios = np.zeros((0,))
+all_acc_delta_ratios = np.zeros((0,))
+all_acc_ortho_ratios = np.zeros((0,))
+
+other_spline_errs = []
+
+all_speeds = np.zeros((0,))
+all_acc_mags = np.zeros((0,))
+all_vel_angles = np.zeros((0,))
 all_acc_angles = np.zeros((0,))
+all_acc_ortho_mags = np.zeros((0,))
+all_vel_acc_2D_solves = np.zeros((0, 2))
+maxTimestamps = 0
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
@@ -249,10 +261,13 @@ for i, combo in enumerate(combos):
 
     rotations_vel = gtc.multiplyQuatLists(rotations_quats[1:-1], rev_rotations_quats[:-2])
 
+    # At this time, logging the finite difference acceleration at the last
+    # timestep isn't required, as there's no further prediction to make with it.
     translations_acc = np.diff(translation_diffs[:-1], axis=0)
     rotations_aa_acc = np.diff(rotations_aa_vel, axis=0)
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
+    t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
     # r_vel_pred = rotations[1:-1] + rotations_vel
     r_vel_preds = gtc.multiplyQuatLists(rotations_vel, rotations_quats[1:-1])
     r_aa_vel_preds = rotations[1:-1] + rotations_aa_vel
@@ -261,7 +276,7 @@ for i, combo in enumerate(combos):
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
-    t_accLERP_preds = translations[2:-1] + 0.75 * t_acc_delta
+    t_accLERP_preds = translations[2:-1] + 0.9 * t_acc_delta
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
 
@@ -282,12 +297,106 @@ for i, combo in enumerate(combos):
     vel_proj_scalars = vel_dots / prev_vel_sq_lens
     # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
     all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
+    all_vel_graphing_ratios = np.concatenate((
+        all_vel_graphing_ratios, vel_proj_scalars[1:]))
+    # p(3-2)onto(2-1), p(4-3)onto(3-2), ...
+
+    best_vel_preds = translations[1:-1] + np.einsum("i,ij->ij", vel_proj_scalars, translation_diffs[:-1])
+
+    acc_delta_sq_lens = gtc.einsumDot(t_acc_delta, t_acc_delta)
+    # (2-0)^2, (3-1)^2, ...
+    acc_delta_dots = gtc.einsumDot(t_acc_delta, translation_diffs[2:])
+    # (2-0)*(3-2), (3-1)*(4-3), ...
+    acc_delta_proj_scalars = acc_delta_dots / acc_delta_sq_lens
+    # p(3-2)onto(2-0), p(4-3)onto(3-1), ...
+    all_acc_delta_ratios = np.concatenate((
+        all_acc_delta_ratios, acc_delta_proj_scalars
+    ))
+
+    acc_vel_dots = gtc.einsumDot(translations_acc, translation_diffs[1:-1])
+    # (2-0)*(2-1), (3-1)*(3-2), ...
+    acc_parallel_scalars = acc_vel_dots / prev_vel_sq_lens[1:]
+    # p(2-0)onto(2-1), p(3-1)onto(3-2), ...
+    acc_ortho_vecs = translations_acc - (acc_parallel_scalars[..., np.newaxis] * translation_diffs[1:-1])
+    # test_ortho = gtc.einsumDot(acc_ortho_vecs, translation_diffs[1:-1])
+    # print(test_ortho.max())
+    acc_ortho_sq_lens = gtc.einsumDot(acc_ortho_vecs, acc_ortho_vecs)
+    acc_ortho_dots = gtc.einsumDot(acc_ortho_vecs, translation_diffs[2:])
+    acc_ortho_ratios = 2 * acc_ortho_dots / acc_ortho_sq_lens
+    all_acc_ortho_ratios = np.concatenate((
+        all_acc_ortho_ratios, acc_ortho_ratios
+    ))
+
+    speeds = np.sqrt(prev_vel_sq_lens)
+    all_speeds = np.concatenate((all_speeds, speeds[1:]))
+    all_acc_mags = np.concatenate((all_acc_mags, np.linalg.norm(translations_acc, axis = -1)))
+    all_acc_ortho_mags = np.concatenate((all_acc_ortho_mags, np.sqrt(acc_ortho_sq_lens)))
+    
+    all_vel_angles = np.concatenate((all_vel_angles, vel_dots[:-1]/(speeds[1:] * speeds[:-1])))
+    # Dots are: (1-0)*(2-1), (2-1)*(3-2), ...
+    
+    acc_angle_ratios = 0.63837237 * acc_parallel_scalars + 0.83709242
+    acc_angle_preds = translations[2:-1] + np.einsum('i,ij->ij', acc_angle_ratios, translation_diffs[1:-1])
+    acc_angle_preds = np.vstack((t_vel_preds[:1], acc_angle_preds))
+     
+    # p(2-0)onto(2-1), p(3-1)onto(3-2), ...
+
+    vel_lens = np.sqrt(prev_vel_sq_lens[1:]) # |2-1|, |3-2|, ...
+    # vel 2D vector will be [speed, 0]
+    acc_parallel_comp = acc_vel_dots / vel_lens
+    acc_ortho_comp = np.sqrt(acc_ortho_sq_lens)
+    inv_mats = np.empty((len(vel_lens), 2, 2))
+    # acc 2D vector will be [acc_parallel, acc_ortho]
+    # matrix is [[speed, acc_parallel], [0, acc_ortho]]
+    # det is speed * acc_ortho
+    # inverse is (1/speed*acc_ortho) * [[acc_ortho, -acc_parallel],[0,speed]]
+    inv_mats[:, 0, 0] = 1.0 / vel_lens
+    inv_mats[:, 0, 1] = -acc_parallel_comp / (vel_lens * acc_ortho_comp)
+    inv_mats[:, 1, 0] = 0
+    inv_mats[:, 1, 1] = 1.0 / acc_ortho_comp
+    
+    # Then multiply it by [next_vel_parallel, next_vel_ortho]
+    next_vel_parallel = vel_dots[1:] / vel_lens
+    next_vel_ortho_dots = gtc.einsumDot(translation_diffs[2:], acc_ortho_vecs)
+    next_vel_vecs = np.empty((len(vel_lens), 2))
+    next_vel_vecs[:, 0] = next_vel_parallel
+    next_vel_vecs[:, 1] = next_vel_ortho_dots / acc_ortho_comp
+
+    vel_acc_2D_solve = np.einsum('bij,bj->bi', inv_mats, next_vel_vecs)
+    all_vel_acc_2D_solves = np.concatenate((
+        all_vel_acc_2D_solves, vel_acc_2D_solve
+    ))
+
+    complete_vel_sq_lens = gtc.einsumDot(
+        translation_diffs, translation_diffs
+    ) # (1-0)^2, (2-1)^2, ...
+    prev_vel_sq_lens = complete_vel_sq_lens[:-1]
+    vel_dots = gtc.einsumDot(translation_diffs[1:], translation_diffs[:-1])
+    # (1-0)*(2-1), (2-1)*(3-2), ...
+    vel_proj_scalars = vel_dots / prev_vel_sq_lens
+    # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
+    all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
 
     acc_vel_dots = gtc.einsumDot(translations_acc, translation_diffs[1:-1])
     # (2-0)*(2-1), (3-1)*(3-2), ...
     acc_parallel_scalars = acc_vel_dots / prev_vel_sq_lens[1:]
 
     all_acc_angles = np.concatenate((all_acc_angles, acc_parallel_scalars))
+
+    best_2d = t_acc_preds.copy()
+    best_2d_vel = vel_acc_2D_solve[:, :1] * translation_diffs[1:-1]
+    best_2d_acc = vel_acc_2D_solve[:, 1:] * translations_acc
+    best_2d[1:] = translations[2:-1] + best_2d_vel + best_2d_acc
+
+    # all_lens = [len(arr) for arr in [
+    #     all_speeds, all_acc_mags, all_acc_ortho_mags, all_vel_angles, 
+    #     all_acc_angles, all_acc_delta_ratios, all_acc_ortho_ratios,
+    #     all_vel_graphing_ratios
+    # ]]
+    # if np.any(np.diff(all_lens) != 0):
+    #     raise Exception ("Array slice len error!")
+
+
 
     # t_spline_preds = np.empty((num_spline_preds, 3))
     # r_aa_spline_preds = np.empty((num_spline_preds, 3))
@@ -325,6 +434,9 @@ for i, combo in enumerate(combos):
 
     # t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
     
+    other_spline_err = t_spline_preds - translations[SPLINE_DEGREE + 1:]
+    other_spline_err_norms = np.linalg.norm(other_spline_err, axis = -1)
+    other_spline_errs.append((other_spline_err_norms < TRANSLATION_THRESH).mean())
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
@@ -339,10 +451,18 @@ for i, combo in enumerate(combos):
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
     allResultsObj.addTranslationResult("Vel", t_vel_preds)
+    allResultsObj.addTranslationResult("VelLERP", t_velLERP_preds)
+    allResultsObj.addTranslationResult("Vel (bcs)", best_vel_preds)
+    allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
     allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
+    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
+    allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     
+    maxTimestamps = max(
+        maxTimestamps, len(calculator.getTranslationsGTNP(False))
+    )
     if (not egFound):
         lastLerpScore = allResultsObj.translation_results["AccLERP"].scores[-1]
         accResult = allResultsObj.translation_results["Acc"]
@@ -354,20 +474,71 @@ for i, combo in enumerate(combos):
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
 
-print("All vel ratios stats:")
-vel_stat_headers = ["Mean", "Min", "Max", "Median", "std"]
-vel_stat_results = [
-    all_vel_ratios.mean(), all_vel_ratios.min(), all_vel_ratios.max(),
-    np.median(all_vel_ratios), np.std(all_vel_ratios)
-]
 
-ConsolidatedResults.printTable(vel_stat_headers, vel_stat_results)
+
+allResultsObj.printResults()
+stat_headers = ["Mean", "Min", "Max", "Median", "std"]
+def stat_results(vals):
+    return [ vals.mean(), vals.min(), vals.max(), np.median(vals), np.std(vals)]
+
+vel_stat_results = stat_results(all_vel_ratios)
+acc_delta_stat_results = stat_results(all_acc_delta_ratios)
+acc_ortho_stat_results = stat_results(all_acc_ortho_ratios)
+
+print("All vel ratios stats:")
+ConsolidatedResults.printTable(stat_headers, vel_stat_results)
+print()
+
+print("All acc delta ratios stats:")
+ConsolidatedResults.printTable(stat_headers, acc_delta_stat_results)
+print()
+
+print("All acc ortho ratios stats:")
+ConsolidatedResults.printTable(stat_headers, acc_ortho_stat_results)
 print()
 
 fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
 fig.clear() # Good to do for iPython running, if running a plot cell again.
 ax = fig.subplots()
-ax.hist(all_vel_ratios, bins=80)
+ax.hist(all_vel_ratios, bins = 25,  range=(-2,3))
+plt.show()
+
+#%%
+fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
+fig.clear() # Good to do for iPython running, if running a plot cell again.
+ax = fig.subplots()
+vel_acc_start = 10 * 42
+vel_acc_end = vel_acc_start + 20
+ax.plot(all_vel_graphing_ratios[vel_acc_start:vel_acc_end], label = "v")
+ax.plot(all_acc_delta_ratios[vel_acc_start:vel_acc_end], label = "v + a/2")
+ax.plot(all_acc_ortho_ratios[vel_acc_start:vel_acc_end], label = "a ortho")
+
+ax.plot(all_vel_acc_2D_solves[vel_acc_start:vel_acc_end, 0], label = "v*")
+ax.plot(all_vel_acc_2D_solves[vel_acc_start:vel_acc_end, 1], label = "a*")
+
+ax.plot(0.01 * all_speeds[vel_acc_start:vel_acc_end], label = "speed")
+ax.plot(0.01 * all_acc_mags[vel_acc_start:vel_acc_end], label = "acc mag")
+
+acc_ang_thing = 0.63837 * all_acc_angles[vel_acc_start:vel_acc_end] + 0.837 
+ax.plot(all_vel_angles[vel_acc_start:vel_acc_end] - 1, label = "vel ang")
+ax.plot(all_acc_angles[vel_acc_start:vel_acc_end] - 1, label = "acc-vel angle")
+ax.plot(acc_ang_thing, label = "^ transformed")
+
+
+ax.plot(-0.01 * all_acc_ortho_mags[vel_acc_start:vel_acc_end] - 3, label = "acc ortho mags")
+ax.set_ylim(-5, 5)
+ax.legend()
+plt.show()
+#%%
+fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
+fig.clear() # Good to do for iPython running, if running a plot cell again.
+ax = fig.subplots()
+# acc_ang_subset = all_acc_angles[vel_acc_start:vel_acc_end]
+ax.scatter(all_acc_angles, all_vel_graphing_ratios)
+plt.show()
+
+#%%
+
 plt.show()
 
 
