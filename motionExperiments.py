@@ -601,3 +601,38 @@ ax.margins(0.1)
 
 plt.show()#block=True) # block=True used for separate-window iPython plotting.
 
+#%%
+fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
+fig.clear() # Good to do for iPython running, if running a plot cell again.
+ax = fig.subplots()
+
+from matplotlib.colors import to_rgba
+
+vid_ind = 9
+keys = ["Vel", "Acc"]#, "VelLERP", "Acc", "AccLERP"]
+key_colours = ["blue", "orange", "green", "red"]
+key_rgbas = [to_rgba(kc) for kc in key_colours]
+
+num_timesteps = len(allResultsObj.translation_results[keys[0]].errors[vid_ind])
+x_vals = np.arange(1, num_timesteps + 1)
+all_err_norms = []
+for i, key in enumerate(keys):
+    errs = allResultsObj.translation_results[key].errors[vid_ind]
+    err_norms = np.linalg.norm(errs, axis = -1)
+    ax.plot(x_vals, err_norms, label=key,
+            color=key_colours[i])
+    all_err_norms.append(err_norms)
+double_xs = np.repeat(np.arange(num_timesteps + 1), np.full(num_timesteps + 1, 2))
+best_line_xs = double_xs[1:-1].reshape((-1, 2, 1))
+best_line_cos = np.dstack((best_line_xs, np.zeros_like(best_line_xs)))
+all_err_norms_np = np.array(all_err_norms)
+best_inds = np.argmin(all_err_norms_np, axis=0)
+best_colors = [key_rgbas[i] for i in best_inds]
+blc = LineCollection(best_line_cos, colors=best_colors)
+
+ax.add_collection(blc)
+
+ax.set_ylim(bottom = -5)
+ax.legend()
+plt.show()
+
