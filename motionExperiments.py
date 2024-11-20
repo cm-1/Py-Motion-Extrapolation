@@ -245,11 +245,9 @@ for i, combo in enumerate(combos):
         translations_gt, rotations_aa_gt, rotations_gt_quats
     )
 
-    numTimestamps = len(translations_gt)
-    timestamps = np.arange(numTimestamps)
 
     translation_diffs = np.diff(translations, axis=0)
-    rotations_aa_vel = np.diff(rotations[:-1], axis=0)
+    rotation_aa_diffs = np.diff(rotations, axis=0)
 
     
     
@@ -259,18 +257,22 @@ for i, combo in enumerate(combos):
 
 
 
-    rotations_vel = gtc.multiplyQuatLists(rotations_quats[1:-1], rev_rotations_quats[:-2])
+    rotation_quat_diffs = gtc.multiplyQuatLists(
+        rotations_quats[1:], rev_rotations_quats[:-1]
+    )
 
     # At this time, logging the finite difference acceleration at the last
     # timestep isn't required, as there's no further prediction to make with it.
     translations_acc = np.diff(translation_diffs[:-1], axis=0)
-    rotations_aa_acc = np.diff(rotations_aa_vel, axis=0)
+    rotations_aa_acc = np.diff(rotation_aa_diffs[:-1], axis=0)
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
     t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
     # r_vel_pred = rotations[1:-1] + rotations_vel
-    r_vel_preds = gtc.multiplyQuatLists(rotations_vel, rotations_quats[1:-1])
-    r_aa_vel_preds = rotations[1:-1] + rotations_aa_vel
+    r_vel_preds = gtc.multiplyQuatLists(
+        rotation_quat_diffs[:-1], rotations_quats[1:-1]
+    )
+    r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
     r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
@@ -280,7 +282,7 @@ for i, combo in enumerate(combos):
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
 
-    r_aa_acc_delta = rotations_aa_vel[1:] + (0.5 * rotations_aa_acc)
+    r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
     r_aa_acc_preds = rotations[2:-1] + r_aa_acc_delta
     r_aa_accLERP_preds = rotations[2:-1] + 0.5 * r_aa_acc_delta
     r_aa_acc_preds = np.vstack((r_aa_vel_preds[:1], r_aa_acc_preds))
@@ -545,6 +547,9 @@ plt.show()
 
 allResultsObj.printResults()
 
+
+numTimestamps = len(translations_gt)
+timestamps = np.arange(numTimestamps)
 tx_coords = np.stack((timestamps, translations[:, 2]), axis = -1)
 ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 2]), axis = -1)
 
