@@ -278,8 +278,18 @@ for i, combo in enumerate(combos):
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
+    # B-Spline investigation yielded the following result, which is a line of
+    # best fit for the last two points and a quadratic-fit third point.
+    # The last row in its pseudoinverse is [-1/6 1/3 5/6], meaning that the last
+    # point on the line (the 2nd control point) would be:
+    # 5/6(3x_2 - 3x_1 + x_0) + 1/3(x_2) - 1/6(x_1)
+    # This can be rearranged to x_2 + (x_2 - x_1) + 5/6(x_2 - 2x_1 + x_0),
+    # i.e. x_2 + velocity + (5/6) acceleration. 
+    t_spline2_preds = translations[2:-1] + translation_diffs[1:-1] + (5/6) * translations_acc
+    
     t_accLERP_preds = translations[2:-1] + 0.9 * t_acc_delta
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
+    t_spline2_preds = np.vstack((t_vel_preds[:1], t_spline2_preds))
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
 
     r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
@@ -458,9 +468,9 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
     allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
-    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
+    allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
     
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))

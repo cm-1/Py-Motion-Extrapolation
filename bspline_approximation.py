@@ -30,11 +30,11 @@ def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
 
 class BSplineFitCalculator:
     class BSplineFittingCase:
-        def __init__(self, degree, num_input_pts, max_num_ctrl_pts):
+        def __init__(self, degree, num_inputs, num_outputs, max_num_ctrl_pts):
     
-            num_u_vals = num_input_pts + 1 # One output point.
+            num_u_vals = num_inputs + num_outputs
 
-            self.num_ctrl_pts = min(num_input_pts, max_num_ctrl_pts)
+            self.num_ctrl_pts = min(num_inputs, max_num_ctrl_pts)
     
             uInterval = (degree, self.num_ctrl_pts) 
 
@@ -44,12 +44,14 @@ class BSplineFitCalculator:
             self.data_u_vals = np.linspace(uInterval[0], uInterval[1], num_u_vals)
 
             matA = bSplineFittingMat(
-                self.num_ctrl_pts, degree + 1, num_input_pts, self.data_u_vals,
+                self.num_ctrl_pts, degree + 1, num_inputs, self.data_u_vals,
                 self.knot_list
             )
 
             matAtA = matA.transpose() @ matA
             self.pseudoInv = np.linalg.inv(matAtA) @ matA.transpose()
+            
+    deg_to_pt_filter: typing.Dict[int, np.ndarray] = dict()
 
     def __init__(self, spline_degree, max_num_ctrl_pts, max_num_input_data):
         if (max_num_input_data < spline_degree + 1):
@@ -60,14 +62,27 @@ class BSplineFitCalculator:
             raise Exception("Need at least order=k=(degree + 1) control points!")
 
 
-        self.cases: typing.List[BSplineFitCalculator.BSplineFittingCase] = []
-        self.spline_degree = spline_degree
-        self.max_num_ctrl_pts = max_num_ctrl_pts
-        self.max_num_input_data = max_num_input_data
+        self.fit_cases: typing.List[BSplineFitCalculator.BSplineFittingCase] = []
+        self.smooth_cases: typing.List[BSplineFitCalculator.BSplineFittingCase] = []
+        if spline_degree not in BSplineFitCalculator.deg_to_pt_filter.keys():
+            # A B-Spline curve has m + k + 1 knots. Min value for m is k - 1.
+            # In that case, would have 2k = 2*(deg+1) = (2*deg + 2) knots.
+            sample_knots = np.arange(2*spline_degree + 2) # Uniform knot seq.
+            BSplineFitCalculator.deg_to_pt_filter[spline_degree] = \
+            bspline.lastSplineWeightsFilter(
+                spline_degree + 1, sample_knots
+            )
+        self.filter_for_deg = BSplineFitCalculator.deg_to_pt_filter[spline_degree]
+        self.spline_degree: int = spline_degree
+        self.max_num_ctrl_pts: int = max_num_ctrl_pts
+        self.max_num_input_data: int = max_num_input_data
 
         for num_inputs in range(spline_degree + 1, max_num_input_data + 1):
-            self.cases.append(BSplineFitCalculator.BSplineFittingCase(
-                spline_degree, num_inputs, max_num_ctrl_pts
+            self.fit_cases.append(BSplineFitCalculator.BSplineFittingCase(
+                spline_degree, num_inputs, 1, max_num_ctrl_pts
+            ))
+            self.smooth_cases.append(BSplineFitCalculator.BSplineFittingCase(
+                spline_degree, num_inputs, 0, max_num_ctrl_pts
             ))
     
 
@@ -90,7 +105,7 @@ class BSplineFitCalculator:
             
             ptsToFit = all_input_pts[startInd:(last_input_ind + 1)]
 
-            case = self.cases[min(prediction_num, len(self.cases) - 1)]
+            case = self.fit_cases[min(prediction_num, len(self.fit_cases) - 1)]
 
             # Note: Using pseudoinverse is way faster than calling linalg.lstsqr
             # each iteration and gives results that, so far, seem identical.
@@ -103,11 +118,56 @@ class BSplineFitCalculator:
             spline_preds[prediction_num] = next_spline_pt
         
         return spline_preds
+    
+    def smoothAllData(self, all_input_pts: np.ndarray, all_preds: np.ndarray):
+        if all_input_pts.ndim > 2:
+            str_dim = str(all_input_pts.ndim)
+            raise Exception("Array dimension " + str_dim + " not supported for B-Spline smoothing!")
+
+        # We'll output as many predictions as were inputted.
+        # We may not be able to smooth all of them; if some cannot be smoothed,
+        # they will just be returned as they are.
+        spline_smooths = np.empty(all_preds.shape)
+
+        inputs_for_1st_pred = len(all_input_pts) - len(all_preds)
+        
+        for pred_ind in range(len(all_preds)):
+            available_inputs = inputs_for_1st_pred + pred_ind + 1
             
+            # If there are not enough available points for spline fitting, then
+            # just copy the respective non-smoothed prediction as-is.
+            if available_inputs <= self.spline_degree:
+                spline_smooths[pred_ind] = all_preds[pred_ind]
+                continue
+
+            startInd = max(0, available_inputs - self.max_num_input_data)
+            
+            ptsToFit_measured = all_input_pts[startInd:(available_inputs - 1)]
+            ptToFit_pred = all_preds[pred_ind:(pred_ind + 1)]
+
+            max_case_ind = len(self.smooth_cases) - 1
+            inputs_beyond_min_req = available_inputs - (self.spline_degree + 1)
+            case = self.smooth_cases[min(max_case_ind, inputs_beyond_min_req)]
+
+            pseudoInv_measured = case.pseudoInv[:, :-1]
+            ctrlPts = pseudoInv_measured @ ptsToFit_measured
+            pseudoInv_pred = case.pseudoInv[:, -1:]
+            ctrlPts += pseudoInv_pred @ ptToFit_pred
+
+            # The documentation for np.dot(a, b) states that if b is 1D like our
+            # filter, then np.dot() will do a weighted sum along a's last axis.
+            spline_smooths[pred_ind] = np.dot(
+                ctrlPts[-len(self.filter_for_deg):].transpose(),
+                self.filter_for_deg
+            ).flatten()
+
+        return spline_smooths
+    
     def getCtrlPts(self, in_data):
-        case = self.cases[-1]
+        case = self.fit_cases[-1]
 
         if len(in_data) != len(case.data_u_vals) - 1:
             raise NotImplementedError("Only handles max input count for now!")
 
         return (case.pseudoInv @ in_data)
+    

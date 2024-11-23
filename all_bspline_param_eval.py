@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import typing
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,7 +24,8 @@ class PoseData:
     translations_gt: np.ndarray
     rotations_gt_aa: np.ndarray
     rotations_gt_quats: np.ndarray
-
+    translations_quad_preds: np.ndarray
+    rotations_preds: np.ndarray
 
 skipAmount = 2
 
@@ -33,7 +35,7 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
         if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
-poseDataDict = dict()
+poseDataDict: typing.Dict[typing.Tuple[int,int], PoseData] = dict()
 
 for combo in combos:
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
@@ -45,11 +47,63 @@ for combo in combos:
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations = rotations_gt_aa # TODO: Apply quat error to these.
 
-    poseDataDict[combo] = PoseData(
-        translations, rotations, translations_gt, rotations_gt_aa,
-        rotations_gt_quats
+    translation_diffs = np.diff(translations, axis=0)
+    rev_rotations_quats = np.empty(rotations_gt_quats.shape)
+    rev_rotations_quats[:, 0] = rotations_gt_quats[:, 0]
+    rev_rotations_quats[:, 1:] = -rotations_gt_quats[:, 1:]
+
+    rotation_quat_diffs = gtc.multiplyQuatLists(
+        rotations_gt_quats[1:], rev_rotations_quats[:-1]
     )
 
+    t_vel_preds = translations[1:-1] + translation_diffs[:-1]
+    r_vel_preds = gtc.multiplyQuatLists(
+        rotation_quat_diffs[:-1], rotations_gt_quats[1:-1]
+    )
+    r_slerp_preds = gtc.quatSlerp(rotations_gt_quats[1:-1], r_vel_preds, 0.75)
+
+    
+    # Converts quaternions to axis-angle, then corrects jumps.
+    # TODO: Document better, maybe find way to combine with mat->AA code?
+    angles = 2 * np.arccos(r_slerp_preds[:, 0])
+    axes = r_slerp_preds[:, 1:]
+    '''
+    angleInds = np.arange(len(angles))
+    zeroAngleThresh = 0.0001
+    zeroAngleInds = np.nonzero(angles < zeroAngleThresh)
+    angleInds[zeroAngleInds] = 0
+    angleInds = np.maximum.accumulate(angleInds)
+    axes[zeroAngleInds] = axes[angleInds[zeroAngleInds]]
+    angle_dots = gtc.einsumDot(axes[1:], axes[:-1]) 
+    needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
+    angles[..., 1:][needs_flip] = -angles[..., 1:][needs_flip]
+    sinVals = np.sin(angles/2.0)
+    unitAxes = axes / sinVals[..., np.newaxis]
+    unitAxes[zeroAngleInds] = unitAxes[angleInds[zeroAngleInds]]
+    numIssueAxesAtFront = 0
+    while numIssueAxesAtFront < len(angles):
+        if angles[numIssueAxesAtFront] >= zeroAngleThresh:
+            break
+        numIssueAxesAtFront += 1
+    unitAxes[:numIssueAxesAtFront] = 0.0
+    np_tau = 2.0 * np.pi
+    tau_facs = np.round(np.diff(angles) / np_tau)
+    angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
+    angles[..., 1:] -= angle_corrections
+    r_slerp_preds_aa = np.einsum('...i,...ij->...ij', angles, unitAxes)
+    '''
+    r_slerp_preds_aa = angles[..., np.newaxis] * axes / np.sin(0.5 * angles[..., np.newaxis])
+    r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))
+    
+    t_quad_preds = 3 * translations[2:-1] - 3 * translations[1:-2] + translations[:-3]
+    t_quad_preds = np.vstack((translations[:1], t_vel_preds[:1], t_quad_preds))
+
+
+    poseDataDict[combo] = PoseData(
+        translations, rotations, translations_gt, rotations_gt_aa,
+        rotations_gt_quats, t_quad_preds, r_slerp_preds_aa
+    )
+    
 
 deg_range_inclusive = (1, 5)
 max_ctrl_pts = 10
@@ -72,28 +126,36 @@ results_mean_sq_angle = np.zeros(out_shape)
 for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
     for num_ctrl_pts in range(deg + 1, max_ctrl_pts + 1):
         for num_input_pts in range(num_ctrl_pts, max_input_pts + 1):
+            spline_pred_calculator = BSplineFitCalculator(
+                deg, num_ctrl_pts, num_input_pts
+            )
             for combo_ind, combo in enumerate(combos):
                 pd = poseDataDict[combo]
-                spline_pred_calculator = BSplineFitCalculator(
-                    deg, num_ctrl_pts, num_input_pts
-                )
 
+                '''
                 all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
                     pd.translations, pd.rotations_aa
                 )))
+                '''
+
+
+                all_spline_preds = spline_pred_calculator.smoothAllData(
+                    np.hstack((pd.translations, pd.rotations_aa)),
+                    np.hstack((pd.translations_quad_preds, pd.rotations_preds))
+                )
 
                 t_spline_preds = all_spline_preds[:, :3]
                 r_aa_spline_preds = all_spline_preds[:, 3:]
 
                 # TODO: Remove this; for now, it's just to verify results
                 # against code that (as far as I can tell) works.
-                if (deg == 2):
-                    t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
-                    t_vel_pred = pd.translations[deg - 1] + t_diff
+                # if (deg == 2):
+                #     t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
+                #     t_vel_pred = pd.translations[deg - 1] + t_diff
                     
-                    t_spline_preds = np.vstack(([pd.translations[0]], [t_vel_pred], t_spline_preds))
+                #     t_spline_preds = np.vstack(([pd.translations[0]], [t_vel_pred], t_spline_preds))
                 
-                    r_aa_spline_preds = np.vstack((pd.rotations_aa[:2], r_aa_spline_preds))
+                #     r_aa_spline_preds = np.vstack((pd.rotations_aa[:2], r_aa_spline_preds))
 
                 t_errs_start = len(pd.translations_gt) - len(t_spline_preds)
                 r_errs_start = len(pd.rotations_gt_aa) - len(r_aa_spline_preds)
@@ -153,7 +215,7 @@ print()
 #%%
 
 np.savez(
-    "./bspline_param_evals2.npz", res_2cm = results_2cm, res_2deg = results_2deg,
+    "./bspline_param_evals_quad.npz", res_2cm = results_2cm, res_2deg = results_2deg,
      res_5cm = results_5cm, res_5deg = results_5deg,
      res_mean_sq_dist = results_mean_sq_dist,
      res_mean_sq_angle = results_mean_sq_angle
@@ -165,9 +227,6 @@ load_result = np.load("../../bspline_param_evals2.npz")
 
 #%%
 
-# Create the figure
-fig = plt.figure(0)
-fig.clear()
 
 # Mean over all body/seq combos.
 data = load_result['res_mean_sq_dist'].mean(axis = -1) 
@@ -186,6 +245,16 @@ if np.any(data[data_na] > 0):
 # Setting values to nan will skip them during plotting.
 data[data_na] = np.nan
 data_min = np.nanmin(data)
+
+data_2cm = load_result['res_2cm'].mean(axis = -1)
+data_2deg_full = load_result['res_2deg']
+data_2deg = data_2deg_full.mean(axis = -1)
+
+#%%
+# Create the figure
+fig = plt.figure(0)
+fig.clear()
+
 data[data > 30 * data_min] = np.nan
 
 ax = fig.add_subplot(111, projection='3d')

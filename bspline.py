@@ -160,6 +160,31 @@ def bSplineInner(u, k, delta, eList, uList):
             i -= 1
     return c[0]
 
+# Get the weights for each control point for the last u value in a curve.
+# Assumes each knot has multiplicity 1 for now.
+def lastSplineWeightsFilter(k, uList):
+    # Could just use identity matrix columns here, but I wanted something a bit
+    # more explicit for now.
+    c = [np.zeros(k) for _ in range(k)]
+    for i in range(k):
+        c[i][i] = 1
+    # k-1 control points will have nonzero weights at the end.
+
+    m = len(uList) - (k + 1) # m = last ctrl-pt index when starting from zero.
+    u = uList[m + 1] # Last u value for which basis functions sum to 1.
+    for r in range(k, 1, -1):
+        i = m + 1 # Usually is i = delta, but for last pt, delta = m + 1.
+        for s in range(r - 1):
+            w = 0.0
+            # If we'd divide by 0, or exceed range of uList, keep w as 0 instead.
+            if (i + r - 1 < len(uList) and uList[i + r - 1] - uList[i] != 0.0):
+                w = (u - uList[i]) / (uList[i + r - 1] - uList[i])
+            c[s] = w * c[s] + (1 - w)*c[s + 1]
+            i -= 1
+    return c[0][1:] # First value of c[0] should always be redundant, zero!
+
+
+
 # If we want the POINTS to be evenly spaced, we'll have to first roughly
 # calculate the arclen of the curve at each of our current sample points and
 # then use these arclens and some linear approximation to pick parameter
@@ -281,7 +306,7 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
 
         for u in paramVals:
             # Update delta value.
-            # We stop when delta < m since, standard or regular knot sequence,
+            # We stop when delta >= m since, standard or regular knot sequence,
             # that's as far as is reasonable to do.
             #
             # TODO: This would probably break if we increased the multiplicity
