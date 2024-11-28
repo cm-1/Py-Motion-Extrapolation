@@ -88,7 +88,12 @@ def anglesBetweenQuats(quats0, quats1):
 
 def quatSlerp(quats0, quats1, t: float, zeroAngleThresh: float = 0.0001):
     retVal = np.empty(quats0.shape)
-    angles = anglesBetweenQuats(quats0, quats1)
+
+    # Find the angles between the quaternions *interpreted as vec4s*, *not* the
+    # angles between the rotations they represent!
+    dots = einsumDot(quats0, quats1)
+    angles = np.arccos(np.clip(dots, -1, 1))
+    
     # No abs needed for next step, as prev call guaranteed to be positive, since
     # np.acos is guaranteed to be positive.
     zero_angle_bools = np.greater(zeroAngleThresh, angles)
