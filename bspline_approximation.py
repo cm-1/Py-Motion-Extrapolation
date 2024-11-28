@@ -42,6 +42,7 @@ class BSplineFitCalculator:
             self.knot_list = np.arange(self.num_ctrl_pts + degree + 1)
 
             self.data_u_vals = np.linspace(uInterval[0], uInterval[1], num_u_vals)
+            self.data_u_step = self.data_u_vals[1] - self.data_u_vals[0]
 
             matA = bSplineFittingMat(
                 self.num_ctrl_pts, degree + 1, num_inputs, self.data_u_vals,
@@ -52,6 +53,19 @@ class BSplineFitCalculator:
             self.pseudoInv = np.linalg.inv(matAtA) @ matA.transpose()
             
     deg_to_pt_filter: typing.Dict[int, np.ndarray] = dict()
+
+    def get_filter(deg: int):
+        if deg in BSplineFitCalculator.deg_to_pt_filter.keys():
+            return BSplineFitCalculator.deg_to_pt_filter[deg]
+        elif deg < 0:
+            return np.array([0])
+        
+        # A B-Spline curve has m + k + 1 knots. Min value for m is k - 1.
+        # In that case, would have 2k = 2*(deg+1) = (2*deg + 2) knots.
+        sample_knots = np.arange(2*deg + 2) # Uniform knot seq.
+        f = bspline.lastSplineWeightsFilter(deg + 1, sample_knots)        
+        BSplineFitCalculator.deg_to_pt_filter[deg] = f
+        return f
 
     def __init__(self, spline_degree, max_num_ctrl_pts, max_num_input_data):
         if (max_num_input_data < spline_degree + 1):
@@ -64,15 +78,10 @@ class BSplineFitCalculator:
 
         self.fit_cases: typing.List[BSplineFitCalculator.BSplineFittingCase] = []
         self.smooth_cases: typing.List[BSplineFitCalculator.BSplineFittingCase] = []
-        if spline_degree not in BSplineFitCalculator.deg_to_pt_filter.keys():
-            # A B-Spline curve has m + k + 1 knots. Min value for m is k - 1.
-            # In that case, would have 2k = 2*(deg+1) = (2*deg + 2) knots.
-            sample_knots = np.arange(2*spline_degree + 2) # Uniform knot seq.
-            BSplineFitCalculator.deg_to_pt_filter[spline_degree] = \
-            bspline.lastSplineWeightsFilter(
-                spline_degree + 1, sample_knots
-            )
-        self.filter_for_deg = BSplineFitCalculator.deg_to_pt_filter[spline_degree]
+        
+        self.filter_for_deg = BSplineFitCalculator.get_filter(spline_degree)
+        self.filter_for_deriv = BSplineFitCalculator.get_filter(spline_degree - 1)
+        self.filter_for_2nd_deriv = BSplineFitCalculator.get_filter(spline_degree - 2)
         self.spline_degree: int = spline_degree
         self.max_num_ctrl_pts: int = max_num_ctrl_pts
         self.max_num_input_data: int = max_num_input_data
@@ -162,7 +171,85 @@ class BSplineFitCalculator:
             ).flatten()
 
         return spline_smooths
-    
+
+    def constantAccelPreds(self, all_input_pts: np.ndarray):
+        if all_input_pts.ndim > 2:
+            str_dim = str(all_input_pts.ndim)
+            raise Exception("Array dimension " + str_dim + " not supported for B-Spline smoothing!")
+
+        # We will have a prediction for all points except for the first.
+        output_shape = (len(all_input_pts) - 1, ) + all_input_pts.shape[1:]
+        spline_preds = np.empty(output_shape)
+
+        # First prediction assumes no motion.
+        spline_preds[0] = all_input_pts[0]
+        # Second prediction assumes constant velocity.
+        spline_preds[1] = all_input_pts[1] + all_input_pts[1] - all_input_pts[0]
+
+        # Remaining predictions until enough inputs for B-SPline fit (deg + 1)
+        # exist will be const-accel using quadratic polynomial fitting. 
+        
+        # Because we have no prediction for the first input, the index==degree
+        # prediction array val will have the degree+1 input pts required for 
+        # spline fitting. So we'll fill in the predictions up until this.
+        spline_ind_min = self.spline_degree
+        # spline_ind_min - 1 is guaranteed to be at least 0, but - 2 might not.
+        spline_ind_min_sub_2 = max(spline_ind_min - 2, 0)
+        # Quadratic polynomial fit result can be shown to be 3x_2 - 3x_1 + x_0.
+        spline_preds[2:spline_ind_min] = 3 * all_input_pts[2:spline_ind_min] - 3 * all_input_pts[1:spline_ind_min - 1] + all_input_pts[:spline_ind_min_sub_2]
+
+        # For the rest, calculate velocity and acceleration using derivatives of
+        # the fitted B-Spline curve.
+        for pred_ind in range(self.spline_degree, len(spline_preds)):
+            # Predictions[0] corresponds to position[1]. Hence: 
+            available_inputs = pred_ind + 1
+            startInd = max(0, available_inputs - self.max_num_input_data)
+            
+            ptsToFit = all_input_pts[startInd:available_inputs]
+
+            # We have different B-Spline fitting cases depending on how many
+            # inputs are available. Case[0] corresponds to degree+1 inputs.
+            max_case_ind = len(self.smooth_cases) - 1
+            inputs_beyond_min_req = available_inputs - (self.spline_degree + 1)
+            case = self.smooth_cases[min(max_case_ind, inputs_beyond_min_req)]
+
+            # Formula for derivatives of B-Spline curves comes from:
+            # https://pages.mtu.edu/~shene/COURSES/cs3621/NOTES/spline/B-spline/bspline-derv.html
+            # Because we are assuming uniform integer knots, the
+            # p/(u_{i+p+1} - u_{i+1}) part simplifies to 1.
+            ctrlPts = case.pseudoInv @ ptsToFit
+            ctrlPts_d1 = np.diff(ctrlPts, 1, axis = 0)
+            ctrlPts_d2 = np.diff(ctrlPts_d1, 1, axis = 0)
+
+
+            # The documentation for np.dot(a, b) states that if b is 1D like our
+            # filter, then np.dot() will do a weighted sum along a's last axis.
+            # ---
+            # From the perspective of the "B-Spline", each time step is not 1
+            # unit, but instead the distance between u values we chose for our
+            # points when doing the B-Spline fitting. Because it was simpler to
+            # have consecutive integer knots than consecutive integer sample
+            # locations, the space between these sampled u values, and thus the
+            # "time", will not be 1. So, the time step we multiply the velocity
+            # by to obtain displacement will be this u sample step.
+            delta = case.data_u_step * np.dot( # delta_time*velocity
+                ctrlPts_d1[-len(self.filter_for_deriv):].transpose(),
+                self.filter_for_deriv
+            ).flatten()
+
+            # Acceleration gets added here unless degree = 1.
+            if self.spline_degree > 1:
+                # Since our time step is not 1, we must explicity square it.
+                delta += (0.5 * case.data_u_step ** 2) * np.dot(
+                    ctrlPts_d2[-len(self.filter_for_2nd_deriv):].transpose(),
+                    self.filter_for_2nd_deriv
+                ).flatten()
+
+            spline_preds[pred_ind] = all_input_pts[pred_ind] + delta
+
+        return spline_preds
+
+
     def getCtrlPts(self, in_data):
         case = self.fit_cases[-1]
 

@@ -163,6 +163,9 @@ def bSplineInner(u, k, delta, eList, uList):
 # Get the weights for each control point for the last u value in a curve.
 # Assumes each knot has multiplicity 1 for now.
 def lastSplineWeightsFilter(k, uList):
+    if k == 1:
+        return np.array([1.0]) # Special case.
+    
     # Could just use identity matrix columns here, but I wanted something a bit
     # more explicit for now.
     c = [np.zeros(k) for _ in range(k)]

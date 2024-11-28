@@ -139,10 +139,15 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 '''
 
 
-                all_spline_preds = spline_pred_calculator.smoothAllData(
-                    np.hstack((pd.translations, pd.rotations_aa)),
-                    np.hstack((pd.translations_quad_preds, pd.rotations_preds))
+                # all_spline_preds = spline_pred_calculator.smoothAllData(
+                #     np.hstack((pd.translations, pd.rotations_aa)),
+                #     np.hstack((pd.translations_quad_preds, pd.rotations_preds))
+                # )
+
+                all_spline_preds = spline_pred_calculator.constantAccelPreds(
+                    np.hstack((pd.translations, pd.rotations_aa))
                 )
+
 
                 t_spline_preds = all_spline_preds[:, :3]
                 r_aa_spline_preds = all_spline_preds[:, 3:]
@@ -215,14 +220,14 @@ print()
 #%%
 
 np.savez(
-    "./bspline_param_evals_quad.npz", res_2cm = results_2cm, res_2deg = results_2deg,
+    "./bspline_param_evals_deriv.npz", res_2cm = results_2cm, res_2deg = results_2deg,
      res_5cm = results_5cm, res_5deg = results_5deg,
      res_mean_sq_dist = results_mean_sq_dist,
      res_mean_sq_angle = results_mean_sq_angle
 )                        
 '''
 #%% 
-load_result = np.load("../../bspline_param_evals2.npz")
+load_result = np.load("../../bspline_param_evals_deriv.npz")
 # load_result.close()
 
 #%%
@@ -266,10 +271,12 @@ for level in range(data.shape[0]):
     Z = data[level]
     
     X, Y = np.meshgrid(np.arange(Z.shape[1]), np.arange(Z.shape[0]))
-    
+    min_order = 1 + deg_range_inclusive[0]
     # Plot the surface (with a label for the corresponding k val)
-    order = level + 1 + deg_range_inclusive[0]
-    surf = ax.plot_surface(X, Y, Z, alpha=0.7, label=f'k={order}')
+    order = level + min_order
+    surf = ax.plot_surface(
+        X + min_order, Y + min_order, Z, alpha=0.7, label=f'k={order}'
+    )
     
 
 ax.set_title('3D Surface Plot for Each Order')
