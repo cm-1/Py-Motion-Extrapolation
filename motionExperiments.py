@@ -226,6 +226,7 @@ all_acc_angles = np.zeros((0,))
 all_acc_ortho_mags = np.zeros((0,))
 all_vel_acc_2D_solves = np.zeros((0, 2))
 maxTimestamps = 0
+max_angle = 0
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
 
@@ -235,10 +236,11 @@ for i, combo in enumerate(combos):
 
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
-    rotations_quats = gtc.multiplyQuatLists(
-        getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
-        rotations_gt_quats
-    )
+    rotations_quats = rotations_gt_quats
+    #  = gtc.multiplyQuatLists(
+    #     getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
+    #     rotations_gt_quats
+    # )
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
 
     allResultsObj.updateGroundTruth(
@@ -251,9 +253,7 @@ for i, combo in enumerate(combos):
 
     
     
-    rev_rotations_quats = np.empty(rotations_quats.shape)
-    rev_rotations_quats[:, 0] = rotations_quats[:, 0]
-    rev_rotations_quats[:, 1:] = -rotations_quats[:, 1:]
+    rev_rotations_quats = gtc.conjugateQuats(rotations_quats)
 
 
 
@@ -267,11 +267,13 @@ for i, combo in enumerate(combos):
     rotations_aa_acc = np.diff(rotation_aa_diffs[:-1], axis=0)
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
+    t_screw_preds = translations[1:-1] + gtc.rotateVecsByQuats(rotation_quat_diffs[:-1], translation_diffs[:-1])
     t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
     # r_vel_pred = rotations[1:-1] + rotations_vel
     r_vel_preds = gtc.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_quats[1:-1]
     )
+    # r_vel_preds = gtc.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
     r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
     r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
@@ -288,9 +290,16 @@ for i, combo in enumerate(combos):
     t_spline2_preds = translations[2:-1] + translation_diffs[1:-1] + (5/6) * translations_acc
     
     t_accLERP_preds = translations[2:-1] + 0.9 * t_acc_delta
+    t_quadratic_preds = 3*translations[2:-1] - 3*translations[1:-2] + translations[:-3]
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
     t_spline2_preds = np.vstack((t_vel_preds[:1], t_spline2_preds))
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
+    t_quadratic_preds = np.vstack((t_vel_preds[:1], t_quadratic_preds))
+
+    # t_deg4_preds = t_quadratic_preds.copy()
+    # t_deg4_preds[3:] = (17/24) * translations[:-5] - (11/3) * translations[1:-4] + (31/4) * translations[2:-3] - (25/3)*translations[3:-2] + (109/24)*translations[4:-1]
+    # t_jerk_preds = t_quadratic_preds.copy()
+    # t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
 
     r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
     r_aa_acc_preds = rotations[2:-1] + r_aa_acc_delta
@@ -299,6 +308,28 @@ for i, combo in enumerate(combos):
     r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
+    fixed_axes = rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
+    angles = gtc.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
+    max_angle = max(max_angle, angles.max())
+
+    angle_diffs = np.diff(angles, 1, axis=0)
+    axis_dots = gtc.einsumDot(fixed_axes[1:], fixed_axes[:-1])
+    angle_diffs[axis_dots < np.cos(np.deg2rad(1))] = 0
+    angle_ratios = 2 + (angle_diffs[:-1]/angles[1:-1])
+
+    r_fixed_axis_preds = np.empty((len(rotations) - 2, 4))
+    r_fixed_axis_preds[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
+    r_fixed_axis_preds[0] = r_vel_preds[0]
+
+
+
+
+    # slerp_diffs = gtc.multiplyQuatLists(r_slerp_preds, rev_rotations_quats[1:-1])
+    # slerp_axes = slerp_diffs[:, 1:] / np.linalg.norm(slerp_diffs[:, 1:], axis=-1, keepdims=True)
+    # axisComp = np.abs(gtc.einsumDot(slerp_axes, fixed_axes[:-1]))
+    # if np.any(axisComp < 0.999):
+    #     raise Exception("Axes don't match!")
+    
 
     complete_vel_sq_lens = gtc.einsumDot(
         translation_diffs, translation_diffs
@@ -374,7 +405,7 @@ for i, combo in enumerate(combos):
     next_vel_vecs[:, 0] = next_vel_parallel
     next_vel_vecs[:, 1] = next_vel_ortho_dots / acc_ortho_comp
 
-    vel_acc_2D_solve = np.einsum('bij,bj->bi', inv_mats, next_vel_vecs)
+    vel_acc_2D_solve = gtc.einsumMatVecMul(inv_mats, next_vel_vecs)
     all_vel_acc_2D_solves = np.concatenate((
         all_vel_acc_2D_solves, vel_acc_2D_solve
     ))
@@ -458,6 +489,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
     allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
     allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+    allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
 
 
     # Dumb comment.
@@ -469,8 +501,12 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
     allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     allResultsObj.addTranslationResult("2D (bcs)", best_2d)
+    allResultsObj.addTranslationResult("Quadratic", t_quadratic_preds)
+    # allResultsObj.addTranslationResult("deg4", t_deg4_preds)
+    # allResultsObj.addTranslationResult("jerk", t_jerk_preds)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
+    allResultsObj.addTranslationResult("Screw", t_screw_preds)
     
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
@@ -486,7 +522,7 @@ for i, combo in enumerate(combos):
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
 
-
+print("Max angle:", max_angle)
 
 allResultsObj.printResults()
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]

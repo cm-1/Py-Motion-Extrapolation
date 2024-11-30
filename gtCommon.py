@@ -53,6 +53,17 @@ def shortSeqNameBCOT(longName):
         retVal += "_"
     return retVal[:-1]
 
+def conjugateQuats(quats: np.ndarray):
+    conjugate_quats = np.empty(quats.shape)
+    conjugate_quats[..., 0] = quats[..., 0]
+    conjugate_quats[..., 1:] = -quats[..., 1:]
+    return conjugate_quats
+
+def rotateVecsByQuats(quats: np.ndarray, vecs: np.ndarray):
+    v_quats = np.insert(vecs, 0, np.zeros(vecs.shape[:-1]), axis = -1)
+    conjs = conjugateQuats(quats)
+    return multiplyQuatLists(quats, multiplyQuatLists(v_quats, conjs))[..., 1:]
+
 def quatsFromAxisAngles(axisAngleVals):
     angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
 
@@ -73,6 +84,9 @@ def einsumDot(vecs0, vecs1):
 
     return np.einsum('...ij,...ij->...i', vecs0, vecs1)
 
+def einsumMatVecMul(mats, vecs):
+    return np.einsum('bij,bj->bi', mats, vecs)
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -86,7 +100,7 @@ def anglesBetweenQuats(quats0, quats1):
     half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
     return half_angle + half_angle
 
-def quatSlerp(quats0, quats1, t: float, zeroAngleThresh: float = 0.0001):
+def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     retVal = np.empty(quats0.shape)
 
     # Find the angles between the quaternions *interpreted as vec4s*, *not* the
@@ -104,12 +118,15 @@ def quatSlerp(quats0, quats1, t: float, zeroAngleThresh: float = 0.0001):
     zero_angle_inds = np.nonzero(zero_angle_bools)
     pos_angle_inds = np.nonzero(pos_angle_bools)
     pos_angles = angles[pos_angle_inds, np.newaxis]
+    t_reshape = t
+    if not (isinstance(t, float) or isinstance(t, int)):
+        t_reshape = t.reshape(pos_angles.shape)
 
     retVal[zero_angle_inds] = quats0[zero_angle_inds]
     
     sin_vals = np.sin(pos_angles)
-    scales0 = np.sin((1 - t) * pos_angles) / sin_vals
-    scales1 = np.sin(t * pos_angles) / sin_vals
+    scales0 = np.sin((1 - t_reshape) * pos_angles) / sin_vals
+    scales1 = np.sin(t_reshape * pos_angles) / sin_vals
     retVal[pos_angle_inds] = scales0 * quats0[pos_angle_inds] + scales1 * quats1[pos_angle_inds]
     return retVal
 
