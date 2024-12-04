@@ -87,6 +87,9 @@ def einsumDot(vecs0, vecs1):
 def einsumMatVecMul(mats, vecs):
     return np.einsum('bij,bj->bi', mats, vecs)
 
+def einsumMatMatMul(mats0, mats1):
+    return np.einsum("bij,bjk->bik", mats0, mats1)
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -129,6 +132,81 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     scales1 = np.sin(t_reshape * pos_angles) / sin_vals
     retVal[pos_angle_inds] = scales0 * quats0[pos_angle_inds] + scales1 * quats1[pos_angle_inds]
     return retVal
+
+def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
+    # Let X = [x,y,z]^T be one world-to-local frame & F = [r,s,t]^T be another.
+    # We want the rotation R about axis w minimizing the angle between the
+    # local-to-world frames RX^T and F^T.
+
+    # Below, let "*" represent a dot product. Because X(F^T) is a rotation:
+    # x*r + y*s + z*t = Trace([x,y,z]^T[r,s,t]) = Trace(XF^T) = 1 + 2cos(angle). 
+    
+    # Note: Func params are local-to-world, so "extra" transposes are needed.
+    X_mat = rotatingFrame.transpose() # X^T^T = X
+    X_F_T = X_mat @ targetFrame
+    tr = np.trace(X_F_T)
+
+    # Since 1+2cos(angle) is strictly decreasing for angles in [0, pi],
+    # minimizing the angle is the same as maximizing x*r + y*s + z*t.
+
+    # We thus want to find the R about w that maximizes Rx*r + Ry*s + Rz*t.
+
+    # For space, let cr() represent cross() and let "0" represent R's rotation
+    # angle theta, since they look similar. Rodrigues' rotation formula states:
+    # Rx = (x*w)w + cos0(x - (x*w)w) + sin0 cr(w,x)
+
+    # For any vector v, v = (X^T)Xv = (v*x)x + (v*y)y + (v*z)z, which we'll use
+    # to rewrite our cross products without having to use the cr() operator.
+
+    # By the properties of the scalar triple product, we can say things like:
+    # y*cr(w, x) = w*cross(x, y) = z*w
+
+    # Therefore:
+    # y*cr(w,x) = z*w,   z*cr(w,x) = -y*w,   x*cr(w,y) = -z*w,   z*cr(w,y) = x*w
+    # x*cr(w,z) = y*w,   y*cr(w,z) = -x*w
+
+    # And, of course, v*cr(w,v) = 0 for any v. This gives us equalities like:
+    # cr(w,x) = (x*cr(w,x))x + (y*cr(w,x))y + (z*cr(w,x))z = (w*z)y - (w*y)z
+
+    # Putting this together, we modify Rodrigues' rotation formula to get:
+    # Rx = (x*w)w + cos0(x - (x*w)w) + sin0 ((w*z)y - (w*y)z)
+
+    # Rx*r = (x*w)(r*w) + cos0(x*r - (x*w)(r*w)) + sin(0) ((z*w)y*r - (y*w)z*r)
+
+    # Skipping some steps to save space and letting C represent terms unaffected
+    # by theta, and Tr() be Trace(), we can see that:
+    # Rx*r + Ry*s + Rz*s
+    # = C + cos0(Tr(XF^T) - Xw*Fw) + sin0(Xw*[z*s-y*t, x*t-z*r, y*r-x*s]^T)
+    
+    Xw = (X_mat @ axis).flatten()
+    Fw = (targetFrame.transpose() @ axis).flatten()
+    other_axis = np.array([
+        X_F_T[2,1] - X_F_T[1,2],
+        X_F_T[0,2] - X_F_T[2,0],
+        X_F_T[1,0] - X_F_T[0,1]
+    ])
+    sin_component = np.dot(Xw, other_axis)
+    Xw_dot_Fw = np.dot(Xw, Fw)
+    cos_component = tr - Xw_dot_Fw
+
+    # If we consider the non-C part as the 2D vector [cos0, sin0] dotted with
+    # another 2D vector, then it is clear that the maximal solution is:
+    # theta = atan2(Xw*[...], Xw*Fw + Trace(XF^T))
+    theta = np.arctan2(sin_component, cos_component)
+ 
+    rot = matFromAxisAngle(theta * axis)
+
+    newFrame = rot @ rotatingFrame
+
+    # I'm assuming there's ways to simplify this further... E.g., that vector
+    # that sin(theta)Xw is being dotted with is the axis of the rotation between
+    # the two original frames (multiplied by a scalar). And Xw*Fw = w*(X^T)Fw,
+    # i.e., a cos(angle) between w and a rotated w. And I'm sure there's ways
+    # that the sum-of-angle identities could play out, and *also* would be
+    # interested in what cancellations happen when plugging this theta solution
+    # into the Rodrigues formulas for Rx, Ry, and Rz.
+
+    return newFrame
 
 # def axisAnglesFromQuats(quatVals):
 #     halfAngles = np.acrcos(quatVals[:, 0:1])

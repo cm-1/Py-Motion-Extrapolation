@@ -24,6 +24,14 @@ if DESIRED_CTRL_PTS > PTS_USED_TO_CALC_LAST:
 if DESIRED_CTRL_PTS < SPLINE_DEGREE + 1:
     raise Exception("Need at least order=k=(degree + 1) control points!")
 
+def wahba(rough_mats):
+    U, S, Vh = np.linalg.svd(rough_mats)
+    dets_U = np.linalg.det(U)
+    dets_V = np.linalg.det(Vh)
+    last_diags = dets_U * dets_V
+    Vh[:,-1,:] *= last_diags[..., np.newaxis]
+    return gtc.einsumMatMatMul(U, Vh)
+
 def getRandomQuatError(shape, max_err_rads):
     axes = np.random.uniform(-1.0, 1.0, shape[:-1] + (3,))
     unit_axes = axes / np.linalg.norm(axes, axis=-1, keepdims=True)
@@ -308,7 +316,24 @@ for i, combo in enumerate(combos):
     r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
+
+    r_mats = calculator.getRotationMatsGTNP(True)
     fixed_axes = rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
+    r_fixed_axis_mats = np.empty((len(rotations) - 2, 3, 3))
+    for j in range(len(rotations) - 2):
+        r_fixed_axis_mats[j] = gtc.closestFrameAboutAxis(r_mats[j+1], r_mats[j+2], fixed_axes[j])
+    r_fixed_axis_bcs = gtc.axisAngleFromMatArray(r_fixed_axis_mats)
+
+    # Convert mats into "separated" lists of their columns.
+    # wahba_points_local = np.moveaxis(r_mats, -1, 0)
+    wahba_inputs = 2 * r_mats[1:-1] - r_mats[:-2]
+    wahba_col_norms = np.linalg.norm(wahba_inputs, axis=1)
+    for j in range(3):
+        wahba_inputs[..., j] /= wahba_col_norms[..., j:j+1]
+    wahba_outputs = wahba(wahba_inputs)
+
+    wahba_pred = gtc.axisAngleFromMatArray(wahba_outputs)
+
     angles = gtc.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
     max_angle = max(max_angle, angles.max())
 
@@ -489,7 +514,9 @@ for i, combo in enumerate(combos):
     allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
     allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
     allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+    allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
+    allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
 
 
     # Dumb comment.
