@@ -151,6 +151,39 @@ class ConsolidatedResults:
             name, errs, score
         )
 
+    def applyBestTranslationResult(self, names, agg_name):
+        ConsolidatedResults._applyBestResult(
+            self.translation_results, self._ordered_translation_result_names,
+            names, agg_name, TRANSLATION_THRESH, False
+        )
+
+    def applyBestRotationResult(self, names, agg_name):
+        ConsolidatedResults._applyBestResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            names, agg_name, ROTATION_THRESH_RAD, True
+        )
+
+    def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D):
+        num_combos = len(results_dict[names[0]].errors)
+        errs = []
+        scores = []
+        for i in range(num_combos):
+            stacked_errs = np.stack([
+                results_dict[n].errors[i] for n in names
+            ], axis = 0)
+            stacked_norms = stacked_errs
+            if not errs_are_1D:
+                stacked_norms = np.linalg.norm(stacked_errs, axis = -1)
+            min_inds_1D = np.argmin(stacked_norms, axis = 0, keepdims=True)
+            min_inds_e = min_inds_1D
+            if not errs_are_1D:
+                min_inds_e = min_inds_1D.reshape(1,-1,1)
+            errs.append(np.take_along_axis(stacked_errs, min_inds_e, axis = 0))
+            min_norms = np.take_along_axis(stacked_norms, min_inds_1D, axis = 0)
+            scores.append((min_norms <= thresh).mean())
+        results_dict[agg_name] = PredictionResult(agg_name, errs, scores)
+        name_order_list.append(agg_name)
+
     def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
         if name in all_results_dict.keys():
             all_results_dict[name].errors.append(errs)
@@ -548,6 +581,10 @@ for i, combo in enumerate(combos):
             sampleAccErrs = accResult.errors[-1]
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
+
+allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg")
+allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw")
+allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg")
 
 print("Max angle:", max_angle)
 
