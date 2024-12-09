@@ -151,19 +151,19 @@ class ConsolidatedResults:
             name, errs, score
         )
 
-    def applyBestTranslationResult(self, names, agg_name):
+    def applyBestTranslationResult(self, names, agg_name, use_shift = False):
         ConsolidatedResults._applyBestResult(
             self.translation_results, self._ordered_translation_result_names,
-            names, agg_name, TRANSLATION_THRESH, False
+            names, agg_name, TRANSLATION_THRESH, False, use_shift
         )
 
-    def applyBestRotationResult(self, names, agg_name):
+    def applyBestRotationResult(self, names, agg_name, use_shift = False):
         ConsolidatedResults._applyBestResult(
             self.rotation_results, self._ordered_rotation_result_names,
-            names, agg_name, ROTATION_THRESH_RAD, True
+            names, agg_name, ROTATION_THRESH_RAD, True, use_shift
         )
 
-    def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D):
+    def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
         num_combos = len(results_dict[names[0]].errors)
         errs = []
         scores = []
@@ -175,11 +175,23 @@ class ConsolidatedResults:
             if not errs_are_1D:
                 stacked_norms = np.linalg.norm(stacked_errs, axis = -1)
             min_inds_1D = np.argmin(stacked_norms, axis = 0, keepdims=True)
+            if use_shift:
+                min_inds_1D = min_inds_1D[:, :-1]
+                stacked_errs = stacked_errs[:, 1:]
+                stacked_norms = stacked_norms[:, 1:]
             min_inds_e = min_inds_1D
             if not errs_are_1D:
                 min_inds_e = min_inds_1D.reshape(1,-1,1)
-            errs.append(np.take_along_axis(stacked_errs, min_inds_e, axis = 0))
+            es = np.take_along_axis(stacked_errs, min_inds_e, axis = 0)
             min_norms = np.take_along_axis(stacked_norms, min_inds_1D, axis = 0)
+            if use_shift:
+                default_err = results_dict["Static"].errors[i][0]
+                default_norm = default_err
+                if not errs_are_1D:
+                    default_norm = np.linalg.norm(default_err)
+                errs.append(np.insert(es, 0, default_err, axis = 0))
+                min_norms = np.insert(min_norms, 0, default_norm, axis = 0)
+
             scores.append((min_norms <= thresh).mean())
         results_dict[agg_name] = PredictionResult(agg_name, errs, scores)
         name_order_list.append(agg_name)
@@ -309,15 +321,14 @@ for i, combo in enumerate(combos):
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
     t_screw_preds = translations[1:-1] + gtc.rotateVecsByQuats(rotation_quat_diffs[:-1], translation_diffs[:-1])
-    t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
-    # r_vel_pred = rotations[1:-1] + rotations_vel
+    # t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
     r_vel_preds = gtc.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_quats[1:-1]
     )
     # r_vel_preds = gtc.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
     r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
-    r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
+    # r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
@@ -339,14 +350,56 @@ for i, combo in enumerate(combos):
 
     # t_deg4_preds = t_quadratic_preds.copy()
     # t_deg4_preds[3:] = (17/24) * translations[:-5] - (11/3) * translations[1:-4] + (31/4) * translations[2:-3] - (25/3)*translations[3:-2] + (109/24)*translations[4:-1]
-    # t_jerk_preds = t_quadratic_preds.copy()
-    # t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
+    t_jerk_preds = t_quadratic_preds.copy()
+    t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
+
+    complete_vel_sq_lens = gtc.einsumDot(
+        translation_diffs, translation_diffs
+    ) # (1-0)^2, (2-1)^2, ...
+    prev_vel_sq_lens = complete_vel_sq_lens[:-1]
+    speeds = np.sqrt(prev_vel_sq_lens)
+    unit_vels = translation_diffs[:-1] / speeds[..., np.newaxis]
+    unit_vel_dots = gtc.einsumDot(unit_vels[1:], unit_vels[:-1])
+    vel_angles = np.arccos(unit_vel_dots)
+    vel_crosses = np.cross(unit_vels[:-1], unit_vels[1:])
+    vel_crosses /= np.linalg.norm(vel_crosses, axis=-1, keepdims=True)
+    min_vel_rot_aas = gtc.scalarsVecsMul(vel_angles, vel_crosses)
+    min_vel_rot_qs = gtc.quatsFromAxisAngles(min_vel_rot_aas)
+    rev_min_vel_qs = gtc.conjugateQuats(min_vel_rot_qs)
+
+    # I guess I'm thinking that F2 = V(0>1)*F1*R1
+    # Which means R1 = F1^T V(0>1)^T F2
+    local_rots_vcase = gtc.multiplyQuatLists(
+        rev_rotations_quats[1:-2], gtc.multiplyQuatLists(
+            rev_min_vel_qs, rotations_quats[2:-1]
+    ))
+
+    r_mvel_plus_local_preds = np.empty(r_vel_preds.shape)
+    r_mvel_plus_local_preds[0] = r_vel_preds[0]
+    r_mvel_plus_local_preds[1:] = gtc.multiplyQuatLists(
+        min_vel_rot_qs, gtc.multiplyQuatLists(
+            rotations_quats[2:-1], local_rots_vcase
+        )
+    )
+
+
+    # unit_vel_test = gtc.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
+    # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
+    #     raise Exception("Made a mistake!")
+
+    t_poly_preds = t_quadratic_preds.copy()
+    vel_bounce = (unit_vel_dots < -0.99)
+    t_poly_preds[1:][vel_bounce] = t_vel_preds[1:][vel_bounce]
 
     r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
     r_aa_acc_preds = rotations[2:-1] + r_aa_acc_delta
-    r_aa_accLERP_preds = rotations[2:-1] + 0.5 * r_aa_acc_delta
+    # r_aa_accLERP_preds = rotations[2:-1] + 0.5 * r_aa_acc_delta
     r_aa_acc_preds = np.vstack((r_aa_vel_preds[:1], r_aa_acc_preds))
-    r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
+    # r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
+
+
+    r_squad_preds = gtc.squad(rotations_quats, 2)[:-1]
+    r_squad_preds = np.vstack((r_vel_preds[:1], r_squad_preds))
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
@@ -389,10 +442,6 @@ for i, combo in enumerate(combos):
     #     raise Exception("Axes don't match!")
     
 
-    complete_vel_sq_lens = gtc.einsumDot(
-        translation_diffs, translation_diffs
-    ) # (1-0)^2, (2-1)^2, ...
-    prev_vel_sq_lens = complete_vel_sq_lens[:-1]
     vel_dots = gtc.einsumDot(translation_diffs[1:], translation_diffs[:-1])
     # (1-0)*(2-1), (2-1)*(3-2), ...
     vel_proj_scalars = vel_dots / prev_vel_sq_lens
@@ -428,7 +477,6 @@ for i, combo in enumerate(combos):
         all_acc_ortho_ratios, acc_ortho_ratios
     ))
 
-    speeds = np.sqrt(prev_vel_sq_lens)
     all_speeds = np.concatenate((all_speeds, speeds[1:]))
     all_acc_mags = np.concatenate((all_acc_mags, np.linalg.norm(translations_acc, axis = -1)))
     all_acc_ortho_mags = np.concatenate((all_acc_ortho_mags, np.sqrt(acc_ortho_sq_lens)))
@@ -472,8 +520,7 @@ for i, combo in enumerate(combos):
         translation_diffs, translation_diffs
     ) # (1-0)^2, (2-1)^2, ...
     prev_vel_sq_lens = complete_vel_sq_lens[:-1]
-    vel_dots = gtc.einsumDot(translation_diffs[1:], translation_diffs[:-1])
-    # (1-0)*(2-1), (2-1)*(3-2), ...
+
     vel_proj_scalars = vel_dots / prev_vel_sq_lens
     # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
     all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
@@ -527,11 +574,13 @@ for i, combo in enumerate(combos):
     #     t_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[:3]
     #     r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
 
-    all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
-        translations, rotations
-    )))
-    t_spline_preds = all_spline_preds[:, :3]
-    r_aa_spline_preds = all_spline_preds[:, 3:]
+    #---------------------------------------------------------------
+    # all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
+    #     translations, rotations
+    # )))
+    # t_spline_preds = all_spline_preds[:, :3]
+    # r_aa_spline_preds = all_spline_preds[:, 3:]
+    t_spline_preds = spline_pred_calculator.fitAllData(translations)
 
     # t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
     
@@ -541,21 +590,23 @@ for i, combo in enumerate(combos):
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
-    allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
+    # allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
 
     allResultsObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
     allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
-    allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
-    allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+    # allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
+    # allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
     allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
     allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
 
+    # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
+    allResultsObj.addQuaternionResult("Min vel-align", r_mvel_plus_local_preds)
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
     allResultsObj.addTranslationResult("Vel", t_vel_preds)
-    allResultsObj.addTranslationResult("VelLERP", t_velLERP_preds)
+    # allResultsObj.addTranslationResult("VelLERP", t_velLERP_preds)
     allResultsObj.addTranslationResult("Vel (bcs)", best_vel_preds)
     allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
@@ -563,10 +614,11 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Quadratic", t_quadratic_preds)
     # allResultsObj.addTranslationResult("deg4", t_deg4_preds)
-    # allResultsObj.addTranslationResult("jerk", t_jerk_preds)
+    allResultsObj.addTranslationResult("Jerk", t_jerk_preds)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
     allResultsObj.addTranslationResult("Screw", t_screw_preds)
+    # allResultsObj.addTranslationResult("StatVelAcc", t_poly_preds)
     
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
@@ -582,9 +634,12 @@ for i, combo in enumerate(combos):
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
 
-allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg")
-allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw")
-allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg")
+allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
+allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
+allResultsObj.applyBestRotationResult(["QuatVel", "Min vel-align"], "aggv", True)
+# allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
+# allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
+
 
 print("Max angle:", max_angle)
 

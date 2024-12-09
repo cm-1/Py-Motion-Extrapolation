@@ -90,6 +90,9 @@ def einsumMatVecMul(mats, vecs):
 def einsumMatMatMul(mats0, mats1):
     return np.einsum("bij,bjk->bik", mats0, mats1)
 
+def scalarsVecsMul(scalars, vecs):
+    return np.einsum('b,bi->bi', scalars, vecs)
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -104,6 +107,19 @@ def anglesBetweenQuats(quats0, quats1):
     return half_angle + half_angle
 
 def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
+    t_is_const = (isinstance(t, float) or isinstance(t, int))
+    if t_is_const:
+        # For certain values of t, like t=2, optimizations are possible.
+        if t == 2:
+            # The below is the result of plugging t=2 into SLERP, using double
+            # angle identities, and performing cancellations.
+            t_eq_2_scalars = 2*einsumDot(quats0, quats1)
+            return scalarsVecsMul(t_eq_2_scalars, quats1) - quats0
+        if t == 0.5:
+            bisect_dir = quats0 + quats1
+            bisect_lens = np.linalg.norm(bisect_dir, axis = -1, keepdims=True)
+            return bisect_dir / bisect_lens
+
     retVal = np.empty(quats0.shape)
 
     # Find the angles between the quaternions *interpreted as vec4s*, *not* the
@@ -122,7 +138,7 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     pos_angle_inds = np.nonzero(pos_angle_bools)
     pos_angles = angles[pos_angle_inds, np.newaxis]
     t_reshape = t
-    if not (isinstance(t, float) or isinstance(t, int)):
+    if not t_is_const:
         t_reshape = t.reshape(pos_angles.shape)
 
     retVal[zero_angle_inds] = quats0[zero_angle_inds]
@@ -132,6 +148,27 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     scales1 = np.sin(t_reshape * pos_angles) / sin_vals
     retVal[pos_angle_inds] = scales0 * quats0[pos_angle_inds] + scales1 * quats1[pos_angle_inds]
     return retVal
+
+def quatBezier(ctrl_qs, u):
+    prev_qs = ctrl_qs
+    next_qs = []
+    deg = len(ctrl_qs) - 1
+    for d in range(deg, 0, -1):
+        for i in range(d):
+            next_qs.append(quatSlerp(prev_qs[i], prev_qs[i + 1], u))
+        prev_qs = next_qs
+        next_qs = []
+    
+    return prev_qs[0]
+
+
+def squad(qs, u):
+    doubles_a = quatSlerp(qs[:-2], qs[1:-1], 2)
+    aqs = quatSlerp(doubles_a, qs[2:], 0.5)
+    bqs = quatSlerp(aqs, qs[1:-1], 2)
+
+    return quatBezier([qs[1:-1], aqs, bqs, qs[2:]], u)
+
 
 def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
     # Let X = [x,y,z]^T be one world-to-local frame & F = [r,s,t]^T be another.
