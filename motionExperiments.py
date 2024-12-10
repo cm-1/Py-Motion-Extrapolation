@@ -126,7 +126,9 @@ class ConsolidatedResults:
             self._translations_gt, predictions
         )
         # Get the norm of each vec3, and find the ratio under the threshold.
-        score = (np.linalg.norm(errs, axis = -1) <= TRANSLATION_THRESH).mean()
+        score = ConsolidatedResults.applyThreshold(
+            np.linalg.norm(errs, axis = -1), TRANSLATION_THRESH
+        )
         self._addPredictionResult(
             self.translation_results, self._ordered_translation_result_names,
             name, errs, score
@@ -136,7 +138,7 @@ class ConsolidatedResults:
         errs = ConsolidatedResults.getAxisAngleError(
             self._axisangles_gt, predictions
         )
-        score = (errs <= ROTATION_THRESH_RAD).mean()
+        score = ConsolidatedResults.applyThreshold(errs, ROTATION_THRESH_RAD)
         self._addPredictionResult(
             self.rotation_results, self._ordered_rotation_result_names,
             name, errs, score)
@@ -145,7 +147,7 @@ class ConsolidatedResults:
         errs = ConsolidatedResults.getQuatError(
             self._quaternions_gt, predictions
         )
-        score = (errs <= ROTATION_THRESH_RAD).mean()
+        score = ConsolidatedResults.applyThreshold(errs, ROTATION_THRESH_RAD)
         self._addPredictionResult(
             self.rotation_results, self._ordered_rotation_result_names,
             name, errs, score
@@ -162,6 +164,14 @@ class ConsolidatedResults:
             self.rotation_results, self._ordered_rotation_result_names,
             names, agg_name, ROTATION_THRESH_RAD, True, use_shift
         )
+
+    def applyThreshold(errs, thresh):
+        score = None
+        if thresh is None:
+            score = -errs.mean() # Negating so that larger is still better.
+        else:
+            score = (errs <= thresh).mean()
+        return score
 
     def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
         num_combos = len(results_dict[names[0]].errors)
@@ -192,7 +202,7 @@ class ConsolidatedResults:
                 errs.append(np.insert(es, 0, default_err, axis = 0))
                 min_norms = np.insert(min_norms, 0, default_norm, axis = 0)
 
-            scores.append((min_norms <= thresh).mean())
+            scores.append(ConsolidatedResults.applyThreshold(min_norms, thresh))
         results_dict[agg_name] = PredictionResult(agg_name, errs, scores)
         name_order_list.append(agg_name)
 
@@ -211,12 +221,19 @@ class ConsolidatedResults:
             # because the default numpy precision in printing is 8, which means
             # that to match it, we want at least 10 chars for the number in the
             # next row, plus a space.
+            # For negative numbers and numbers >= 10, I'll just decrease the
+            # printed precision for now.
             print("{:>10} ".format(name), end = "")
             name_lens.append(max(10, len(name)))
         print() # Newline after row.
         for i in range(len(names)):
-            # Calculate mean and round it to Numpy's default float print digits.
-            mean_score = round(results_for_names[i], 8)
+            val = results_for_names[i]
+            # If 0 <= number <= 1, use Numpy's default float print digits (8).
+            # Otherwise, decrease precision so printing uses 10 chars total.
+            prec_to_remove = 1 if val < 0 else 0 # Case of "-" sign.
+            if np.abs(val) > 10:
+                prec_to_remove += int(np.log10(np.abs(val)))
+            mean_score = round(results_for_names[i], 8 - prec_to_remove)
 
             print("{val:>{width}} ".format(val=str(mean_score), width=name_lens[i]), end = "")
         print() # Newline after row.
@@ -432,10 +449,17 @@ for i, combo in enumerate(combos):
     angle_diffs[axis_dots < np.cos(np.deg2rad(1))] = 0
     angle_ratios = 2 + (angle_diffs[:-1]/angles[1:-1])
 
+    next_axis_angs = gtc.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
+    angle_diffs2 = angles[1:-1] - next_axis_angs
+    angle_ratios2 = 2 + (np.clip(angle_diffs2, a_min = None, a_max = 0)/angles[1:-1])
+
     r_fixed_axis_preds = np.empty((len(rotations) - 2, 4))
     r_fixed_axis_preds[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
     r_fixed_axis_preds[0] = r_vel_preds[0]
 
+    r_fixed_axis_preds2 = np.empty((len(rotations) - 2, 4))
+    r_fixed_axis_preds2[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios2)
+    r_fixed_axis_preds2[0] = r_vel_preds[0]
 
 
 
@@ -590,7 +614,9 @@ for i, combo in enumerate(combos):
     
     other_spline_err = t_spline_preds - translations[SPLINE_DEGREE + 1:]
     other_spline_err_norms = np.linalg.norm(other_spline_err, axis = -1)
-    other_spline_errs.append((other_spline_err_norms < TRANSLATION_THRESH).mean())
+    other_spline_errs.append(ConsolidatedResults.applyThreshold(
+        other_spline_err_norms, TRANSLATION_THRESH
+    ))
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
@@ -602,6 +628,7 @@ for i, combo in enumerate(combos):
     # allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
     allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
+    allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
     allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
@@ -640,7 +667,7 @@ for i, combo in enumerate(combos):
 
 allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
 allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
-allResultsObj.applyBestRotationResult(["QuatVel", "Min vel-align"], "aggv", True)
+allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Min vel-align"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
 
