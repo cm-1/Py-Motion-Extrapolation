@@ -93,6 +93,9 @@ def einsumMatMatMul(mats0, mats1):
 def scalarsVecsMul(scalars, vecs):
     return np.einsum('b,bi->bi', scalars, vecs)
 
+def scalarsMatsMul(scalars, mats):
+    return np.einsum('b,bij->bij', scalars, mats)
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -170,7 +173,7 @@ def squad(qs, u):
     return quatBezier([qs[1:-1], aqs, bqs, qs[2:]], u)
 
 
-def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
+def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
     # Let X = [x,y,z]^T be one world-to-local frame & F = [r,s,t]^T be another.
     # We want the rotation R about axis w minimizing the angle between the
     # local-to-world frames RX^T and F^T.
@@ -179,9 +182,9 @@ def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
     # x*r + y*s + z*t = Trace([x,y,z]^T[r,s,t]) = Trace(XF^T) = 1 + 2cos(angle). 
     
     # Note: Func params are local-to-world, so "extra" transposes are needed.
-    X_mat = rotatingFrame.transpose() # X^T^T = X
-    X_F_T = X_mat @ targetFrame
-    tr = np.trace(X_F_T)
+    X_mats = np.swapaxes(rotatingFrames, -1, -2) # X^T^T = X
+    X_F_Ts = einsumMatMatMul(X_mats, targetFrames)
+    traces = X_F_Ts.trace(axis1 = -2, axis2 = -1)
 
     # Since 1+2cos(angle) is strictly decreasing for angles in [0, pi],
     # minimizing the angle is the same as maximizing x*r + y*s + z*t.
@@ -215,26 +218,23 @@ def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
     # Rx*r + Ry*s + Rz*s
     # = C + cos0(Tr(XF^T) - Xw*Fw) + sin0(Xw*[z*s-y*t, x*t-z*r, y*r-x*s]^T)
     
-    Xw = (X_mat @ axis).flatten()
-    Fw = (targetFrame.transpose() @ axis).flatten()
-    other_axis = np.array([
-        X_F_T[2,1] - X_F_T[1,2],
-        X_F_T[0,2] - X_F_T[2,0],
-        X_F_T[1,0] - X_F_T[0,1]
-    ])
-    sin_component = np.dot(Xw, other_axis)
-    Xw_dot_Fw = np.dot(Xw, Fw)
-    cos_component = tr - Xw_dot_Fw
+    Xw = einsumMatVecMul(X_mats, axes).reshape(-1, 3)
+    F_mats = np.swapaxes(targetFrames, -1, -2)
+    Fw = einsumMatVecMul(F_mats, axes).reshape(-1, 3)
+    other_axes = np.stack([
+        X_F_Ts[..., 2, 1] - X_F_Ts[..., 1, 2],
+        X_F_Ts[..., 0, 2] - X_F_Ts[..., 2, 0],
+        X_F_Ts[..., 1, 0] - X_F_Ts[..., 0, 1]
+    ], axis = -1)
+    sin_component = einsumDot(Xw, other_axes)
+    Xw_dot_Fw = einsumDot(Xw, Fw)
+    cos_component = traces - Xw_dot_Fw
 
     # If we consider the non-C part as the 2D vector [cos0, sin0] dotted with
     # another 2D vector, then it is clear that the maximal solution is:
     # theta = atan2(Xw*[...], Xw*Fw + Trace(XF^T))
-    theta = np.arctan2(sin_component, cos_component)
- 
-    rot = matFromAxisAngle(theta * axis)
-
-    newFrame = rot @ rotatingFrame
-
+    thetas = np.arctan2(sin_component, cos_component)
+    
     # I'm assuming there's ways to simplify this further... E.g., that vector
     # that sin(theta)Xw is being dotted with is the axis of the rotation between
     # the two original frames (multiplied by a scalar). And Xw*Fw = w*(X^T)Fw,
@@ -243,7 +243,7 @@ def closestFrameAboutAxis(rotatingFrame, targetFrame, axis):
     # interested in what cancellations happen when plugging this theta solution
     # into the Rodrigues formulas for Rx, Ry, and Rz.
 
-    return newFrame
+    return thetas
 
 # def axisAnglesFromQuats(quatVals):
 #     halfAngles = np.acrcos(quatVals[:, 0:1])
@@ -276,6 +276,29 @@ def matFromAxisAngle(scaledAxis):
         [-y, x, 0]
     ])
     return np.identity(3) + np.sin(angle) * skewed + (1.0 - np.cos(angle)) * (skewed @ skewed)
+
+def matsFromAxisAngleArrays(angles, unitAxes):
+    xs, ys, zs = unitAxes.reshape(-1, 3).transpose()
+    _0s = np.zeros(len(angles))
+    
+    skeweds = np.moveaxis(np.array([
+        [_0s, -zs, ys],
+        [zs, _0s, -xs],
+        [-ys, xs, _0s]
+    ]), -1, 0)
+    idens = np.repeat([np.eye(3)], len(angles), axis=0)
+    sin_part = scalarsMatsMul(np.sin(angles), skeweds)
+    skeweds2 = einsumMatMatMul(skeweds, skeweds)
+    cos_part = scalarsMatsMul(1.0 - np.cos(angles), skeweds2)
+    return idens + sin_part + cos_part
+
+def matsFromScaledAxisAngleArray(scaledAxisAngles):
+    angles = np.linalg.norm(scaledAxisAngles, axis = -1)
+    axes = np.zeros((len(angles), 3))
+    posInds = (angles != 0)
+    axes[posInds] = scaledAxisAngles[posInds] / angles[posInds][..., np.newaxis]
+    return matsFromAxisAngleArrays(angles, axes)
+
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).

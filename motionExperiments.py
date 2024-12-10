@@ -405,10 +405,14 @@ for i, combo in enumerate(combos):
 
     r_mats = calculator.getRotationMatsGTNP(True)
     fixed_axes = rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
-    r_fixed_axis_mats = np.empty((len(rotations) - 2, 3, 3))
-    for j in range(len(rotations) - 2):
-        r_fixed_axis_mats[j] = gtc.closestFrameAboutAxis(r_mats[j+1], r_mats[j+2], fixed_axes[j])
-    r_fixed_axis_bcs = gtc.axisAngleFromMatArray(r_fixed_axis_mats)
+    r_fixed_axis_closest_angs = gtc.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
+    r_fixed_axis_closest_rots = gtc.matsFromAxisAngleArrays(
+        r_fixed_axis_closest_angs, fixed_axes[:-1]
+    ) 
+    r_fixed_axis_bcs_mats = gtc.einsumMatMatMul(
+        r_fixed_axis_closest_rots, r_mats[1:-1]
+    )
+    r_fixed_axis_bcs = gtc.axisAngleFromMatArray(r_fixed_axis_bcs_mats)
 
     # Convert mats into "separated" lists of their columns.
     # wahba_points_local = np.moveaxis(r_mats, -1, 0)

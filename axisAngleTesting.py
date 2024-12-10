@@ -1,5 +1,5 @@
 import numpy as np
-from gtCommon import matFromAxisAngle, axisAngleFromMatArray
+from gtCommon import matFromAxisAngle, axisAngleFromMatArray, matsFromScaledAxisAngleArray, matsFromAxisAngleArrays
 import gtCommon as gtc
 
 
@@ -11,17 +11,11 @@ distorts = np.random.sample((numAAs - 1, 3)) - 0.5
 axisAngles[1:] = np.cumsum(distorts, axis=0)
 
 #%%
-mats = np.ones((numAAs, 3,3))
-
-for i in range(numAAs):
-    mats[i] = matFromAxisAngle(axisAngles[i])
+mats = matsFromScaledAxisAngleArray(axisAngles)
     
 newAAs = axisAngleFromMatArray(mats)
 
-newMats = np.ones((numAAs, 3,3))
-
-for i in range(numAAs):
-    newMats[i] = matFromAxisAngle(newAAs[i])
+newMats = matsFromScaledAxisAngleArray(newAAs)
 
 
 diffMats = newMats - mats
@@ -75,20 +69,21 @@ for i in range(numAAs - 2):
     # vel_axis = vel_axis.flatten()
     prev = mats[i+1]
     target = mats[i+2]
-    near = gtc.closestFrameAboutAxis(prev, target, fixed_axes[i])#vel_axis)
+    near_angle = gtc.closestAnglesAboutAxis([prev], [target], fixed_axes[i:i+1])[0]#vel_axis)
+    near = matFromAxisAngle(near_angle * fixed_axes[i]) @ prev
     between = near @ (target).transpose()
     vel_pred = rot_diff @ prev
     angle = np.arccos((np.trace(between) - 1)/2)
     orig_angle = np.arccos((np.trace(prev @ target.transpose()) - 1)/2)
     other_limit = np.arccos(np.dot(fixed_axes[i], mats2[i, :, 2]))
-    norm_results = np.empty(numNormsToTest)
-    for j, n in enumerate(possibleNorms):
-
-        rot_attempt = gtc.matFromAxisAngle(n * fixed_axes[i])
-        mat_from_attempt = rot_attempt @ prev
-        norm_results[j] = np.arccos((np.trace(mat_from_attempt @ target.transpose()) - 1)/2)
-
-
+    rep_axes = np.repeat(fixed_axes[i:i+1], numNormsToTest, axis=0)
+    rot_attempts = matsFromAxisAngleArrays(possibleNorms, rep_axes)
+    mats_from_attempts = np.einsum('bij,jk->bik', rot_attempts, prev)
+    diffs_from_attempts = np.einsum(
+        'bij,jk->bik', mats_from_attempts, target.transpose()
+    )
+    attempt_trs = np.trace(diffs_from_attempts, axis1=-2, axis2=-1)
+    norm_results = np.arccos((attempt_trs - 1.0)/2.0)
     
     investigation_data[i] = [angle, orig_angle, norm_results.min()] #vel_limit]
 
