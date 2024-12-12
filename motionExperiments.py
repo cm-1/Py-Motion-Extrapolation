@@ -186,21 +186,21 @@ class ConsolidatedResults:
                 stacked_norms = np.linalg.norm(stacked_errs, axis = -1)
             min_inds_1D = np.argmin(stacked_norms, axis = 0, keepdims=True)
             if use_shift:
-                min_inds_1D = min_inds_1D[:, :-1]
-                stacked_errs = stacked_errs[:, 1:]
-                stacked_norms = stacked_norms[:, 1:]
+                min_inds_1D = np.roll(min_inds_1D, 1, axis=-1)
             min_inds_e = min_inds_1D
             if not errs_are_1D:
                 min_inds_e = min_inds_1D.reshape(1,-1,1)
             es = np.take_along_axis(stacked_errs, min_inds_e, axis = 0)
             min_norms = np.take_along_axis(stacked_norms, min_inds_1D, axis = 0)
+            min_norms = min_norms.flatten()
             if use_shift:
                 default_err = results_dict["Static"].errors[i][0]
                 default_norm = default_err
                 if not errs_are_1D:
                     default_norm = np.linalg.norm(default_err)
-                errs.append(np.insert(es, 0, default_err, axis = 0))
-                min_norms = np.insert(min_norms, 0, default_norm, axis = 0)
+                es[0] = default_err
+                min_norms[0] = default_norm
+            errs.append(es)
 
             scores.append(ConsolidatedResults.applyThreshold(min_norms, thresh))
         results_dict[agg_name] = PredictionResult(agg_name, errs, scores)
