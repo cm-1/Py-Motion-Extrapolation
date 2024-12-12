@@ -1,5 +1,6 @@
 import numpy as np
-from gtCommon import matFromAxisAngle, axisAngleFromMatArray, matsFromScaledAxisAngleArray, matsFromAxisAngleArrays
+from gtCommon import matFromAxisAngle, axisAngleFromMatArray
+from gtCommon import matsFromScaledAxisAngleArray, matsFromAxisAngleArrays
 import gtCommon as gtc
 
 
@@ -98,3 +99,47 @@ quats = gtc.quatsFromAxisAngles(axisAngles)
 quatRes = gtc.rotateVecsByQuats(quats, vecs)
 matRes = gtc.einsumMatVecMul(mats, vecs)
 print("Max diff for quat thing:", np.abs(matRes - quatRes).max())
+
+#%% Testing circle code:
+circ_angles = np.linspace(0, 2*np.pi, 100)
+circ_translations = np.stack([
+    np.cos(circ_angles), np.sin(circ_angles), np.zeros(len(circ_angles))
+], axis = -1)
+circ_diffs = np.diff(circ_translations, 1, axis=0)
+circle_plane_info = gtc.getPlaneInfo(
+    circ_diffs[1:-1], -circ_diffs[:-2], circ_translations[:-3]
+)
+circle_axes = circle_plane_info.plane_axes
+circle_pts_2D = []
+for j in range(3):
+    circle_pts_2D.append(gtc.vecsTo2D(
+        circ_translations[j:(-3 + j)], *circle_axes
+    ))
+circle_centres = gtc.circleCentres2D(*circle_pts_2D)
+
+diffs_from_centres = []
+for j in range(3):
+    diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
+
+sq_radii = gtc.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
+c_cosines_0 = gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
+c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
+
+c_angles_1 = np.arccos(c_cosines_1)
+c_sines_1 = np.sin(c_angles_1)
+
+c_trans_preds_2D = gtc.rotateBySinAndCos2D(
+    diffs_from_centres[2], c_cosines_1, c_sines_1
+)
+
+c_trans_preds = gtc.vecsTo3DUsingPlaneInfo(
+    circle_centres + c_trans_preds_2D, circle_plane_info
+)
+
+if np.abs(sq_radii - gtc.einsumDot(c_trans_preds_2D, c_trans_preds_2D)).max() > 0.0001:
+    raise Exception("Prediction radii are mismatched!")
+if np.abs(sq_radii - gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[1])).max() > 0.0001:
+    raise Exception("Circle centres yield mismatched radii!")
+
+
+c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])

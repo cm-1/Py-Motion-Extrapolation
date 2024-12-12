@@ -384,6 +384,75 @@ for i, combo in enumerate(combos):
     min_vel_rot_qs = gtc.quatsFromAxisAngles(min_vel_rot_aas)
     rev_min_vel_qs = gtc.conjugateQuats(min_vel_rot_qs)
 
+    rough_circ_axes_0 = translation_diffs[1:-1]
+    rough_circ_axes_1 = -translation_diffs[:-2]
+    circle_plane_info = gtc.getPlaneInfo(
+        rough_circ_axes_0, rough_circ_axes_1, translations[:-3]
+    )
+
+    circle_axes = circle_plane_info.plane_axes
+
+    '''
+    plane_normals = gtc.normalizeAll(np.cross(
+        rough_circ_axes_0, rough_circ_axes_1
+    ))
+    if not gtc.areAxisArraysOrthonormal([
+        circle_axes[0], circle_axes[1], plane_normals
+    ], loud=True):
+        raise Exception("Orthonormality issue!")
+    if np.abs(gtc.einsumDot(plane_normals, rough_circ_axes_1)).max() > 0.001:
+        raise Exception("Plane normal issue!")
+    '''
+    circle_pts_2D = []
+    for j in range(3):
+        circle_pts_2D.append(gtc.vecsTo2D(
+            translations[j:(-3 + j)], *circle_axes
+        ))
+
+    # circ_pt_norms = np.linalg.norm(circle_pts_2D[0] - circle_pts_2D[1], axis=-1)
+    # orig_nroms = np.linalg.norm(translation_diffs[:-2], axis=-1)
+    # if np.abs(circ_pt_norms - orig_nroms).max() > 0.0001:
+    #     raise Exception("Norm issue!")
+        
+    circle_centres = gtc.circleCentres2D(*circle_pts_2D)
+
+    diffs_from_centres = []
+    for j in range(3):
+        diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
+   
+    sq_radii = gtc.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
+    c_cosines_0 = gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
+    c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
+
+    c_angles_1 = np.arccos(c_cosines_1)
+    c_sines_1 = np.sin(c_angles_1)
+
+    c_trans_preds_2D = gtc.rotateBySinCos2D(
+        diffs_from_centres[2], c_cosines_1, c_sines_1
+    )
+
+    c_trans_preds = gtc.vecsTo3DUsingPlaneInfo(
+        circle_centres + c_trans_preds_2D, circle_plane_info
+    )
+    
+    # c_centres3D = gtc.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
+    # if not gtc.areVecArraysInSamePlanes([
+    #     translations[:-3], translations[1:-2], translations[2:-1],
+    #     c_trans_preds, c_centres3D
+    # ]):
+    #     raise Exception("Vecs not in same plane as expected!") 
+    # radii_comparisons = []
+    # for j in range(3):
+    #     c_diffs3D = translations[j:(-3 + j)] - c_centres3D
+    #     radii_comparisons.append(gtc.einsumDot(c_diffs3D, c_diffs3D))       
+    # pred_from_c3D = c_trans_preds - c_centres3D
+    # radii_comparisons.append(gtc.einsumDot(pred_from_c3D, pred_from_c3D))
+    # if np.abs(np.diff(radii_comparisons, 1, axis=0)).max() > 0.0001:
+    # #     raise Exception("3D radii difference that wasn't expected!")
+    # c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])/sq_radii
+    # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
+    #     raise Exception("Made an angle mistake!")
+    
     # I guess I'm thinking that F2 = V(0>1)*F1*R1
     # Which means R1 = F1^T V(0>1)^T F2
     local_rots_vcase = gtc.multiplyQuatLists(
@@ -648,6 +717,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Jerk", t_jerk_preds)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
+    allResultsObj.addTranslationResult("Circ", c_trans_preds)
     allResultsObj.addTranslationResult("Screw", t_screw_preds)
     # allResultsObj.addTranslationResult("StatVelAcc", t_poly_preds)
     

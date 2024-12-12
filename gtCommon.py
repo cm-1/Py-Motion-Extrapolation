@@ -3,6 +3,7 @@ import numpy as np
 import pathlib
 import json
 
+from collections import namedtuple
 
 
 BCOT_BODY_NAMES = [
@@ -53,6 +54,13 @@ def shortSeqNameBCOT(longName):
         retVal += "_"
     return retVal[:-1]
 
+PlaneInfoType = namedtuple(
+    "PlaneInfo", ['plane_axes', 'normals', 'offset_dists']
+)
+
+def normalizeAll(vecs: np.ndarray):
+    return vecs / np.linalg.norm(vecs, axis = -1, keepdims=True)
+
 def conjugateQuats(quats: np.ndarray):
     conjugate_quats = np.empty(quats.shape)
     conjugate_quats[..., 0] = quats[..., 0]
@@ -95,6 +103,109 @@ def scalarsVecsMul(scalars, vecs):
 
 def scalarsMatsMul(scalars, mats):
     return np.einsum('b,bij->bij', scalars, mats)
+
+def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
+    dots = einsumDot(vectors, dirs)
+
+    if not dirs_already_normalized:
+        dots /= einsumDot(dirs, dirs)
+    
+    parallels = scalarsVecsMul(dots, dirs)
+    orthos = vectors - parallels
+    return (parallels, orthos)
+
+def getPlaneAxes(roughAxes0, roughAxes1):
+    nax0 = normalizeAll(roughAxes0)
+    dots01 = einsumDot(nax0, roughAxes1)
+    ax1 = roughAxes1 - scalarsVecsMul(dots01, nax0)
+    ax1_norms = np.linalg.norm(ax1, axis=-1, keepdims=True)
+    # TODO: Maybe I want non-nan behaviour for zero norms here.
+    nax1  = ax1 / ax1_norms
+    return (nax0, nax1)
+
+def getPlaneInfo(roughAxes0, roughAxes1, ptsOnPlane):
+    norm_axes = getPlaneAxes(roughAxes0, roughAxes1)
+
+    normals = np.cross(*norm_axes)
+    offset_dists = einsumDot(ptsOnPlane, normals)
+    return PlaneInfoType(norm_axes, normals, offset_dists)
+
+def vecsTo2D(vecs3D, nax0, nax1):
+    shape = vecs3D.shape[:-1] + (2,) # Replace last shape dim, 3, with 2.
+    retVal = np.empty(shape)
+    retVal[..., 0] = einsumDot(vecs3D, nax0)
+    retVal[..., 1] = einsumDot(vecs3D, nax1)
+    return retVal
+
+def vecsTo3D(vecs2D, plane_axes0, plane_axes1, plane_offset_vecs):
+    in_plane_disp = vecs2D[:, :1] * plane_axes0 + vecs2D[:, 1:] * plane_axes1
+    return in_plane_disp + plane_offset_vecs
+
+def vecsTo3DUsingPlaneInfo(vecs2D, planeInfo: PlaneInfoType):
+    axes = planeInfo.plane_axes
+    offset_vecs = scalarsVecsMul(planeInfo.offset_dists, planeInfo.normals)
+    return vecsTo3D(vecs2D, axes[0], axes[1], offset_vecs)
+
+
+def areAxisArraysOrthonormal(axisArrays, threshold = 0.0001, loud = False):
+    for i in range(len(axisArrays)):
+        axis_norms_sq = einsumDot(axisArrays[i], axisArrays[i])
+        if np.abs(1.0 - axis_norms_sq).max() > threshold:
+            if loud:
+                print("Unit length check failed!")
+            return False
+        for j in range(i + 1, len(axisArrays)):
+            dots = einsumDot(axisArrays[i], axisArrays[j])
+            if np.abs(dots).max() > threshold:
+                if loud:
+                    print(f"Orthogonality failed between axes {i} and {j}.")
+                return False
+    return True
+
+def areVecArraysInSamePlanes(vecArrays, threshold = 0.0001):
+    if len(vecArrays) <= 3:
+        return True
+    
+    diffs0 = vecArrays[1] - vecArrays[0]
+    diffs1 = vecArrays[2] - vecArrays[1]
+    normals = normalizeAll(np.cross(diffs0, diffs1))
+    normDots = np.array([einsumDot(va, normals) for va in vecArrays])
+    dotDiffs = np.diff(normDots, 1, axis=0)
+    return np.abs(dotDiffs).max() <= threshold
+
+# Takes in array of 2D points and, for each 3 consecutive points, gives the 
+# centre of the circle defined by them.
+def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
+    # Let x_i be the points on the circle and let m_i = (x_i + x_{i+1})/2 be the
+    # midpoints. Let o_0 be orthogonal to (x_1 - x_0). The circle centre is
+    # located at m_0 t*o_0 for t such that m_0 + t*o_0 - m_1 is orthogonal 
+    # to (x_2 - x_1).
+    # That is, we find t s.t. dot(m_0 + t*o_0 - m_1, x_2 - x_1) == 0.
+    # I.e., dot(x_0 + x_1 + 2t*o_0 - (x_1 + x_2), x_2 - x_1) == 0
+    # I.e., t = dot(x_2 - x_0, x_2 - x_1)/2*dot(o_0, x_2 - x_1)
+    # => c = 0.5 * (x_0 + x_1 + dot(x_2 - x_0, x_2 - x_1)/dot(o, x2 - x1)*o_0)
+    diffs_1m0 = pts2D_1 - pts2D_0
+    diffs_2m1 = pts2D_2 - pts2D_1
+    ortho_dirs = np.empty(diffs_1m0.shape)
+    ortho_dirs[:, 0] = diffs_1m0[:, 1]
+    ortho_dirs[:, 1] = -diffs_1m0[:, 0]
+    # TODO: Need a check for when dot(ortho_dirs, x_2 - x_1) == 0, as then
+    # there is no circle going through the points (only a line).
+
+    numerator_dot = einsumDot(pts2D_2 - pts2D_0, diffs_2m1)
+    t_vals = numerator_dot / einsumDot(ortho_dirs, diffs_2m1)
+    t_scaled_orthos = scalarsVecsMul(t_vals, ortho_dirs)
+    centres = (pts2D_0 + pts2D_1 + t_scaled_orthos) / 2
+
+    return centres
+
+def rotateBySinAndCos2D(vecs, cosines, sines):
+    rot_mats = np.moveaxis(np.array([
+        [cosines, -sines],
+        [sines, cosines]
+    ]), -1, 0)
+
+    return einsumMatVecMul(rot_mats, vecs)
 
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
