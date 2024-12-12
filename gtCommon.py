@@ -199,7 +199,7 @@ def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
 
     return centres
 
-def rotateBySinAndCos2D(vecs, cosines, sines):
+def rotateBySinCos2D(vecs, cosines, sines):
     rot_mats = np.moveaxis(np.array([
         [cosines, -sines],
         [sines, cosines]

@@ -382,7 +382,6 @@ for i, combo in enumerate(combos):
     vel_crosses /= np.linalg.norm(vel_crosses, axis=-1, keepdims=True)
     min_vel_rot_aas = gtc.scalarsVecsMul(vel_angles, vel_crosses)
     min_vel_rot_qs = gtc.quatsFromAxisAngles(min_vel_rot_aas)
-    rev_min_vel_qs = gtc.conjugateQuats(min_vel_rot_qs)
 
     rough_circ_axes_0 = translation_diffs[1:-1]
     rough_circ_axes_1 = -translation_diffs[:-2]
@@ -425,10 +424,14 @@ for i, combo in enumerate(combos):
     c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
 
     c_angles_1 = np.arccos(c_cosines_1)
-    c_sines_1 = np.sin(c_angles_1)
+    c_angles_0 = np.arccos(c_cosines_0)
+
+    c_pred_angles = 1.5 * c_angles_1 - 0.5 * c_angles_0
+    c_cosines_pred = np.cos(c_pred_angles)
+    c_sines_pred = np.sin(c_pred_angles)
 
     c_trans_preds_2D = gtc.rotateBySinCos2D(
-        diffs_from_centres[2], c_cosines_1, c_sines_1
+        diffs_from_centres[2], c_cosines_pred, c_sines_pred
     )
 
     c_trans_preds = gtc.vecsTo3DUsingPlaneInfo(
@@ -452,22 +455,36 @@ for i, combo in enumerate(combos):
     # c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])/sq_radii
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
-    
-    # I guess I'm thinking that F2 = V(0>1)*F1*R1
-    # Which means R1 = F1^T V(0>1)^T F2
-    local_rots_vcase = gtc.multiplyQuatLists(
-        rev_rotations_quats[1:-2], gtc.multiplyQuatLists(
-            rev_min_vel_qs, rotations_quats[2:-1]
-    ))
 
-    r_mvel_plus_local_preds = np.empty(r_vel_preds.shape)
-    r_mvel_plus_local_preds[0] = r_vel_preds[0]
-    r_mvel_plus_local_preds[1:] = gtc.multiplyQuatLists(
-        min_vel_rot_qs, gtc.multiplyQuatLists(
-            rotations_quats[2:-1], local_rots_vcase
-        )
+    circle_rot_quats = np.empty(circle_plane_info.normals.shape[:-1] + (4,))
+    half_c_pred_angles = c_pred_angles / 2.0
+    circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
+    circle_rot_quats[:, 1:] = gtc.scalarsVecsMul(
+        np.sin(half_c_pred_angles), circle_plane_info.normals
     )
 
+
+    # I guess I'm thinking that F2 = V(0>1)*F1*R1
+    # Which means R1 = F1^T V(0>1)^T F2
+    def getArmRotPreds(arm_component_quats):
+        rev_arm_qs = gtc.conjugateQuats(min_vel_rot_qs)
+
+        local_rots = gtc.multiplyQuatLists(
+            rev_rotations_quats[1:-2], gtc.multiplyQuatLists(
+                rev_arm_qs, rotations_quats[2:-1]
+        ))
+
+        r_arm_preds = np.empty(r_vel_preds.shape)
+        r_arm_preds[0] = r_vel_preds[0]
+        r_arm_preds[1:] = gtc.multiplyQuatLists(
+            arm_component_quats, gtc.multiplyQuatLists(
+                rotations_quats[2:-1], local_rots
+            )
+        )
+        return r_arm_preds
+
+    r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
+    r_c_arm_preds = getArmRotPreds(circle_rot_quats)
 
     # unit_vel_test = gtc.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
@@ -701,7 +718,8 @@ for i, combo in enumerate(combos):
     allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
-    allResultsObj.addQuaternionResult("Min vel-align", r_mvel_plus_local_preds)
+    allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
+    allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
@@ -737,7 +755,7 @@ for i, combo in enumerate(combos):
 
 allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
 allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
-allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Min vel-align"], "aggv", True)
+allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
 
