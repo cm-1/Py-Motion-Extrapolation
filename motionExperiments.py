@@ -420,13 +420,40 @@ for i, combo in enumerate(combos):
         diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
    
     sq_radii = gtc.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
-    c_cosines_0 = gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
-    c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
+    # A good max for forearm length is 30cm, and 20cm for hand length.
+    # So a decent circle radius max is 50cm = 500mm.
+    radii_too_long = sq_radii > 250000 
 
-    c_angles_1 = np.arccos(c_cosines_1)
-    c_angles_0 = np.arccos(c_cosines_0)
+    c_angles = []
+    c_cosines = []
+    for j in range(2):
+        c_diff_dot = gtc.einsumDot(
+            diffs_from_centres[j], diffs_from_centres[j + 1]
+        )
+        c_cosines.append(
+            c_diff_dot/sq_radii
+        )
+        c_angles.append(np.arccos(c_cosines[-1]))
 
-    c_pred_angles = 1.5 * c_angles_1 - 0.5 * c_angles_0
+        # Numpy cross products of 2D vecs treat them like 3D vecs and return 
+        # only the z-coordinate of the result (since the rest are 0). We'll look
+        # at the sign to determine rotation direction about the circle axis.
+        c_crosses = np.cross(diffs_from_centres[j], diffs_from_centres[j + 1])
+        c_crosses_flip = (c_crosses < 0.0)
+        c_angles[-1][c_crosses_flip] = -c_angles[-1][c_crosses_flip]
+
+    MAX_CIRC_ANGLE = np.pi/2.0
+    prev_angle_sum = c_angles[0] + c_angles[1]
+    prev_angles_too_big = np.abs(prev_angle_sum) > MAX_CIRC_ANGLE
+
+    invalid_circ_indices = np.logical_or(radii_too_long, prev_angles_too_big)
+
+    c_pred_angles_base = 1.5 * c_angles[1] - 0.5 * c_angles[0]
+
+    c_pred_angles = np.clip(
+        c_pred_angles_base, a_min=-MAX_CIRC_ANGLE, a_max=MAX_CIRC_ANGLE
+    )
+
     c_cosines_pred = np.cos(c_pred_angles)
     c_sines_pred = np.sin(c_pred_angles)
 
@@ -434,10 +461,13 @@ for i, combo in enumerate(combos):
         diffs_from_centres[2], c_cosines_pred, c_sines_pred
     )
 
-    c_trans_preds = gtc.vecsTo3DUsingPlaneInfo(
+    c_trans_preds = np.empty(t_vel_preds.shape)
+    c_trans_preds[1:] = gtc.vecsTo3DUsingPlaneInfo(
         circle_centres + c_trans_preds_2D, circle_plane_info
     )
-    
+    c_trans_preds[0] = t_vel_preds[0]
+    c_trans_preds[1:][invalid_circ_indices] = t_quadratic_preds[1:][invalid_circ_indices]
+
     # c_centres3D = gtc.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
     # if not gtc.areVecArraysInSamePlanes([
     #     translations[:-3], translations[1:-2], translations[2:-1],
@@ -485,6 +515,7 @@ for i, combo in enumerate(combos):
 
     r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
     r_c_arm_preds = getArmRotPreds(circle_rot_quats)
+    r_c_arm_preds[1:][invalid_circ_indices] = r_vel_preds[1:][invalid_circ_indices]
 
     # unit_vel_test = gtc.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
