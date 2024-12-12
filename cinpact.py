@@ -2,7 +2,7 @@ import math
 import numpy as np
 
 class CinpactCurve:
-    def __init__(self, ctrlPts, supportRad: float, k: float, numSubdivPts: int):
+    def __init__(self, ctrlPts, isOpen: bool, supportRad: float, k: float, numSubdivPts: int):
         numCtrlPts = len(ctrlPts)
 
         # If ctrlPts is empty, just leave the curve empty.
@@ -17,7 +17,7 @@ class CinpactCurve:
 
         # We'll find and keep track of which Ctrl Pts have nonzero weights.
         ctrlPtRadius = int(math.ceil(supportRad))
-        startCtrlPt = 0
+        startCtrlPt = 0 if isOpen else -ctrlPtRadius
         midCtrlPt = 0
         endCtrlPt = ctrlPtRadius + 1 # non-inclusive
         if endCtrlPt > numCtrlPts:
@@ -30,8 +30,8 @@ class CinpactCurve:
 
         paramVals = []
 
-        for p in range(numSubdivPts):
-            ptSum = np.array([0.0, 0.0, 0.0])
+        for _ in range(numSubdivPts):
+            ptSum = np.zeros(len(ctrlPts[0]))
             weightSum = 0.0
             for i in range(startCtrlPt, endCtrlPt):
                 w = CinpactCurve.weightFunc(u, i, supportRad, k)
@@ -46,6 +46,9 @@ class CinpactCurve:
                 midCtrlPt += 1
                 startCtrlPt = midCtrlPt - ctrlPtRadius
                 endCtrlPt = midCtrlPt + ctrlPtRadius + 1
+                if isOpen:
+                    startCtrlPt = max(startCtrlPt, 0)
+                    endCtrlPt = min(endCtrlPt, len(ctrlPts))
         
         self.curvePoints = np.array(retPts)
         self.paramVals = np.array(paramVals)
