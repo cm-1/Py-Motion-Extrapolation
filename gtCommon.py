@@ -809,6 +809,10 @@ class BCOT_Data_Calculator:
         self.loadData()
         step = (1 + self.skipAmt) if useSkipAmt else 1
         return self._rotationsGTNP[::step]
+    def getRotationMatsGTNP(self, useSkipAmt):
+        self.loadData()
+        step = (1 + self.skipAmt) if useSkipAmt else 1
+        return self._rotationMatsGTNP[::step]
     def getRotationsCalcNP(self):
         self.loadData()
         return self._rotationsCalcNP
