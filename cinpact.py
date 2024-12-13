@@ -1,4 +1,5 @@
 import math
+import sys
 import numpy as np
 
 class CinpactCurve:
@@ -12,8 +13,14 @@ class CinpactCurve:
             return
         
         maxRad = float((numCtrlPts - 1) >> 1)
+        if (not isOpen) and (supportRad > maxRad):
+            warn_str = "Truncating support radius for closed curve; have not \
+                decided how to handle when it wraps around more than once yet!"
+            print(warn_str, file=sys.stderr)
 
-        step = (numCtrlPts - 1.0)/(numSubdivPts - 1.0)
+        lastToFirst = 0.0 if isOpen else 1.0
+
+        step = (numCtrlPts - 1.0 + lastToFirst)/(numSubdivPts - 1.0)
 
         # We'll find and keep track of which Ctrl Pts have nonzero weights.
         ctrlPtRadius = int(math.ceil(supportRad))
@@ -26,21 +33,22 @@ class CinpactCurve:
 
 
         u = 0.0
-        retPts = []
+        ctrlPtDim = len(ctrlPts[0])
+        self.curvePoints = np.empty((numSubdivPts, ctrlPtDim))
 
-        paramVals = []
+        self.paramVals = np.empty(numSubdivPts)
 
-        for _ in range(numSubdivPts):
-            ptSum = np.zeros(len(ctrlPts[0]))
+        for p in range(numSubdivPts):
+            ptSum = np.zeros(ctrlPtDim)
             weightSum = 0.0
             for i in range(startCtrlPt, endCtrlPt):
                 w = CinpactCurve.weightFunc(u, i, supportRad, k)
                 weightSum += w
                 ptSum += w * ctrlPts[(i + numCtrlPts) % numCtrlPts]
 
-            retPts.append((1.0/weightSum) * ptSum)
+            self.curvePoints[p] = (1.0/weightSum) * ptSum
 
-            paramVals.append(u)
+            self.paramVals[p] = u
             u += step
             if (u >= midCtrlPt + 1):
                 midCtrlPt += 1
@@ -48,11 +56,8 @@ class CinpactCurve:
                 endCtrlPt = midCtrlPt + ctrlPtRadius + 1
                 if isOpen:
                     startCtrlPt = max(startCtrlPt, 0)
-                    endCtrlPt = min(endCtrlPt, len(ctrlPts))
+                    endCtrlPt = min(endCtrlPt, numCtrlPts)
         
-        self.curvePoints = np.array(retPts)
-        self.paramVals = np.array(paramVals)
-
     def normSinc(u: float, i: int):
         x = math.pi * (u - float(i))
         if (x == 0.0):

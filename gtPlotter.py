@@ -33,7 +33,7 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
     init_t = lastFrameNum
     init_endpt = -1
 
-    curvePts = cinpact.CinpactCurve(calc, init_c, init_k, 1000).curvePoints
+    curvePts = cinpact.CinpactCurve(calc, True, init_c, init_k, 1000).curvePoints
 
     scaled_w = (w - w.min()) / w.ptp()
     colors = plt.cm.coolwarm(scaled_w)
@@ -89,7 +89,7 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 
         def updatePts(_):
             global curvePts
-            curvePts = cinpact.CinpactCurve(calc[:init_endpt], cSlider.val, kSlider.val, 1000).curvePoints
+            curvePts = cinpact.CinpactCurve(calc[:init_endpt], True, cSlider.val, kSlider.val, 1000).curvePoints
             end = int(tSlider.val)
             line[0].set_data_3d(
                 curvePts[:end, 0], curvePts[:end, 1], curvePts[:end, 2]
