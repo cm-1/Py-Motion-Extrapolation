@@ -90,7 +90,7 @@ for combo in combos:
     tau_facs = np.round(np.diff(angles) / np_tau)
     angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
     angles[..., 1:] -= angle_corrections
-    r_slerp_preds_aa = np.einsum('...i,...ij->...ij', angles, unitAxes)
+    r_slerp_preds_aa = gtc.applyScalarsToVecs(angles, unitAxes)
     '''
     r_slerp_preds_aa = angles[..., np.newaxis] * axes / np.sin(0.5 * angles[..., np.newaxis])
     r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))

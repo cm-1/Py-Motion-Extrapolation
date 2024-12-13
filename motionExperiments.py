@@ -596,7 +596,7 @@ for i, combo in enumerate(combos):
         all_vel_graphing_ratios, vel_proj_scalars[1:]))
     # p(3-2)onto(2-1), p(4-3)onto(3-2), ...
 
-    best_vel_preds = translations[1:-1] + np.einsum("i,ij->ij", vel_proj_scalars, translation_diffs[:-1])
+    best_vel_preds = translations[1:-1] + gtc.scalarsVecsMul(vel_proj_scalars, translation_diffs[:-1])
 
     acc_delta_sq_lens = gtc.einsumDot(t_acc_delta, t_acc_delta)
     # (2-0)^2, (3-1)^2, ...
@@ -630,7 +630,7 @@ for i, combo in enumerate(combos):
     # Dots are: (1-0)*(2-1), (2-1)*(3-2), ...
     
     acc_angle_ratios = 0.63837237 * acc_parallel_scalars + 0.83709242
-    acc_angle_preds = translations[2:-1] + np.einsum('i,ij->ij', acc_angle_ratios, translation_diffs[1:-1])
+    acc_angle_preds = translations[2:-1] + gtc.scalarsVecsMul(acc_angle_ratios, translation_diffs[1:-1])
     acc_angle_preds = np.vstack((t_vel_preds[:1], acc_angle_preds))
      
     # p(2-0)onto(2-1), p(3-1)onto(3-2), ...
@@ -871,8 +871,8 @@ ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 2]), axis = -1)
 v_line_coords = np.hstack((tx_coords[:-2], ptx_coords)).reshape((len(ptx_coords), 2, 2))
 
 #%%
-acc_err_x = np.einsum('ij,ij->i', sampleDeltas, sampleAccErrs[2:])
-acc_err_sqr_len = np.einsum('ij,ij->i', sampleAccErrs[2:], sampleAccErrs[2:])
+acc_err_x = gtc.einsumDot(sampleDeltas, sampleAccErrs[2:])
+acc_err_sqr_len = gtc.einsumDot(sampleAccErrs[2:], sampleAccErrs[2:])
 acc_err_y = np.sqrt(acc_err_sqr_len - (acc_err_x**2))
 
 
