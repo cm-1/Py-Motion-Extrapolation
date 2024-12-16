@@ -72,13 +72,20 @@ def rotateVecsByQuats(quats: np.ndarray, vecs: np.ndarray):
     conjs = conjugateQuats(quats)
     return multiplyQuatLists(quats, multiplyQuatLists(v_quats, conjs))[..., 1:]
 
-def quatsFromAxisAngles(axisAngleVals):
-    angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
+def quatsFromAxisAngles(unit_axes, angles):
+    angles_reshaped = angles
+    if angles.ndim != unit_axes.ndim:
+        angles_reshaped = angles[..., np.newaxis]
+    half_angs = angles_reshaped / 2
 
+    quaternions = np.hstack((np.cos(half_angs), np.sin(half_angs) * unit_axes))
+    return quaternions
+
+def quatsFromAxisAngleVec3s(axisAngleVals):
+    angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
     normed = axisAngleVals / angles
 
-    quaternions = np.hstack((np.cos(angles / 2), np.sin(angles / 2) * normed))
-    return quaternions
+    return quatsFromAxisAngles(normed, angles)
 
 def einsumDot(vecs0, vecs1):
     # Einsum is used to perform a dot product between consecutive axes.
@@ -356,10 +363,17 @@ def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
 
     return thetas
 
-# def axisAnglesFromQuats(quatVals):
-#     halfAngles = np.acrcos(quatVals[:, 0:1])
-#     angles = halfAngles + halfAngles
-#     axes = quatVals[:, 1:] / np.sin(halfAngles)
+# CURRENT IMPLEMENTATION DOES NOT GUARANTEE ANGLES WITHIN 0-PI RANGE!
+def axisAnglesFromQuats(quatVals):
+    # From a quaternion, we know the value of cos and plus-or-minus sin.
+    # We'll, for simplicity, assume sin is positive, meaning that the value
+    # returned by arccos is correct and the axis is pointing in the same dir
+    # as the unit axis.
+
+    halfAngles = np.arccos(quatVals[:, 0:1])
+    angles = halfAngles + halfAngles
+    axes = quatVals[:, 1:] / np.sin(halfAngles)
+    return axes, angles
 
 def multiplyQuatLists(q0, q1):
     e = np.empty((4, len(q0)), dtype=np.float64)

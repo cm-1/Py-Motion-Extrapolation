@@ -8,7 +8,7 @@ from bspline_approximation import bSplineFittingMat, BSplineFitCalculator
 import bspline
 
 import gtCommon as gtc
-from gtCommon import BCOT_Data_Calculator, quatsFromAxisAngles
+from gtCommon import BCOT_Data_Calculator
 
 TRANSLATION_THRESH = 20.0#50.0
 
@@ -84,8 +84,8 @@ class ConsolidatedResults:
 
     # Note: returns errors in radians!
     def getAxisAngleError(values, predictions): 
-        v_qs = quatsFromAxisAngles(values)
-        p_qs = quatsFromAxisAngles(predictions)
+        v_qs = gtc.quatsFromAxisAngleVec3s(values)
+        p_qs = gtc.quatsFromAxisAngleVec3s(predictions)
         return ConsolidatedResults.getQuatError(v_qs, p_qs)
 
     def getTranslationError(values, predictions):
@@ -302,7 +302,7 @@ for i, combo in enumerate(combos):
 
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_aa_gt = calculator.getRotationsGTNP(True)
-    rotations_gt_quats = gtc.quatsFromAxisAngles(rotations_aa_gt)
+    rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_aa_gt)
 
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
@@ -381,7 +381,7 @@ for i, combo in enumerate(combos):
     vel_crosses = np.cross(unit_vels[:-1], unit_vels[1:])
     vel_crosses /= np.linalg.norm(vel_crosses, axis=-1, keepdims=True)
     min_vel_rot_aas = gtc.scalarsVecsMul(vel_angles, vel_crosses)
-    min_vel_rot_qs = gtc.quatsFromAxisAngles(min_vel_rot_aas)
+    min_vel_rot_qs = gtc.quatsFromAxisAngleVec3s(min_vel_rot_aas)
 
     rough_circ_axes_0 = translation_diffs[1:-1]
     rough_circ_axes_1 = -translation_diffs[:-2]

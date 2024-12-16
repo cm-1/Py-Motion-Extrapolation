@@ -43,7 +43,7 @@ for i in range(numAAs):
 
 axisNorms = np.linalg.norm(np.diff(mats2, axis=0).reshape((-1, 9)), axis=-1)
 
-quats2 = gtc.quatsFromAxisAngles(axisAngles2)
+quats2 = gtc.quatsFromAxisAngleVec3s(axisAngles2)
 
 angles2 = gtc.anglesBetweenQuats(quats2[:-1], quats2[1:])
 
@@ -95,7 +95,7 @@ print("Any unexpecteds(2):", np.any(investigation_data[:, 0] > investigation_dat
 #%%
 
 vecs = np.random.sample((numAAs, 3))
-quats = gtc.quatsFromAxisAngles(axisAngles)
+quats = gtc.quatsFromAxisAngleVec3s(axisAngles)
 quatRes = gtc.rotateVecsByQuats(quats, vecs)
 matRes = gtc.einsumMatVecMul(mats, vecs)
 print("Max diff for quat thing:", np.abs(matRes - quatRes).max())
@@ -128,7 +128,7 @@ c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_rad
 c_angles_1 = np.arccos(c_cosines_1)
 c_sines_1 = np.sin(c_angles_1)
 
-c_trans_preds_2D = gtc.rotateBySinAndCos2D(
+c_trans_preds_2D = gtc.rotateBySinCos2D(
     diffs_from_centres[2], c_cosines_1, c_sines_1
 )
 

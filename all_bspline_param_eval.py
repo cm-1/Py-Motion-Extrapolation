@@ -41,8 +41,8 @@ for combo in combos:
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_gt_aa = calculator.getRotationsGTNP(True)
-    #rotations_gt_quats = gtc.quatsFromAxisAngles(rotations_gt_aa)
-    rotations_gt_quats = gtc.quatsFromAxisAngles(rotations_gt_aa)
+    #rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_gt_aa)
+    rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_gt_aa)
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations = rotations_gt_aa # TODO: Apply quat error to these.
@@ -166,7 +166,7 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 r_errs_start = len(pd.rotations_gt_aa) - len(r_aa_spline_preds)
                 t_errs = pd.translations_gt[t_errs_start:] - t_spline_preds
                 t_err_norms = np.linalg.norm(t_errs, axis = -1)
-                r_aa_spline_pred_quats = gtc.quatsFromAxisAngles(
+                r_aa_spline_pred_quats = gtc.quatsFromAxisAngleVec3s(
                     r_aa_spline_preds
                 )
 
