@@ -386,6 +386,17 @@ def multiplyQuatLists(q0, q1):
     e[3] = q0w*q1z + q0x*q1y - q0y*q1x + q0z*q1w
     return e.transpose()
 
+def multiplyLoneQuats(q0, q1):
+    e = np.empty(4, dtype=np.float64)
+    q0w, q0x, q0y, q0z = q0
+    q1w, q1x, q1y, q1z = q1
+ 
+    e[0] = q0w*q1w - q0x*q1x - q0y*q1y - q0z*q1z
+    e[1] = q0w*q1x + q0x*q1w + q0y*q1z - q0z*q1y
+    e[2] = q0w*q1y - q0x*q1z + q0y*q1w + q0z*q1x
+    e[3] = q0w*q1z + q0x*q1y - q0y*q1x + q0z*q1w
+
+    return e
 
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
@@ -709,6 +720,58 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
 
 
 
+def camObjConstAngularVelPreds(rotations_qs: np.ndarray):
+    rev_rotations_qs = conjugateQuats(rotations_qs)
+    rotation_q_diffs = multiplyQuatLists(
+        rotations_qs[1:], rev_rotations_qs[:-1]
+    )
+    rev_rotation_q_diffs =conjugateQuats(rotation_q_diffs)
+    # We're going to assume two axes of constant angular velocity operating in
+    # different spaces. One specific example of this, which we'll refer to from
+    # now on, is the camera and object both rotating in body space with constant
+    # angular velocity.
+    # Let M_k and C_k be the world orientations of the object and camera,
+    # respectively, at frame k. Let B_k = C_k^T M_k, and let C and M denote the
+    # per-frame body-space rotations s.t. C_{k+1} = C_k C and M_{k+1} = M_k M.
+    # We can observe that B_{k-n} = C^n B_k (M^T)^n for n >= 0. This means that
+    # M^T = B_k^T C^T B_{k-1}, meaning B_{k-2} = C B_{k-1} B_k^T C^T B_{k-1}.
+    # Rearranged, B_{k-2} B_{k-1}^T = C B_{k-1} B_k^T C^T
+    
+
+
+    # Now, how do we find C? An exact solution might not exist; how do we find a
+    # close one? Well, R Q R^T for any rotation matrices Q and R yields a new
+    # rotation which rotates Q's axis by R. So, we need to find the C that
+    # rotates the rotation axes appropriately.
+    # There are many such rotations; when we only have three prior frames to
+    # look at, we'll choose the smallest rotation. If we have more than three
+    # frames, we can narrow things down further by looking at F = C^T EM.
+    # We get FD^T = C^T EB^T C, meaning we also want to minimize the 
+    angular_vel_unit_axes, _ = axisAnglesFromQuats(rev_rotation_q_diffs)
+
+    km1_km2_axes = angular_vel_unit_axes[:-2]
+    k_km1_axes = angular_vel_unit_axes[1:-1]
+    C_axes = normalizeAll(np.cross(k_km1_axes, km1_km2_axes))
+    C_angles = np.arccos(einsumDot(k_km1_axes, km1_km2_axes))
+    # So, as a small update to the above: if the axes have an angle of over 90
+    # degrees, I'm going to instead rotate by angle - 180. Because if, for
+    # example, your two rotations were [0.1, 0, 0] and [-0.2, 0, 0], it'd be
+    # ridiculous to assume you have some angular velocity of 180deg/s in play.
+    # But because this would in some cases yield extremely large differences
+    # between the scaled axes, I'll have to do a thresholding after.
+    C_angles_excessive = C_angles > (np.pi / 2.0)
+    C_angles[C_angles_excessive] -= np.pi
+    C_quats = quatsFromAxisAngles(C_axes, C_angles)
+    Ct_quats = conjugateQuats(C_quats)
+
+
+    # Our next rotation will be C^T B_k M
+    B_k_quats = rotations_qs[2:-1]
+    B_km1_t_quats = rev_rotations_qs[1:-2]
+    M_quats = multiplyQuatLists(B_km1_t_quats, multiplyQuatLists(C_quats, B_k_quats))
+    retVal = multiplyQuatLists(Ct_quats, multiplyQuatLists(B_k_quats, M_quats))
+
+    return Ct_quats, M_quats, retVal
 
 
 class BCOT_Data_Calculator:

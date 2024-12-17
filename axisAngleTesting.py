@@ -143,3 +143,53 @@ if np.abs(sq_radii - gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[1])
 
 
 c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])
+
+#%%
+
+def randomRotationMat():
+    scaled_axis = np.random.uniform(-np.pi, np.pi, 3)
+    return gtc.matFromAxisAngle(scaled_axis)
+
+def randomUnitAxis():
+    unscaled = np.random.uniform(-1.0, 1.0, 3)
+    return unscaled / np.linalg.norm(unscaled)
+
+def randomSmallQuaternion(maxAngle):
+    half_angle = 0.5 * maxAngle * np.random.sample(1)[0]
+    axis = np.sin(half_angle) * randomUnitAxis()
+    return np.array([np.cos(half_angle), axis[0], axis[1], axis[2]])
+
+small_angle_max = (np.pi / 2.0) - 0.001
+rand_cam_rot = randomSmallQuaternion(small_angle_max) # Actually the transpose.
+rand_obj_rot = randomSmallQuaternion(small_angle_max)
+rand_initial_camobj = randomSmallQuaternion(small_angle_max)
+numCamObjTests = 100
+camObjframes = np.empty((numCamObjTests, 4))
+camObjframes[0] = rand_initial_camobj
+
+camTotal = np.array([1.0, 0.0, 0.0, 0.0])
+objTotal = rand_initial_camobj.copy()
+for i in range(1, numCamObjTests):
+    camTotal = gtc.multiplyLoneQuats(rand_cam_rot, camTotal)
+    objTotal = gtc.multiplyLoneQuats(objTotal, rand_obj_rot)
+    camObjframes[i] = gtc.multiplyLoneQuats(camTotal, objTotal)
+
+cs, ms, camObjPreds = gtc.camObjConstAngularVelPreds(camObjframes)
+
+
+print("camobjmaxerr:", np.abs(camObjPreds - camObjframes[3:]).max())
+print("Ct diffs:", np.abs(cs - rand_cam_rot).max())
+
+#%%
+def randomQuats(num):
+    return gtc.normalizeAll(np.random.uniform(-1, 1, (num, 4)))
+
+qs_to_reconstruct = randomQuats(100)
+q_to_ax, q_to_ang = gtc.axisAnglesFromQuats(qs_to_reconstruct)
+aas_to_qs_test = gtc.quatsFromAxisAngles(q_to_ax, q_to_ang)
+aa_quat_diffs = np.abs(np.stack([
+    aas_to_qs_test - qs_to_reconstruct, -aas_to_qs_test - qs_to_reconstruct
+], axis = 0))
+quat_diffs_per_q = np.sum(aa_quat_diffs, axis = -1)
+if np.max(np.min(quat_diffs_per_q), axis = 0) > 0.0001:
+    raise Exception("Quaternion reconstruction failed!")

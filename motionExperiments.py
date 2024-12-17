@@ -578,7 +578,12 @@ for i, combo in enumerate(combos):
     r_fixed_axis_preds2[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios2)
     r_fixed_axis_preds2[0] = r_vel_preds[0]
 
+    
+    camobj_preds = np.empty(r_vel_preds.shape)
+    camobj_preds[0] = r_vel_preds[0]
+    camobj_preds[1:] = gtc.camObjConstAngularVelPreds(rotations_quats)[-1]
 
+    
 
     # slerp_diffs = gtc.multiplyQuatLists(r_slerp_preds, rev_rotations_quats[1:-1])
     # slerp_axes = slerp_diffs[:, 1:] / np.linalg.norm(slerp_diffs[:, 1:], axis=-1, keepdims=True)
@@ -750,7 +755,8 @@ for i, combo in enumerate(combos):
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
-    allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
+    # allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
+    allResultsObj.addQuaternionResult("camobj", camobj_preds)
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
