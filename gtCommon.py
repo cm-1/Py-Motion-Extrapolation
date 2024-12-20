@@ -72,6 +72,10 @@ def rotateVecsByQuats(quats: np.ndarray, vecs: np.ndarray):
     conjs = conjugateQuats(quats)
     return multiplyQuatLists(quats, multiplyQuatLists(v_quats, conjs))[..., 1:]
 
+def loneQuatFromAxisAngle(unit_axis, angle):
+    half_ang = angle / 2
+    return np.array([np.cos(half_ang), np.sin(half_ang) * unit_axis])
+
 def quatsFromAxisAngles(unit_axes, angles):
     angles_reshaped = angles
     if angles.ndim != unit_axes.ndim:
@@ -370,9 +374,14 @@ def axisAnglesFromQuats(quatVals):
     # returned by arccos is correct and the axis is pointing in the same dir
     # as the unit axis.
 
-    halfAngles = np.arccos(quatVals[:, 0:1])
+    halfAngles = np.arccos(np.clip(quatVals[:, 0:1], -1.0, 1.0))
+    zero_ang_inds = (halfAngles < 0.000001).flatten()
+    pos_ang_inds = np.invert(zero_ang_inds)
+    angles = np.empty(len(quatVals))
+    axes = np.empty((len(quatVals), 3))
     angles = halfAngles + halfAngles
-    axes = quatVals[:, 1:] / np.sin(halfAngles)
+    axes[pos_ang_inds] = quatVals[:, 1:][pos_ang_inds] / np.sin(halfAngles[pos_ang_inds])
+    axes[zero_ang_inds] = [1.0, 0.0, 0.0]
     return axes, angles
 
 def multiplyQuatLists(q0, q1):
@@ -719,13 +728,23 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
 #     return np.array(retList)
 
 
+def flipObtuseAxes(unflipped_axes: np.ndarray):
+    angle_dots = einsumDot(unflipped_axes[1:], unflipped_axes[:-1])
+    needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
+    needs_no_flip = np.invert(needs_flip)
 
-def camObjConstAngularVelPreds(rotations_qs: np.ndarray):
-    rev_rotations_qs = conjugateQuats(rotations_qs)
-    rotation_q_diffs = multiplyQuatLists(
-        rotations_qs[1:], rev_rotations_qs[:-1]
-    )
-    rev_rotation_q_diffs =conjugateQuats(rotation_q_diffs)
+    ret_axes = np.empty(unflipped_axes.shape)
+    ret_axes[0] = unflipped_axes[0]
+    ret_axes[1:][needs_flip] = -unflipped_axes[1:][needs_flip]
+    ret_axes[1:][needs_no_flip] = unflipped_axes[1:][needs_no_flip]
+    return ret_axes
+
+
+def camObjConstAngularVelPreds(known_rotations_qs: np.ndarray, backup_predictions = None):
+
+    num_preds = len(known_rotations_qs) - 2 # How many predictions we'll create.
+    C_quats = np.empty((num_preds, 4))
+    
     # We're going to assume two axes of constant angular velocity operating in
     # different spaces. One specific example of this, which we'll refer to from
     # now on, is the camera and object both rotating in body space with constant
@@ -736,40 +755,128 @@ def camObjConstAngularVelPreds(rotations_qs: np.ndarray):
     # We can observe that B_{k-n} = C^n B_k (M^T)^n for n >= 0. This means that
     # M^T = B_k^T C^T B_{k-1}, meaning B_{k-2} = C B_{k-1} B_k^T C^T B_{k-1}.
     # Rearranged, B_{k-2} B_{k-1}^T = C B_{k-1} B_k^T C^T
-    
-
 
     # Now, how do we find C? An exact solution might not exist; how do we find a
     # close one? Well, R Q R^T for any rotation matrices Q and R yields a new
     # rotation which rotates Q's axis by R. So, we need to find the C that
     # rotates the rotation axes appropriately.
-    # There are many such rotations; when we only have three prior frames to
-    # look at, we'll choose the smallest rotation. If we have more than three
-    # frames, we can narrow things down further by looking at F = C^T EM.
-    # We get FD^T = C^T EB^T C, meaning we also want to minimize the 
-    angular_vel_unit_axes, _ = axisAnglesFromQuats(rev_rotation_q_diffs)
+    # There are many such rotations; to narrow things down, if there are more
+    # than three previous orientations, we can observe that
+    # B_{k-3} = C B_{k-2} B_k^T C^T B_{k-1}. So we also want C to take the axis
+    # of B_{k-2}B_k^T to B_{k-3}B_{k-1}^T. We'll prioritize the alignment of the
+    # B_{k-1}B_k axis to the B_{k-2}B_{k-1}^T axis, and then we'll use this 
+    # other goal to narrow down the equally-good options. I don't have time to
+    # type up the full justification right now, but essentially, we want the
+    # rotation that both takes the B_{k-1}B_k axis to the B_{k-2}B_{k-1}^T axis
+    # and would rotate the B_{k-2}B_k^T axis into the same plane spanned by
+    # the B_{k-2}B_{k-1}^T axis and the B_{k-3}B_{k-1}^T axis. Which means the
+    # cross of the axes to be rotated will be rotated into the cross of the
+    # target axes. If we know that Rx = y and Rv = w for four vecs v, w, x, y,
+    # then the rotation axis is parallel to cross(x-y, v-w). 
+    rev_rotations_qs = conjugateQuats(known_rotations_qs)
+    rotation_q_diffs = multiplyQuatLists(
+        known_rotations_qs[1:], rev_rotations_qs[:-1]
+    )
+    rotation_q_step2_diffs = multiplyQuatLists(
+        rotation_q_diffs[1:], rotation_q_diffs[:-1]
+    )
 
-    km1_km2_axes = angular_vel_unit_axes[:-2]
-    k_km1_axes = angular_vel_unit_axes[1:-1]
-    C_axes = normalizeAll(np.cross(k_km1_axes, km1_km2_axes))
-    C_angles = np.arccos(einsumDot(k_km1_axes, km1_km2_axes))
+    step1_diff_aas = axisAnglesFromQuats(rotation_q_diffs)
+    step1_diff_unit_axes, step1_diff_angles = step1_diff_aas
+    step2_diff_unit_axes, _ = axisAnglesFromQuats(rotation_q_step2_diffs)
+    unnormed_plane_axes = np.cross(
+        step1_diff_unit_axes[1:], step2_diff_unit_axes
+    )
+    
     # So, as a small update to the above: if the axes have an angle of over 90
-    # degrees, I'm going to instead rotate by angle - 180. Because if, for
+    # degrees, I'm going to instead rotate to the negative axes. Because if, for
     # example, your two rotations were [0.1, 0, 0] and [-0.2, 0, 0], it'd be
     # ridiculous to assume you have some angular velocity of 180deg/s in play.
     # But because this would in some cases yield extremely large differences
     # between the scaled axes, I'll have to do a thresholding after.
-    C_angles_excessive = C_angles > (np.pi / 2.0)
-    C_angles[C_angles_excessive] -= np.pi
+    aligned_step1_diff_axes = flipObtuseAxes(step1_diff_unit_axes)
+    plane_ax_norms = np.linalg.norm(unnormed_plane_axes, axis=-1, keepdims=True)
+    zero_plane_ax_inds = (plane_ax_norms <= 0.0).flatten()
+    plane_axes = np.empty(unnormed_plane_axes.shape)
+    pos_plane_ax_inds = np.invert(zero_plane_ax_inds)
+    plane_axes[pos_plane_ax_inds] = unnormed_plane_axes[pos_plane_ax_inds] / plane_ax_norms[pos_plane_ax_inds]
+    plane_axes[zero_plane_ax_inds] = unnormed_plane_axes[zero_plane_ax_inds]
+    aligned_plane_axes = flipObtuseAxes(plane_axes)
+
+    step1_disps = np.diff(aligned_step1_diff_axes[1:], 1, axis=0)
+    plane_disps = np.diff(aligned_plane_axes, 1, axis=0)
+    plane_disps[zero_plane_ax_inds[1:]] = 0.0
+    plane_disps[zero_plane_ax_inds[:-1]] = 0.0
+    
+    C_axes = np.empty((num_preds, 3))
+    C_angles = np.empty(num_preds)
+    C_axes[0] = 0.0 # Placeholder, since we'll use a different approach for [0].
+    C_axes[1:] = np.cross(step1_disps, plane_disps)
+    # Now, if any of our cross products at any step are zero, the above won't
+    # work. In that case, and also when we only have three prior frames to look 
+    # at, we'll choose the smallest rotation taking the B_{k-1}B_k axis to the
+    # B_{k-2}B_{k-1}^T axis.
+    sq_C_ax_lens = einsumDot(C_axes, C_axes)
+    cross_0_inds = (sq_C_ax_lens <= 0.00001)
+    valid_inds = np.invert(cross_0_inds)
+    
+    C_axes[valid_inds] = normalizeAll(C_axes[valid_inds])
+
+    _, prev_ortho_unnormed= parallelAndOrthoParts(
+        aligned_step1_diff_axes[:-1][valid_inds], C_axes[valid_inds], True
+    )
+    _, next_ortho_unnormed = parallelAndOrthoParts(
+        aligned_step1_diff_axes[1:][valid_inds], C_axes[valid_inds], True
+    )
+    prev_ortho_unit = normalizeAll(prev_ortho_unnormed)
+    next_ortho_unit = normalizeAll(next_ortho_unnormed)
+
+    ortho_dots = einsumDot(prev_ortho_unit, next_ortho_unit)
+    C_angles[valid_inds] = np.arccos(np.clip(ortho_dots, -1.0, 1.0))
+
+    km1_km2_axes = aligned_step1_diff_axes[:-1]
+    k_km1_axes = aligned_step1_diff_axes[1:]
+    step1_crosses = np.cross(k_km1_axes, km1_km2_axes)
+    step1_cross_norms = np.linalg.norm(
+        step1_crosses[cross_0_inds], axis=-1, keepdims=True
+    )
+    can_norm_inds = np.full(cross_0_inds.shape, False)
+    zero_step1_norm_ind_subset = (step1_cross_norms >= 0.00001).flatten()
+    can_norm_inds[cross_0_inds] = zero_step1_norm_ind_subset
+    
+    inds_to_div = np.logical_and(cross_0_inds, can_norm_inds)
+    step1_crosses[inds_to_div] /= step1_cross_norms[zero_step1_norm_ind_subset]
+    C_axes[cross_0_inds] = step1_crosses[cross_0_inds]
+    C_angles[cross_0_inds] = np.arccos(np.clip(einsumDot(
+        k_km1_axes[cross_0_inds], km1_km2_axes[cross_0_inds]
+    ), -1.0, 1.0))
+
+    obtuse_inds = np.full(valid_inds.shape, False)
+    obtuse_inds[valid_inds] = np.signbit(einsumDot(
+        step1_crosses[valid_inds], C_axes[valid_inds]
+    ))
+
+    flipped_ax_inds = np.logical_and(valid_inds, obtuse_inds)
+    C_angles[flipped_ax_inds] = -C_angles[flipped_ax_inds]
+
     C_quats = quatsFromAxisAngles(C_axes, C_angles)
-    Ct_quats = conjugateQuats(C_quats)
 
 
     # Our next rotation will be C^T B_k M
-    B_k_quats = rotations_qs[2:-1]
-    B_km1_t_quats = rev_rotations_qs[1:-2]
+    Ct_quats = conjugateQuats(C_quats)
+    B_k_quats = known_rotations_qs[2:]
+    B_km1_t_quats = rev_rotations_qs[1:-1]
     M_quats = multiplyQuatLists(B_km1_t_quats, multiplyQuatLists(C_quats, B_k_quats))
     retVal = multiplyQuatLists(Ct_quats, multiplyQuatLists(B_k_quats, M_quats))
+
+    if backup_predictions is not None:
+        C_eval_pt1 = multiplyQuatLists(C_quats, rotation_q_diffs[1:])
+        C_eval_qs = multiplyQuatLists(C_eval_pt1, Ct_quats)
+        C_eval_errs = anglesBetweenQuats(C_eval_qs, rotation_q_diffs[:-1])
+        errs_too_big = (C_eval_errs > np.pi)
+        ind_pad = len(backup_predictions) - num_preds
+        retVal[errs_too_big] = backup_predictions[ind_pad:][errs_too_big]
+
 
     return Ct_quats, M_quats, retVal
 

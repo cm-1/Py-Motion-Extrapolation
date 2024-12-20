@@ -171,14 +171,14 @@ camTotal = np.array([1.0, 0.0, 0.0, 0.0])
 objTotal = rand_initial_camobj.copy()
 for i in range(1, numCamObjTests):
     camTotal = gtc.multiplyLoneQuats(rand_cam_rot, camTotal)
-    objTotal = gtc.multiplyLoneQuats(objTotal, rand_obj_rot)
+    objTotal = gtc.multiplyLoneQuats(rand_obj_rot, objTotal)
     camObjframes[i] = gtc.multiplyLoneQuats(camTotal, objTotal)
+#%%
+cs, ms, camObjPreds = gtc.camObjConstAngularVelPreds(camObjframes[:-1])
 
-cs, ms, camObjPreds = gtc.camObjConstAngularVelPreds(camObjframes)
 
-
-print("camobjmaxerr:", np.abs(camObjPreds - camObjframes[3:]).max())
-print("Ct diffs:", np.abs(cs - rand_cam_rot).max())
+print("camobjmaxerr:", np.abs(camObjPreds[1:] - camObjframes[4:]).max())
+print("Ct diffs:", np.abs(cs[1:] - rand_cam_rot).max())
 
 #%%
 def randomQuats(num):
