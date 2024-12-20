@@ -583,6 +583,26 @@ for i, combo in enumerate(combos):
     camobj_preds[0] = r_vel_preds[0]
     camobj_preds[1:] = gtc.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
 
+    # r_rotqdiff_diffs = gtc.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
+    # r_rotqdiff_preds = np.empty(r_vel_preds.shape)
+    # r_rotqdiff_preds[0] = r_vel_preds[0]
+    # r_rotqdiff_preds[1:] = gtc.multiplyQuatLists(r_rotqdiff_diffs, rotations_quats[2:-1])
+
+    # r_movaxis_axes = gtc.reflectVecsOverLines(fixed_axes[:-2], fixed_axes[1:-1], True)
+    # r_movaxis_diffs = gtc.quatsFromAxisAngles(r_movaxis_axes, angles[1:-1] + angle_diffs[:-1])
+    # r_movaxis_preds = np.empty(r_vel_preds.shape)
+    # r_movaxis_preds[0] = r_vel_preds[0]
+    # r_movaxis_preds[1:] = gtc.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
+
+    scaled_axes = gtc.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
+    # test_quats = gtc.quatsFromAxisAngleVec3s(scaled_axes)
+    # max_scaledax_diff = np.abs(test_quats - rotation_quat_diffs[:-1]).max()
+    ang_accels = np.diff(scaled_axes, 1, axis=0)
+    # naive_lin_axes = gtc.replaceAtEnd(scaled_axes, scaled_axes[1:] + vel_ax_diffs, 1)
+    # naive_lin_q_diffs = gtc.quatsFromAxisAngleVec3s(naive_lin_axes)
+    # r_naive_lin_preds = gtc.multiplyQuatLists(
+    #     naive_lin_q_diffs, rotations_quats[1:-1]
+    # )
 
     
 

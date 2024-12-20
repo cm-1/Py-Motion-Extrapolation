@@ -58,8 +58,25 @@ PlaneInfoType = namedtuple(
     "PlaneInfo", ['plane_axes', 'normals', 'offset_dists']
 )
 
+
+def replaceAtEnd(to_replace: np.ndarray, replace_with: np.ndarray, len_diff_check = None):
+    ret_arr = np.empty(to_replace.shape)
+    len_diff = len(to_replace) - len(replace_with)
+    if len_diff_check is not None and len_diff != len_diff_check:
+        e_str = "Expected difference in array len ({}) was instead {}.".format(
+            len_diff_check, len_diff
+        )
+        raise Exception(e_str)
+    ret_arr[:len_diff] = to_replace[:len_diff]
+    ret_arr[len_diff:] = replace_with
+    return ret_arr
+
 def normalizeAll(vecs: np.ndarray):
-    return vecs / np.linalg.norm(vecs, axis = -1, keepdims=True)
+    ret_val = vecs / np.linalg.norm(vecs, axis = -1, keepdims=True)
+    # if (np.isnan(ret_val).any()):
+    #     raise Exception("NaN when normalizing vectors!")
+    return ret_val
+
 
 def conjugateQuats(quats: np.ndarray):
     conjugate_quats = np.empty(quats.shape)
@@ -71,6 +88,13 @@ def rotateVecsByQuats(quats: np.ndarray, vecs: np.ndarray):
     v_quats = np.insert(vecs, 0, np.zeros(vecs.shape[:-1]), axis = -1)
     conjs = conjugateQuats(quats)
     return multiplyQuatLists(quats, multiplyQuatLists(v_quats, conjs))[..., 1:]
+
+def reflectVecsOverLines(vecs: np.ndarray, line_dirs: np.ndarray, dirs_unit_len: bool):
+    proj_scalars = einsumDot(vecs, line_dirs)
+    if not dirs_unit_len:
+        proj_scalars /= einsumDot(line_dirs, line_dirs)
+    proj = scalarsVecsMul(proj_scalars, line_dirs)
+    return (proj + proj) - vecs
 
 def loneQuatFromAxisAngle(unit_axis, angle):
     half_ang = angle / 2
