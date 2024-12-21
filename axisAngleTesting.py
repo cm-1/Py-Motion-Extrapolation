@@ -1,7 +1,8 @@
 import numpy as np
-from gtCommon import matFromAxisAngle, axisAngleFromMatArray
-from gtCommon import matsFromScaledAxisAngleArray, matsFromAxisAngleArrays
-import gtCommon as gtc
+from posemath import matFromAxisAngle, axisAngleFromMatArray
+from posemath import matsFromScaledAxisAngleArray, matsFromAxisAngleArrays
+import posemath as pm
+import poseextrapolation as pex
 
 
 #%%
@@ -43,16 +44,16 @@ for i in range(numAAs):
 
 axisNorms = np.linalg.norm(np.diff(mats2, axis=0).reshape((-1, 9)), axis=-1)
 
-quats2 = gtc.quatsFromAxisAngleVec3s(axisAngles2)
+quats2 = pm.quatsFromAxisAngleVec3s(axisAngles2)
 
-angles2 = gtc.anglesBetweenQuats(quats2[:-1], quats2[1:])
+angles2 = pm.anglesBetweenQuats(quats2[:-1], quats2[1:])
 
 reproducedNorms = 4 - 4*np.cos(angles2)
 
 # Sum of the dot products of the axes of two frames should be 2*cos(angle) + 1.
 dotSums = np.zeros(angles2.shape)
 for i in range(3):
-    dotSums += gtc.einsumDot(mats2[:-1, :, i], mats2[1:, :, i])
+    dotSums += pm.einsumDot(mats2[:-1, :, i], mats2[1:, :, i])
 
 diffFromExpected = dotSums - (2*np.cos(angles2) + 1)
 
@@ -65,12 +66,12 @@ possibleNorms = np.linspace(0, 2*np.pi, numNormsToTest)
 investigation_data = np.empty((numAAs - 2, 3))
 for i in range(numAAs - 2):
     rot_diff = mats[i+1] @ mats[i].transpose()
-    # vel_axis = gtc.axisAngleFromMatArray(rot_diff.reshape((-1,3,3)))
+    # vel_axis = pm.axisAngleFromMatArray(rot_diff.reshape((-1,3,3)))
     # vel_axis /= np.linalg.norm(vel_axis)
     # vel_axis = vel_axis.flatten()
     prev = mats[i+1]
     target = mats[i+2]
-    near_angle = gtc.closestAnglesAboutAxis([prev], [target], fixed_axes[i:i+1])[0]#vel_axis)
+    near_angle = pm.closestAnglesAboutAxis([prev], [target], fixed_axes[i:i+1])[0]#vel_axis)
     near = matFromAxisAngle(near_angle * fixed_axes[i]) @ prev
     between = near @ (target).transpose()
     vel_pred = rot_diff @ prev
@@ -95,9 +96,9 @@ print("Any unexpecteds(2):", np.any(investigation_data[:, 0] > investigation_dat
 #%%
 
 vecs = np.random.sample((numAAs, 3))
-quats = gtc.quatsFromAxisAngleVec3s(axisAngles)
-quatRes = gtc.rotateVecsByQuats(quats, vecs)
-matRes = gtc.einsumMatVecMul(mats, vecs)
+quats = pm.quatsFromAxisAngleVec3s(axisAngles)
+quatRes = pm.rotateVecsByQuats(quats, vecs)
+matRes = pm.einsumMatVecMul(mats, vecs)
 print("Max diff for quat thing:", np.abs(matRes - quatRes).max())
 
 #%% Testing circle code:
@@ -106,49 +107,49 @@ circ_translations = np.stack([
     np.cos(circ_angles), np.sin(circ_angles), np.zeros(len(circ_angles))
 ], axis = -1)
 circ_diffs = np.diff(circ_translations, 1, axis=0)
-circle_plane_info = gtc.getPlaneInfo(
+circle_plane_info = pm.getPlaneInfo(
     circ_diffs[1:-1], -circ_diffs[:-2], circ_translations[:-3]
 )
 circle_axes = circle_plane_info.plane_axes
 circle_pts_2D = []
 for j in range(3):
-    circle_pts_2D.append(gtc.vecsTo2D(
+    circle_pts_2D.append(pm.vecsTo2D(
         circ_translations[j:(-3 + j)], *circle_axes
     ))
-circle_centres = gtc.circleCentres2D(*circle_pts_2D)
+circle_centres = pm.circleCentres2D(*circle_pts_2D)
 
 diffs_from_centres = []
 for j in range(3):
     diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
 
-sq_radii = gtc.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
-c_cosines_0 = gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
-c_cosines_1 = gtc.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
+sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
+c_cosines_0 = pm.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
+c_cosines_1 = pm.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
 
 c_angles_1 = np.arccos(c_cosines_1)
 c_sines_1 = np.sin(c_angles_1)
 
-c_trans_preds_2D = gtc.rotateBySinCos2D(
+c_trans_preds_2D = pm.rotateBySinCos2D(
     diffs_from_centres[2], c_cosines_1, c_sines_1
 )
 
-c_trans_preds = gtc.vecsTo3DUsingPlaneInfo(
+c_trans_preds = pm.vecsTo3DUsingPlaneInfo(
     circle_centres + c_trans_preds_2D, circle_plane_info
 )
 
-if np.abs(sq_radii - gtc.einsumDot(c_trans_preds_2D, c_trans_preds_2D)).max() > 0.0001:
+if np.abs(sq_radii - pm.einsumDot(c_trans_preds_2D, c_trans_preds_2D)).max() > 0.0001:
     raise Exception("Prediction radii are mismatched!")
-if np.abs(sq_radii - gtc.einsumDot(diffs_from_centres[1], diffs_from_centres[1])).max() > 0.0001:
+if np.abs(sq_radii - pm.einsumDot(diffs_from_centres[1], diffs_from_centres[1])).max() > 0.0001:
     raise Exception("Circle centres yield mismatched radii!")
 
 
-c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])
+c_cosines_2 = pm.einsumDot(c_trans_preds_2D, diffs_from_centres[2])
 
 #%%
 
 def randomRotationMat():
     scaled_axis = np.random.uniform(-np.pi, np.pi, 3)
-    return gtc.matFromAxisAngle(scaled_axis)
+    return pm.matFromAxisAngle(scaled_axis)
 
 def randomUnitAxis():
     unscaled = np.random.uniform(-1.0, 1.0, 3)
@@ -170,11 +171,11 @@ camObjframes[0] = rand_initial_camobj
 camTotal = np.array([1.0, 0.0, 0.0, 0.0])
 objTotal = rand_initial_camobj.copy()
 for i in range(1, numCamObjTests):
-    camTotal = gtc.multiplyLoneQuats(rand_cam_rot, camTotal)
-    objTotal = gtc.multiplyLoneQuats(rand_obj_rot, objTotal)
-    camObjframes[i] = gtc.multiplyLoneQuats(camTotal, objTotal)
+    camTotal = pm.multiplyLoneQuats(rand_cam_rot, camTotal)
+    objTotal = pm.multiplyLoneQuats(rand_obj_rot, objTotal)
+    camObjframes[i] = pm.multiplyLoneQuats(camTotal, objTotal)
 #%%
-cs, ms, camObjPreds = gtc.camObjConstAngularVelPreds(camObjframes[:-1])
+cs, ms, camObjPreds = pex.camObjConstAngularVelPreds(camObjframes[:-1])
 
 
 print("camobjmaxerr:", np.abs(camObjPreds[1:] - camObjframes[4:]).max())
@@ -182,11 +183,11 @@ print("Ct diffs:", np.abs(cs[1:] - rand_cam_rot).max())
 
 #%%
 def randomQuats(num):
-    return gtc.normalizeAll(np.random.uniform(-1, 1, (num, 4)))
+    return pm.normalizeAll(np.random.uniform(-1, 1, (num, 4)))
 
 qs_to_reconstruct = randomQuats(100)
-q_to_ax, q_to_ang = gtc.axisAnglesFromQuats(qs_to_reconstruct)
-aas_to_qs_test = gtc.quatsFromAxisAngles(q_to_ax, q_to_ang)
+q_to_ax, q_to_ang = pm.axisAnglesFromQuats(qs_to_reconstruct)
+aas_to_qs_test = pm.quatsFromAxisAngles(q_to_ax, q_to_ang)
 aa_quat_diffs = np.abs(np.stack([
     aas_to_qs_test - qs_to_reconstruct, -aas_to_qs_test - qs_to_reconstruct
 ], axis = 0))

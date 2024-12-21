@@ -9,6 +9,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 # from matplotlib.widgets import Slider
 
 import gtCommon as gtc
+import posemath as pm
 
 FRAME_SKIP_AMT = 0
 MAX_BCOT_FRAMES = 359 # Frames in longest BCOT vid.
@@ -52,7 +53,7 @@ class ObjSeqData:
             # Find acceleration norms, and negate norms to match whether 
             # consecutive acceleration *vectors* point in the same direction.
             self._signedAccelNorms = np.linalg.norm(self._accelData, axis = -1)
-            accelDots = gtc.einsumDot(self._accelData[1:], self._accelData[:-1]) 
+            accelDots = pm.einsumDot(self._accelData[1:], self._accelData[:-1]) 
             flip = np.logical_xor.accumulate(accelDots < 0, axis = -1)
             self._signedAccelNorms[1:][flip] = -self._signedAccelNorms[1:][flip]
 

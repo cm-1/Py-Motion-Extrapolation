@@ -10,7 +10,7 @@ import bspline
 import gtCommon as gtc
 from gtCommon import BCOT_Data_Calculator
 
-TRANSLATION_THRESH = 20.0#50.0
+import posemath as pm
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
@@ -30,7 +30,7 @@ def wahba(rough_mats):
     dets_V = np.linalg.det(Vh)
     last_diags = dets_U * dets_V
     Vh[:,-1,:] *= last_diags[..., np.newaxis]
-    return gtc.einsumMatMatMul(U, Vh)
+    return pm.einsumMatMatMul(U, Vh)
 
 def getRandomQuatError(shape, max_err_rads):
     axes = np.random.uniform(-1.0, 1.0, shape[:-1] + (3,))
@@ -80,12 +80,12 @@ class ConsolidatedResults:
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
         )
-        return gtc.anglesBetweenQuats(values[1:], full_predictions)
+        return pm.anglesBetweenQuats(values[1:], full_predictions)
 
     # Note: returns errors in radians!
     def getAxisAngleError(values, predictions): 
-        v_qs = gtc.quatsFromAxisAngleVec3s(values)
-        p_qs = gtc.quatsFromAxisAngleVec3s(predictions)
+        v_qs = pm.quatsFromAxisAngleVec3s(values)
+        p_qs = pm.quatsFromAxisAngleVec3s(predictions)
         return ConsolidatedResults.getQuatError(v_qs, p_qs)
 
     def getTranslationError(values, predictions):
@@ -302,12 +302,12 @@ for i, combo in enumerate(combos):
 
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_aa_gt = calculator.getRotationsGTNP(True)
-    rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_aa_gt)
+    rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_aa_gt)
 
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations_quats = rotations_gt_quats
-    #  = gtc.multiplyQuatLists(
+    #  = pm.multiplyQuatLists(
     #     getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
     #     rotations_gt_quats
     # )
@@ -323,11 +323,11 @@ for i, combo in enumerate(combos):
 
     
     
-    rev_rotations_quats = gtc.conjugateQuats(rotations_quats)
+    rev_rotations_quats = pm.conjugateQuats(rotations_quats)
 
 
 
-    rotation_quat_diffs = gtc.multiplyQuatLists(
+    rotation_quat_diffs = pm.multiplyQuatLists(
         rotations_quats[1:], rev_rotations_quats[:-1]
     )
 
@@ -337,15 +337,15 @@ for i, combo in enumerate(combos):
     rotations_aa_acc = np.diff(rotation_aa_diffs[:-1], axis=0)
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
-    t_screw_preds = translations[1:-1] + gtc.rotateVecsByQuats(rotation_quat_diffs[:-1], translation_diffs[:-1])
+    t_screw_preds = translations[1:-1] + pm.rotateVecsByQuats(rotation_quat_diffs[:-1], translation_diffs[:-1])
     # t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
-    r_vel_preds = gtc.multiplyQuatLists(
+    r_vel_preds = pm.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_quats[1:-1]
     )
-    # r_vel_preds = gtc.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
+    # r_vel_preds = pm.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
     r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
-    # r_slerp_preds = gtc.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
+    # r_slerp_preds = pm.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
@@ -370,41 +370,41 @@ for i, combo in enumerate(combos):
     t_jerk_preds = t_quadratic_preds.copy()
     t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
 
-    complete_vel_sq_lens = gtc.einsumDot(
+    complete_vel_sq_lens = pm.einsumDot(
         translation_diffs, translation_diffs
     ) # (1-0)^2, (2-1)^2, ...
     prev_vel_sq_lens = complete_vel_sq_lens[:-1]
     speeds = np.sqrt(prev_vel_sq_lens)
     unit_vels = translation_diffs[:-1] / speeds[..., np.newaxis]
-    unit_vel_dots = gtc.einsumDot(unit_vels[1:], unit_vels[:-1])
+    unit_vel_dots = pm.einsumDot(unit_vels[1:], unit_vels[:-1])
     vel_angles = np.arccos(unit_vel_dots)
     vel_crosses = np.cross(unit_vels[:-1], unit_vels[1:])
     vel_crosses /= np.linalg.norm(vel_crosses, axis=-1, keepdims=True)
-    min_vel_rot_aas = gtc.scalarsVecsMul(vel_angles, vel_crosses)
-    min_vel_rot_qs = gtc.quatsFromAxisAngleVec3s(min_vel_rot_aas)
+    min_vel_rot_aas = pm.scalarsVecsMul(vel_angles, vel_crosses)
+    min_vel_rot_qs = pm.quatsFromAxisAngleVec3s(min_vel_rot_aas)
 
     rough_circ_axes_0 = translation_diffs[1:-1]
     rough_circ_axes_1 = -translation_diffs[:-2]
-    circle_plane_info = gtc.getPlaneInfo(
+    circle_plane_info = pm.getPlaneInfo(
         rough_circ_axes_0, rough_circ_axes_1, translations[:-3]
     )
 
     circle_axes = circle_plane_info.plane_axes
 
     '''
-    plane_normals = gtc.normalizeAll(np.cross(
+    plane_normals = pm.normalizeAll(np.cross(
         rough_circ_axes_0, rough_circ_axes_1
     ))
-    if not gtc.areAxisArraysOrthonormal([
+    if not pm.areAxisArraysOrthonormal([
         circle_axes[0], circle_axes[1], plane_normals
     ], loud=True):
         raise Exception("Orthonormality issue!")
-    if np.abs(gtc.einsumDot(plane_normals, rough_circ_axes_1)).max() > 0.001:
+    if np.abs(pm.einsumDot(plane_normals, rough_circ_axes_1)).max() > 0.001:
         raise Exception("Plane normal issue!")
     '''
     circle_pts_2D = []
     for j in range(3):
-        circle_pts_2D.append(gtc.vecsTo2D(
+        circle_pts_2D.append(pm.vecsTo2D(
             translations[j:(-3 + j)], *circle_axes
         ))
 
@@ -413,13 +413,13 @@ for i, combo in enumerate(combos):
     # if np.abs(circ_pt_norms - orig_nroms).max() > 0.0001:
     #     raise Exception("Norm issue!")
         
-    circle_centres = gtc.circleCentres2D(*circle_pts_2D)
+    circle_centres = pm.circleCentres2D(*circle_pts_2D)
 
     diffs_from_centres = []
     for j in range(3):
         diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
    
-    sq_radii = gtc.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
+    sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
     # A good max for forearm length is 30cm, and 20cm for hand length.
     # So a decent circle radius max is 50cm = 500mm.
     radii_too_long = sq_radii > 250000 
@@ -427,7 +427,7 @@ for i, combo in enumerate(combos):
     c_angles = []
     c_cosines = []
     for j in range(2):
-        c_diff_dot = gtc.einsumDot(
+        c_diff_dot = pm.einsumDot(
             diffs_from_centres[j], diffs_from_centres[j + 1]
         )
         c_cosines.append(
@@ -457,19 +457,19 @@ for i, combo in enumerate(combos):
     c_cosines_pred = np.cos(c_pred_angles)
     c_sines_pred = np.sin(c_pred_angles)
 
-    c_trans_preds_2D = gtc.rotateBySinCos2D(
+    c_trans_preds_2D = pm.rotateBySinCos2D(
         diffs_from_centres[2], c_cosines_pred, c_sines_pred
     )
 
     c_trans_preds = np.empty(t_vel_preds.shape)
-    c_trans_preds[1:] = gtc.vecsTo3DUsingPlaneInfo(
+    c_trans_preds[1:] = pm.vecsTo3DUsingPlaneInfo(
         circle_centres + c_trans_preds_2D, circle_plane_info
     )
     c_trans_preds[0] = t_vel_preds[0]
     c_trans_preds[1:][invalid_circ_indices] = t_quadratic_preds[1:][invalid_circ_indices]
 
-    # c_centres3D = gtc.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
-    # if not gtc.areVecArraysInSamePlanes([
+    # c_centres3D = pm.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
+    # if not pm.areVecArraysInSamePlanes([
     #     translations[:-3], translations[1:-2], translations[2:-1],
     #     c_trans_preds, c_centres3D
     # ]):
@@ -477,19 +477,19 @@ for i, combo in enumerate(combos):
     # radii_comparisons = []
     # for j in range(3):
     #     c_diffs3D = translations[j:(-3 + j)] - c_centres3D
-    #     radii_comparisons.append(gtc.einsumDot(c_diffs3D, c_diffs3D))       
+    #     radii_comparisons.append(pm.einsumDot(c_diffs3D, c_diffs3D))       
     # pred_from_c3D = c_trans_preds - c_centres3D
-    # radii_comparisons.append(gtc.einsumDot(pred_from_c3D, pred_from_c3D))
+    # radii_comparisons.append(pm.einsumDot(pred_from_c3D, pred_from_c3D))
     # if np.abs(np.diff(radii_comparisons, 1, axis=0)).max() > 0.0001:
     # #     raise Exception("3D radii difference that wasn't expected!")
-    # c_cosines_2 = gtc.einsumDot(c_trans_preds_2D, diffs_from_centres[2])/sq_radii
+    # c_cosines_2 = pm.einsumDot(c_trans_preds_2D, diffs_from_centres[2])/sq_radii
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
 
     circle_rot_quats = np.empty(circle_plane_info.normals.shape[:-1] + (4,))
     half_c_pred_angles = c_pred_angles / 2.0
     circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
-    circle_rot_quats[:, 1:] = gtc.scalarsVecsMul(
+    circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
         np.sin(half_c_pred_angles), circle_plane_info.normals
     )
 
@@ -497,17 +497,17 @@ for i, combo in enumerate(combos):
     # I guess I'm thinking that F2 = V(0>1)*F1*R1
     # Which means R1 = F1^T V(0>1)^T F2
     def getArmRotPreds(arm_component_quats):
-        rev_arm_qs = gtc.conjugateQuats(min_vel_rot_qs)
+        rev_arm_qs = pm.conjugateQuats(min_vel_rot_qs)
 
-        local_rots = gtc.multiplyQuatLists(
-            rev_rotations_quats[1:-2], gtc.multiplyQuatLists(
+        local_rots = pm.multiplyQuatLists(
+            rev_rotations_quats[1:-2], pm.multiplyQuatLists(
                 rev_arm_qs, rotations_quats[2:-1]
         ))
 
         r_arm_preds = np.empty(r_vel_preds.shape)
         r_arm_preds[0] = r_vel_preds[0]
-        r_arm_preds[1:] = gtc.multiplyQuatLists(
-            arm_component_quats, gtc.multiplyQuatLists(
+        r_arm_preds[1:] = pm.multiplyQuatLists(
+            arm_component_quats, pm.multiplyQuatLists(
                 rotations_quats[2:-1], local_rots
             )
         )
@@ -517,7 +517,7 @@ for i, combo in enumerate(combos):
     r_c_arm_preds = getArmRotPreds(circle_rot_quats)
     r_c_arm_preds[1:][invalid_circ_indices] = r_vel_preds[1:][invalid_circ_indices]
 
-    # unit_vel_test = gtc.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
+    # unit_vel_test = pm.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
     #     raise Exception("Made a mistake!")
 
@@ -532,21 +532,21 @@ for i, combo in enumerate(combos):
     # r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
 
-    r_squad_preds = gtc.squad(rotations_quats, 2)[:-1]
+    r_squad_preds = pm.squad(rotations_quats, 2)[:-1]
     r_squad_preds = np.vstack((r_vel_preds[:1], r_squad_preds))
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
     r_mats = calculator.getRotationMatsGTNP(True)
     fixed_axes = rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
-    r_fixed_axis_closest_angs = gtc.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
-    r_fixed_axis_closest_rots = gtc.matsFromAxisAngleArrays(
+    r_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
+    r_fixed_axis_closest_rots = pm.matsFromAxisAngleArrays(
         r_fixed_axis_closest_angs, fixed_axes[:-1]
     ) 
-    r_fixed_axis_bcs_mats = gtc.einsumMatMatMul(
+    r_fixed_axis_bcs_mats = pm.einsumMatMatMul(
         r_fixed_axis_closest_rots, r_mats[1:-1]
     )
-    r_fixed_axis_bcs = gtc.axisAngleFromMatArray(r_fixed_axis_bcs_mats)
+    r_fixed_axis_bcs = pm.axisAngleFromMatArray(r_fixed_axis_bcs_mats)
 
     # Convert mats into "separated" lists of their columns.
     # wahba_points_local = np.moveaxis(r_mats, -1, 0)
@@ -556,64 +556,64 @@ for i, combo in enumerate(combos):
         wahba_inputs[..., j] /= wahba_col_norms[..., j:j+1]
     wahba_outputs = wahba(wahba_inputs)
 
-    wahba_pred = gtc.axisAngleFromMatArray(wahba_outputs)
+    wahba_pred = pm.axisAngleFromMatArray(wahba_outputs)
 
-    angles = gtc.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
+    angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
     max_angle = max(max_angle, angles.max())
 
     angle_diffs = np.diff(angles, 1, axis=0)
-    axis_dots = gtc.einsumDot(fixed_axes[1:], fixed_axes[:-1])
+    axis_dots = pm.einsumDot(fixed_axes[1:], fixed_axes[:-1])
     angle_diffs[axis_dots < np.cos(np.deg2rad(1))] = 0
     angle_ratios = 2 + (angle_diffs[:-1]/angles[1:-1])
 
-    next_axis_angs = gtc.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
+    next_axis_angs = pm.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
     angle_diffs2 = angles[1:-1] - next_axis_angs
     angle_ratios2 = 2 + (np.clip(angle_diffs2, a_min = None, a_max = 0)/angles[1:-1])
 
     r_fixed_axis_preds = np.empty((len(rotations) - 2, 4))
-    r_fixed_axis_preds[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
+    r_fixed_axis_preds[1:] = pm.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
     r_fixed_axis_preds[0] = r_vel_preds[0]
 
     r_fixed_axis_preds2 = np.empty((len(rotations) - 2, 4))
-    r_fixed_axis_preds2[1:] = gtc.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios2)
+    r_fixed_axis_preds2[1:] = pm.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios2)
     r_fixed_axis_preds2[0] = r_vel_preds[0]
 
     
     camobj_preds = np.empty(r_vel_preds.shape)
     camobj_preds[0] = r_vel_preds[0]
-    camobj_preds[1:] = gtc.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
+    camobj_preds[1:] = pm.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
 
-    # r_rotqdiff_diffs = gtc.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
+    # r_rotqdiff_diffs = pm.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
     # r_rotqdiff_preds = np.empty(r_vel_preds.shape)
     # r_rotqdiff_preds[0] = r_vel_preds[0]
-    # r_rotqdiff_preds[1:] = gtc.multiplyQuatLists(r_rotqdiff_diffs, rotations_quats[2:-1])
+    # r_rotqdiff_preds[1:] = pm.multiplyQuatLists(r_rotqdiff_diffs, rotations_quats[2:-1])
 
-    # r_movaxis_axes = gtc.reflectVecsOverLines(fixed_axes[:-2], fixed_axes[1:-1], True)
-    # r_movaxis_diffs = gtc.quatsFromAxisAngles(r_movaxis_axes, angles[1:-1] + angle_diffs[:-1])
+    # r_movaxis_axes = pm.reflectVecsOverLines(fixed_axes[:-2], fixed_axes[1:-1], True)
+    # r_movaxis_diffs = pm.quatsFromAxisAngles(r_movaxis_axes, angles[1:-1] + angle_diffs[:-1])
     # r_movaxis_preds = np.empty(r_vel_preds.shape)
     # r_movaxis_preds[0] = r_vel_preds[0]
-    # r_movaxis_preds[1:] = gtc.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
+    # r_movaxis_preds[1:] = pm.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
 
-    scaled_axes = gtc.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
-    # test_quats = gtc.quatsFromAxisAngleVec3s(scaled_axes)
+    scaled_axes = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
+    # test_quats = pm.quatsFromAxisAngleVec3s(scaled_axes)
     # max_scaledax_diff = np.abs(test_quats - rotation_quat_diffs[:-1]).max()
     ang_accels = np.diff(scaled_axes, 1, axis=0)
-    # naive_lin_axes = gtc.replaceAtEnd(scaled_axes, scaled_axes[1:] + vel_ax_diffs, 1)
-    # naive_lin_q_diffs = gtc.quatsFromAxisAngleVec3s(naive_lin_axes)
-    # r_naive_lin_preds = gtc.multiplyQuatLists(
+    naive_lin_axes = pm.replaceAtEnd(scaled_axes, scaled_axes[1:] + ang_accels, 1)
+    # naive_lin_q_diffs = pm.quatsFromAxisAngleVec3s(naive_lin_axes)
+    # r_naive_lin_preds = pm.multiplyQuatLists(
     #     naive_lin_q_diffs, rotations_quats[1:-1]
     # )
 
     
 
-    # slerp_diffs = gtc.multiplyQuatLists(r_slerp_preds, rev_rotations_quats[1:-1])
+    # slerp_diffs = pm.multiplyQuatLists(r_slerp_preds, rev_rotations_quats[1:-1])
     # slerp_axes = slerp_diffs[:, 1:] / np.linalg.norm(slerp_diffs[:, 1:], axis=-1, keepdims=True)
-    # axisComp = np.abs(gtc.einsumDot(slerp_axes, fixed_axes[:-1]))
+    # axisComp = np.abs(pm.einsumDot(slerp_axes, fixed_axes[:-1]))
     # if np.any(axisComp < 0.999):
     #     raise Exception("Axes don't match!")
     
 
-    vel_dots = gtc.einsumDot(translation_diffs[1:], translation_diffs[:-1])
+    vel_dots = pm.einsumDot(translation_diffs[1:], translation_diffs[:-1])
     # (1-0)*(2-1), (2-1)*(3-2), ...
     vel_proj_scalars = vel_dots / prev_vel_sq_lens
     # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
@@ -622,11 +622,11 @@ for i, combo in enumerate(combos):
         all_vel_graphing_ratios, vel_proj_scalars[1:]))
     # p(3-2)onto(2-1), p(4-3)onto(3-2), ...
 
-    best_vel_preds = translations[1:-1] + gtc.scalarsVecsMul(vel_proj_scalars, translation_diffs[:-1])
+    best_vel_preds = translations[1:-1] + pm.scalarsVecsMul(vel_proj_scalars, translation_diffs[:-1])
 
-    acc_delta_sq_lens = gtc.einsumDot(t_acc_delta, t_acc_delta)
+    acc_delta_sq_lens = pm.einsumDot(t_acc_delta, t_acc_delta)
     # (2-0)^2, (3-1)^2, ...
-    acc_delta_dots = gtc.einsumDot(t_acc_delta, translation_diffs[2:])
+    acc_delta_dots = pm.einsumDot(t_acc_delta, translation_diffs[2:])
     # (2-0)*(3-2), (3-1)*(4-3), ...
     acc_delta_proj_scalars = acc_delta_dots / acc_delta_sq_lens
     # p(3-2)onto(2-0), p(4-3)onto(3-1), ...
@@ -634,15 +634,15 @@ for i, combo in enumerate(combos):
         all_acc_delta_ratios, acc_delta_proj_scalars
     ))
 
-    acc_vel_dots = gtc.einsumDot(translations_acc, translation_diffs[1:-1])
+    acc_vel_dots = pm.einsumDot(translations_acc, translation_diffs[1:-1])
     # (2-0)*(2-1), (3-1)*(3-2), ...
     acc_parallel_scalars = acc_vel_dots / prev_vel_sq_lens[1:]
     # p(2-0)onto(2-1), p(3-1)onto(3-2), ...
     acc_ortho_vecs = translations_acc - (acc_parallel_scalars[..., np.newaxis] * translation_diffs[1:-1])
-    # test_ortho = gtc.einsumDot(acc_ortho_vecs, translation_diffs[1:-1])
+    # test_ortho = pm.einsumDot(acc_ortho_vecs, translation_diffs[1:-1])
     # print(test_ortho.max())
-    acc_ortho_sq_lens = gtc.einsumDot(acc_ortho_vecs, acc_ortho_vecs)
-    acc_ortho_dots = gtc.einsumDot(acc_ortho_vecs, translation_diffs[2:])
+    acc_ortho_sq_lens = pm.einsumDot(acc_ortho_vecs, acc_ortho_vecs)
+    acc_ortho_dots = pm.einsumDot(acc_ortho_vecs, translation_diffs[2:])
     acc_ortho_ratios = 2 * acc_ortho_dots / acc_ortho_sq_lens
     all_acc_ortho_ratios = np.concatenate((
         all_acc_ortho_ratios, acc_ortho_ratios
@@ -656,7 +656,7 @@ for i, combo in enumerate(combos):
     # Dots are: (1-0)*(2-1), (2-1)*(3-2), ...
     
     acc_angle_ratios = 0.63837237 * acc_parallel_scalars + 0.83709242
-    acc_angle_preds = translations[2:-1] + gtc.scalarsVecsMul(acc_angle_ratios, translation_diffs[1:-1])
+    acc_angle_preds = translations[2:-1] + pm.scalarsVecsMul(acc_angle_ratios, translation_diffs[1:-1])
     acc_angle_preds = np.vstack((t_vel_preds[:1], acc_angle_preds))
      
     # p(2-0)onto(2-1), p(3-1)onto(3-2), ...
@@ -677,17 +677,17 @@ for i, combo in enumerate(combos):
     
     # Then multiply it by [next_vel_parallel, next_vel_ortho]
     next_vel_parallel = vel_dots[1:] / vel_lens
-    next_vel_ortho_dots = gtc.einsumDot(translation_diffs[2:], acc_ortho_vecs)
+    next_vel_ortho_dots = pm.einsumDot(translation_diffs[2:], acc_ortho_vecs)
     next_vel_vecs = np.empty((len(vel_lens), 2))
     next_vel_vecs[:, 0] = next_vel_parallel
     next_vel_vecs[:, 1] = next_vel_ortho_dots / acc_ortho_comp
 
-    vel_acc_2D_solve = gtc.einsumMatVecMul(inv_mats, next_vel_vecs)
+    vel_acc_2D_solve = pm.einsumMatVecMul(inv_mats, next_vel_vecs)
     all_vel_acc_2D_solves = np.concatenate((
         all_vel_acc_2D_solves, vel_acc_2D_solve
     ))
 
-    complete_vel_sq_lens = gtc.einsumDot(
+    complete_vel_sq_lens = pm.einsumDot(
         translation_diffs, translation_diffs
     ) # (1-0)^2, (2-1)^2, ...
     prev_vel_sq_lens = complete_vel_sq_lens[:-1]
@@ -696,7 +696,7 @@ for i, combo in enumerate(combos):
     # p(2-1)onto(1-0), p(3-2)onto(2-1), ...
     all_vel_ratios = np.concatenate((all_vel_ratios, vel_proj_scalars))
 
-    acc_vel_dots = gtc.einsumDot(translations_acc, translation_diffs[1:-1])
+    acc_vel_dots = pm.einsumDot(translations_acc, translation_diffs[1:-1])
     # (2-0)*(2-1), (3-1)*(3-2), ...
     acc_parallel_scalars = acc_vel_dots / prev_vel_sq_lens[1:]
 
@@ -898,8 +898,8 @@ ptx_coords = np.stack((timestamps[2:], t_vel_preds[:, 2]), axis = -1)
 v_line_coords = np.hstack((tx_coords[:-2], ptx_coords)).reshape((len(ptx_coords), 2, 2))
 
 #%%
-acc_err_x = gtc.einsumDot(sampleDeltas, sampleAccErrs[2:])
-acc_err_sqr_len = gtc.einsumDot(sampleAccErrs[2:], sampleAccErrs[2:])
+acc_err_x = pm.einsumDot(sampleDeltas, sampleAccErrs[2:])
+acc_err_sqr_len = pm.einsumDot(sampleAccErrs[2:], sampleAccErrs[2:])
 acc_err_y = np.sqrt(acc_err_sqr_len - (acc_err_x**2))
 
 

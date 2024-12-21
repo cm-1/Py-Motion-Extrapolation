@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from bspline_approximation import BSplineFitCalculator
 import gtCommon as gtc
+import posemath as pm
 
 from gtCommon import BCOT_Data_Calculator
 
@@ -41,8 +42,8 @@ for combo in combos:
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_gt_aa = calculator.getRotationsGTNP(True)
-    #rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_gt_aa)
-    rotations_gt_quats = gtc.quatsFromAxisAngleVec3s(rotations_gt_aa)
+    #rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
+    rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations = rotations_gt_aa # TODO: Apply quat error to these.
@@ -52,15 +53,15 @@ for combo in combos:
     rev_rotations_quats[:, 0] = rotations_gt_quats[:, 0]
     rev_rotations_quats[:, 1:] = -rotations_gt_quats[:, 1:]
 
-    rotation_quat_diffs = gtc.multiplyQuatLists(
+    rotation_quat_diffs = pm.multiplyQuatLists(
         rotations_gt_quats[1:], rev_rotations_quats[:-1]
     )
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
-    r_vel_preds = gtc.multiplyQuatLists(
+    r_vel_preds = pm.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_gt_quats[1:-1]
     )
-    r_slerp_preds = gtc.quatSlerp(rotations_gt_quats[1:-1], r_vel_preds, 0.75)
+    r_slerp_preds = pm.quatSlerp(rotations_gt_quats[1:-1], r_vel_preds, 0.75)
 
     
     # Converts quaternions to axis-angle, then corrects jumps.
@@ -74,7 +75,7 @@ for combo in combos:
     angleInds[zeroAngleInds] = 0
     angleInds = np.maximum.accumulate(angleInds)
     axes[zeroAngleInds] = axes[angleInds[zeroAngleInds]]
-    angle_dots = gtc.einsumDot(axes[1:], axes[:-1]) 
+    angle_dots = pm.einsumDot(axes[1:], axes[:-1]) 
     needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
     angles[..., 1:][needs_flip] = -angles[..., 1:][needs_flip]
     sinVals = np.sin(angles/2.0)
@@ -90,7 +91,7 @@ for combo in combos:
     tau_facs = np.round(np.diff(angles) / np_tau)
     angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
     angles[..., 1:] -= angle_corrections
-    r_slerp_preds_aa = gtc.applyScalarsToVecs(angles, unitAxes)
+    r_slerp_preds_aa = pm.applyScalarsToVecs(angles, unitAxes)
     '''
     r_slerp_preds_aa = angles[..., np.newaxis] * axes / np.sin(0.5 * angles[..., np.newaxis])
     r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))
@@ -166,11 +167,11 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 r_errs_start = len(pd.rotations_gt_aa) - len(r_aa_spline_preds)
                 t_errs = pd.translations_gt[t_errs_start:] - t_spline_preds
                 t_err_norms = np.linalg.norm(t_errs, axis = -1)
-                r_aa_spline_pred_quats = gtc.quatsFromAxisAngleVec3s(
+                r_aa_spline_pred_quats = pm.quatsFromAxisAngleVec3s(
                     r_aa_spline_preds
                 )
 
-                r_aa_errs = gtc.anglesBetweenQuats(
+                r_aa_errs = pm.anglesBetweenQuats(
                     r_aa_spline_pred_quats, pd.rotations_gt_quats[r_errs_start:]
                 )
 
