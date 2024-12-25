@@ -133,11 +133,11 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
             for combo_ind, combo in enumerate(combos):
                 pd = poseDataDict[combo]
 
-                '''
-                all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
-                    pd.translations, pd.rotations_aa
-                )))
-                '''
+'''
+                # all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
+                #     pd.translations, pd.rotations_aa
+                # )))
+'''
 
 
                 # all_spline_preds = spline_pred_calculator.smoothAllData(

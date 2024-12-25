@@ -11,6 +11,7 @@ import gtCommon as gtc
 from gtCommon import BCOT_Data_Calculator
 
 import posemath as pm
+import poseextrapolation as pex
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
@@ -581,7 +582,7 @@ for i, combo in enumerate(combos):
     
     camobj_preds = np.empty(r_vel_preds.shape)
     camobj_preds[0] = r_vel_preds[0]
-    camobj_preds[1:] = pm.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
+    camobj_preds[1:] = pex.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
 
     # r_rotqdiff_diffs = pm.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
     # r_rotqdiff_preds = np.empty(r_vel_preds.shape)

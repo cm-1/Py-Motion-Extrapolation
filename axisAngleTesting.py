@@ -147,9 +147,7 @@ c_cosines_2 = pm.einsumDot(c_trans_preds_2D, diffs_from_centres[2])
 
 #%%
 
-def randomRotationMat():
-    scaled_axis = np.random.uniform(-np.pi, np.pi, 3)
-    return pm.matFromAxisAngle(scaled_axis)
+
 
 def randomUnitAxis():
     unscaled = np.random.uniform(-1.0, 1.0, 3)

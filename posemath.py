@@ -266,6 +266,9 @@ def squad(qs, u):
 
     return quatBezier([qs[1:-1], aqs, bqs, qs[2:]], u)
 
+def randomRotationMat():
+    scaled_axis = np.random.uniform(-np.pi, np.pi, 3)
+    return matFromAxisAngle(scaled_axis)
 
 def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
     # Let X = [x,y,z]^T be one world-to-local frame & F = [r,s,t]^T be another.
