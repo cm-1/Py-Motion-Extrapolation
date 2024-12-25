@@ -337,10 +337,10 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
 
 # Tangents are calculated as the derivatives of the interpolating polynomial
 # for five consecutive points containing a given point.
-def tangentsFromPoints(pVals):
+def tangentsFromPoints(pVals, shouldNormalize: bool = True):
     numPts = pVals.shape[0]
 
-    tangentVals = []
+    tangentVals = np.empty(pVals.shape)
 
     for i in range(numPts):
         estT = None
@@ -355,14 +355,13 @@ def tangentsFromPoints(pVals):
         else:
             estT = pVals[i-2] - 8*pVals[i-1] + 8*pVals[i+1] - pVals[i+2]
 
-        estT = estT/np.linalg.norm(estT)
-        tangentVals.append(estT)
-    
-    tangentValsNP = np.array(tangentVals)
-    if pVals.shape != tangentValsNP.shape:
-        raise Exception("I messed up the tangents creation.")
-
-    return tangentValsNP
+        if shouldNormalize:
+            estT = estT/np.linalg.norm(estT)
+        else:
+            estT /= 12 # Omitted denominator from above calculations.
+        tangentVals[i] = estT
+        
+    return tangentVals
 
 # Only calculates the first normal vector, with the expectation that it would
 # be propogated.

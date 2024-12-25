@@ -1,7 +1,40 @@
+#%%
 import matplotlib.pyplot as plt
 import numpy as np
 
-from cinpact import CinpactCurve
+from cinpact import CinpactCurve, CinpactLogic
+from bspline import tangentsFromPoints
+
+#%% Derivative Tests
+randPts = np.random.uniform(-35.0, 35.0, (35, 2))
+
+randK = 10.0
+randRad = 10.0
+randOpen = True
+randCurve = CinpactCurve(randPts, randOpen, randRad, randK, 3500)
+
+rand_i = np.random.random_integers(0, 35, 1)[0]
+rand_us = np.linspace(rand_i - 0.1, rand_i + 0.1, 100)
+weight_vals = CinpactCurve.weightFunc(rand_us, rand_i, randRad, randK)
+
+approxDerivs = tangentsFromPoints(randCurve.curvePoints, False)
+approxDerivs /= randCurve.paramVals[1] - randCurve.paramVals[0]
+# approxDerivs = tangentsFromPoints(weight_vals, False)
+# approxDerivs /= rand_us[1] - rand_us[0]
+# theoreticalDerivs = CinpactCurve.weightAndDerivative(rand_us, rand_i, randRad, randK)[1]
+sampleParams = randCurve.paramVals[::5]
+theoreticalDerivs = np.empty((len(sampleParams), len(randPts[0])))
+for i, u in enumerate(sampleParams):
+    ptRange = randCurve.ctrlPtBoundsInclusive(u)
+    dfilter = randCurve.weightDerivativeFilter(u)
+    if np.abs(dfilter.sum()) > 0.0001:
+        raise Exception("Filter sum issue!")
+    selectCtrlPts = randPts[ptRange[0]:ptRange[1] + 1]
+    theoreticalDerivs[i] = np.dot(selectCtrlPts.transpose(), dfilter).transpose()
+
+print("Deriv diff:", np.abs(approxDerivs[::5] - theoreticalDerivs).max())
+
+#%% Visual Test
 
 julyPts = [
     (-0.4453846153846154, 0.16893899204244023),
