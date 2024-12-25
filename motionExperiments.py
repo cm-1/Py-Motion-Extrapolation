@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from matplotlib.widgets import Slider
+
 from dataclasses import dataclass, field
 import typing
 
@@ -25,6 +27,20 @@ if DESIRED_CTRL_PTS > PTS_USED_TO_CALC_LAST:
 if DESIRED_CTRL_PTS < SPLINE_DEGREE + 1:
     raise Exception("Need at least order=k=(degree + 1) control points!")
 
+# Function that replicates velocity-of-pts-on-local-sphere Wahba model by
+# finding the right angle to rotate by, since axis can be shown to be the same
+# as in const-angular-velocity model.
+def angWahbaFunc(x: np.ndarray):
+    numerator = 2.0 * np.sin(x)
+    denominator = 2.0 * np.cos(x) - 1.0
+    return np.arctan2(numerator, denominator) - x
+
+def generalizedLogistic(x: np.ndarray, alpha: float, beta: float):
+    return (1 + np.exp(-beta*x))**(-alpha) - 0.5
+
+def gudermannian(x: np.ndarray):
+    return 2.0 * np.arctan(np.tanh(x / 2.0))
+# rough_mats are the approximate frame axes.
 def wahba(rough_mats):
     U, S, Vh = np.linalg.svd(rough_mats)
     dets_U = np.linalg.det(U)
@@ -32,6 +48,13 @@ def wahba(rough_mats):
     last_diags = dets_U * dets_V
     Vh[:,-1,:] *= last_diags[..., np.newaxis]
     return pm.einsumMatMatMul(U, Vh)
+
+# Take in approximate axes in a different frame than the one being solved for.
+def wahbaMoreGeneral(rough_mats, reference_mat):
+    sum_mat = np.zeros(rough_mats.shape)
+    for i in range(3):
+        sum_mat += np.einsum('bi,j->bij', rough_mats[:, :, i], reference_mat[:, i])
+    return wahba(sum_mat)
 
 def getRandomQuatError(shape, max_err_rads):
     axes = np.random.uniform(-1.0, 1.0, shape[:-1] + (3,))
@@ -296,6 +319,10 @@ all_vel_angles = np.zeros((0,))
 all_acc_angles = np.zeros((0,))
 all_acc_ortho_mags = np.zeros((0,))
 all_vel_acc_2D_solves = np.zeros((0, 2))
+
+all_rot_angles = []
+all_bcsfa_angles = []
+# all_wahba_angles = np.zeros((0,))
 maxTimestamps = 0
 max_angle = 0
 for i, combo in enumerate(combos):
@@ -551,13 +578,14 @@ for i, combo in enumerate(combos):
 
     # Convert mats into "separated" lists of their columns.
     # wahba_points_local = np.moveaxis(r_mats, -1, 0)
-    wahba_inputs = 2 * r_mats[1:-1] - r_mats[:-2]
-    wahba_col_norms = np.linalg.norm(wahba_inputs, axis=1)
-    for j in range(3):
-        wahba_inputs[..., j] /= wahba_col_norms[..., j:j+1]
-    wahba_outputs = wahba(wahba_inputs)
+    
 
-    wahba_pred = pm.axisAngleFromMatArray(wahba_outputs)
+    
+    # wahba_inputs = 2 * r_mats[1:-1] - r_mats[:-2]
+    # wahba_outputs = wahba(wahba_inputs)
+    # wahba_pred = pm.axisAngleFromMatArray(wahba_outputs) 
+
+
 
     angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
     max_angle = max(max_angle, angles.max())
@@ -579,6 +607,16 @@ for i, combo in enumerate(combos):
     r_fixed_axis_preds2[1:] = pm.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios2)
     r_fixed_axis_preds2[0] = r_vel_preds[0]
 
+    # wahba_angles = pm.replaceAtEnd(angles[:-1], angWahbaFunc(angles[:-1]))
+    sigmoid_angles = pm.replaceAtEnd(angles[:-1], gudermannian(angles[:-1]))
+    sigmoid_q_diffs = pm.quatsFromAxisAngles(fixed_axes[:-1], sigmoid_angles)
+    sigmoid_pred = pm.multiplyQuatLists(sigmoid_q_diffs, rotations_quats[1:-1])
+    # wahba_qs = pm.quatsFromAxisAngleVec3s(wahba_pred)
+    # wahba_q_diffs = pm.multiplyQuatLists(wahba_qs, rev_rotations_quats[1:-1])
+    # wahba_axes, wahba_angles = pm.axisAnglesFromQuats(wahba_q_diffs)
+    all_rot_angles.append(angles[:-1])   
+    # all_wahba_angles = np.concatenate((all_wahba_angles, wahba_angles.flatten()))
+    all_bcsfa_angles.append(r_fixed_axis_closest_angs.flatten())
     
     camobj_preds = np.empty(r_vel_preds.shape)
     camobj_preds[0] = r_vel_preds[0]
@@ -773,12 +811,14 @@ for i, combo in enumerate(combos):
     allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
     allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
-    allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
+    # allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
+    allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
     # allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
-    allResultsObj.addQuaternionResult("camobj", camobj_preds)
+    # allResultsObj.addQuaternionResult("camobj", camobj_preds)
+    # allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
@@ -813,7 +853,7 @@ for i, combo in enumerate(combos):
             sampleDeltas = t_acc_delta / t_deltas_n
 
 allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
-allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
+# allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
 allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
@@ -884,7 +924,126 @@ plt.show()
 
 #%%
 
+# ang_inds_to_dec = all_wahba_angles > np.pi
+# np_tau = 2.0 * np.pi
+# all_wahba_angles[ang_inds_to_dec] = np_tau - all_wahba_angles[ang_inds_to_dec]
+
+all_prev_angles = np.concatenate(all_rot_angles)
+concatenated_bcsfa_angles = np.concatenate(all_bcsfa_angles)
+plt.scatter(all_prev_angles, concatenated_bcsfa_angles, label="bcs angles")
+half_pi = np.pi / 2.0
+plt.title("Wahba-based vs. const-angular-vel angles")
+plt.xlabel("Const-angular-vel angles")
+plt.ylabel("Wahba-based angles")
+plt_x_vals = np.linspace(0, np.pi / 2.0, 100)
+plt.plot([0,half_pi],[0,half_pi], label="y=x line")
+plt.plot(plt_x_vals, angWahbaFunc(plt_x_vals), label="atan(...) - x")
+plt.plot(plt_x_vals, generalizedLogistic(plt_x_vals, 1, 4), label="logistic")
+plt.legend()
 plt.show()
+
+
+#%%
+
+all_prev1_angles = np.concatenate([angs[1:] for angs in all_rot_angles])
+all_prev2_angles = np.concatenate([angs[:-1] for angs in all_rot_angles])
+concatenated_bcsfa_angles2 = np.concatenate([
+    bcsfas[1:] for bcsfas in all_bcsfa_angles
+])
+
+p2_p1_bcs_stack = np.stack([
+    all_prev2_angles, all_prev1_angles, concatenated_bcsfa_angles2
+], axis=-1)
+
+def getBestFitForInds(inds):
+    x = all_prev1_angles[inds]
+    y = concatenated_bcsfa_angles2[inds]
+    mat = np.stack((x, np.ones_like(x)), axis=1)
+    best_fit = np.linalg.lstsq(mat, y, rcond=None)[0]
+    print(best_fit)
+    cxs = np.array([0, half_pi])
+    return np.stack([cxs, best_fit[1] + best_fit[0] * cxs])
+
+prev2_angle_step = 0.1
+
+prev2_angle_buf = 0.05
+# Arg of "0" means same figure reused if cell ran again.
+fig = plt.figure(0, figsize=plt.figaspect(1/3)) 
+ax = fig.add_subplot(1, 3, 1, projection='3d')
+ax2 = fig.add_subplot(1, 3, 2)
+ax3 = fig.add_subplot(1, 3, 3)
+
+curr_prev2_val = 0.0
+max_prev2_angle = all_prev2_angles.max()
+while curr_prev2_val + prev2_angle_step < max_prev2_angle:
+    curr_prev2_max = curr_prev2_val + prev2_angle_step
+    prev2_label = "{:0.2f}-{:0.2f}".format(curr_prev2_val, curr_prev2_max)
+    curr_prev2_inds = np.logical_and(
+        all_prev2_angles > curr_prev2_val, all_prev2_angles < curr_prev2_max
+    )
+    filtered_p2_p1_bcs = p2_p1_bcs_stack[curr_prev2_inds].transpose()
+    ax.scatter(*filtered_p2_p1_bcs, label=prev2_label)
+    ax2.scatter(*filtered_p2_p1_bcs[1:], label=prev2_label)
+    curr_prev2_val += prev2_angle_step
+    best_fit_coords = getBestFitForInds(curr_prev2_inds)
+    ax3.plot(*best_fit_coords, label=prev2_label)
+
+
+planeYZ = np.meshgrid([-half_pi, half_pi], [-half_pi, half_pi])
+planeX = np.zeros_like(planeYZ[0])
+plane_surf0 = ax.plot_surface(
+    planeX - prev2_angle_buf, *planeYZ, alpha=0.34, color='r', shade=False
+)
+plane_surf1 = ax.plot_surface(
+    planeX + prev2_angle_buf, *planeYZ, alpha=0.34, color='r', shade=False
+)
+
+prev2_plane_init_inds = all_prev2_angles < prev2_angle_buf
+prev2_init_data = p2_p1_bcs_stack[prev2_plane_init_inds].transpose()[1:]
+prev2_plot_2D, = ax2.plot(
+    *prev2_init_data, marker='.', ls='', color="yellow", label="highlighted"
+)
+best_fit_coords = getBestFitForInds(prev2_plane_init_inds)
+best_fit_plot, = ax2.plot(*best_fit_coords)
+p2_p1_bcs_lims = np.stack([
+    np.min(p2_p1_bcs_stack, axis=0), np.max(p2_p1_bcs_stack, axis=0)
+], axis=-1)
+ax2.set_xlim(*p2_p1_bcs_lims[1])
+ax2.set_ylim(*p2_p1_bcs_lims[2])
+ax.set_xlim(*p2_p1_bcs_lims[0])
+ax.set_ylim(*p2_p1_bcs_lims[1])
+ax.legend()
+ax2.legend(loc='upper right')
+ax3.legend()
+
+def move_plane(val):
+    global plane_surf0
+    global plane_surf1
+    global prev2_plot_2D
+    global best_fit_plot
+    plane_surf0.remove()
+    plane_surf0 = ax.plot_surface(
+        planeX + val - prev2_angle_buf, *planeYZ, alpha=0.34, color='r',
+        shade=False
+    )
+    plane_surf1.remove()
+    plane_surf1 = ax.plot_surface(
+        planeX + val + prev2_angle_buf, *planeYZ, alpha=0.34, color='r',
+        shade=False
+    )
+    slider_plane_inds = (np.abs(val - all_prev2_angles) < prev2_angle_buf)
+    slider_plane_data = p2_p1_bcs_stack[slider_plane_inds].transpose()[1:]
+    prev2_plot_2D.set_data(*slider_plane_data)
+    best_fit_coordvals = getBestFitForInds(slider_plane_inds)
+    best_fit_plot.set_data(*best_fit_coordvals)
+    fig.canvas.draw_idle()
+
+slider_ax = plt.axes([0.6, 0.15, 0.35, 0.03])#, facecolor='lightgoldenrodyellow')
+slider = Slider(slider_ax, "prev2", 0.0, half_pi, valinit=0.0)
+slider.on_changed(move_plane)
+
+plt.show()
+#%%
 
 
 
