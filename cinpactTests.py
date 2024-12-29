@@ -14,25 +14,34 @@ randOpen = True
 randCurve = CinpactCurve(randPts, randOpen, randRad, randK, 3500)
 
 rand_i = np.random.random_integers(0, 35, 1)[0]
-rand_us = np.linspace(rand_i - 0.1, rand_i + 0.1, 100)
+rand_us = np.linspace(rand_i - 0.1, rand_i + 0.1, 101)
 weight_vals = CinpactCurve.weightFunc(rand_us, rand_i, randRad, randK)
 
+# delta_u = rand_us[1] - rand_us[0]
+delta_u = randCurve.paramVals[1] - randCurve.paramVals[0]
 approxDerivs = tangentsFromPoints(randCurve.curvePoints, False)
-approxDerivs /= randCurve.paramVals[1] - randCurve.paramVals[0]
 # approxDerivs = tangentsFromPoints(weight_vals, False)
-# approxDerivs /= rand_us[1] - rand_us[0]
-# theoreticalDerivs = CinpactCurve.weightAndDerivative(rand_us, rand_i, randRad, randK)[1]
+approxDerivs /= delta_u
+approx2ndDerivs = tangentsFromPoints(approxDerivs, False)
+approx2ndDerivs /= delta_u
+# theoreticalDerivInfo = CinpactCurve.weightAndDerivative(rand_us, rand_i, randRad, randK, True)
+# theoreticalDerivs, theoreticalDerivs2 = theoreticalDerivInfo
 sampleParams = randCurve.paramVals[::5]
 theoreticalDerivs = np.empty((len(sampleParams), len(randPts[0])))
+theoreticalDerivs2 = np.empty((len(sampleParams), len(randPts[0])))
+theoreticals = (theoreticalDerivs, theoreticalDerivs2)
 for i, u in enumerate(sampleParams):
     ptRange = randCurve.ctrlPtBoundsInclusive(u)
-    dfilter = randCurve.weightDerivativeFilter(u)
-    if np.abs(dfilter.sum()) > 0.0001:
-        raise Exception("Filter sum issue!")
+    dfilters = randCurve.weightDerivativeFilter(u, True)
+    derivs = []
     selectCtrlPts = randPts[ptRange[0]:ptRange[1] + 1]
-    theoreticalDerivs[i] = np.dot(selectCtrlPts.transpose(), dfilter).transpose()
+    for j, filter in enumerate(dfilters):
+        if np.abs(filter.sum()) > 0.0001:
+            raise Exception("Filter sum issue for order {}!".format(j))
+        theoreticals[j][i] = np.dot(selectCtrlPts.transpose(), filter).transpose()
 
 print("Deriv diff:", np.abs(approxDerivs[::5] - theoreticalDerivs).max())
+print("Deriv2 diff:", np.abs(approx2ndDerivs[::5] - theoreticalDerivs2).max())
 
 #%% Visual Test
 

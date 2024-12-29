@@ -100,7 +100,22 @@ class CinpactCurve(CinpactLogic):
         tempering = CinpactCurve.temperingFunc(u, i, supportRad, k)
         return nsinc * tempering
 
-    def weightAndDerivative(u: float, i: int, supportRad: float, k: float):
+    def _quotientDeriv(f, g, fd, gd, g2=None):
+        if g2 is None:
+            g2 = g**2
+        return fd/g - f*gd/g2
+
+    def _quotientDeriv2(f, g, fd, gd, fd2, gd2, g2 = None):
+        # For quotient rule, derivative of f/g is f'/g - fg'/g^2. Which means 
+        # the 2nd derivative is:
+        #   f''/g - f'g'/g^2 - [(f'g' + fg'')/g^2 - 2fg(g')^2/g^4]
+        #   = f''/g + (-2f'g' - fg'' + 2f(g')^2/g)/g^2
+        if g2 is None:
+            g2 = g**2
+        two_gd = 2*gd
+        return fd2/g + (-fd*two_gd - f*gd2 + f*gd*two_gd/g)/g2
+        
+    def weightAndDerivative(u: float, i: int, supportRad: float, k: float, include_2nd_deriv: bool):
         # We need the derivative of:
         # e^(...)sin(...)/(...)
         # Let's start with the derivative of e^(...)
@@ -119,43 +134,98 @@ class CinpactCurve(CinpactLogic):
         umi = umi_all[inside_inds]
         umi_sq = umi**2
 
-        e_pt = CinpactCurve.temperingFunc(u_np[inside_inds], i, supportRad, k)
-        sinc_pt = CinpactCurve.normSinc(u_np[inside_inds], i)
-
+        e_numer = -k*umi_sq
         e_denom = supportRad*supportRad - umi_sq
-        frac_pt = umi_sq/(e_denom**2) + 1.0/e_denom
-        e_d_pt = -2*k*umi*(frac_pt)
-        e_d_pt *= e_pt*sinc_pt
+        exp_frac = e_numer/e_denom
+        e_pt = np.exp(exp_frac)
+        e_denom2 = e_denom**2
+        e_denom_d = -2 * umi
+        e_numer_d = k*e_denom_d
+        e_exp_d = CinpactCurve._quotientDeriv(
+            e_numer, e_denom, e_numer_d, e_denom_d, e_denom2
+        )
+        e_exp_d2 = None
+        if include_2nd_deriv:
+            e_numer_d2 = -2*k
+            e_denom_d2 = -2
+            e_exp_d2 = CinpactCurve._quotientDeriv2(
+                e_numer, e_denom, e_numer_d, e_denom_d, e_numer_d2, e_denom_d2,
+                e_denom2
+            )
 
         zero_inds = umi == 0.0
         umi[zero_inds] = 1.0 # Prevent divide-by-zero warnings.
         piumi = np.pi * umi
 
-        sinc_d_pt = np.zeros_like(umi)
-        sinc_d_pt = np.cos(piumi)/umi - np.sin(piumi)/(umi*piumi)
-        sinc_d_pt[zero_inds] = 0.0
-        sinc_d_pt *= e_pt
+        sinc_num = np.sin(piumi)
+        sinc_pt = sinc_num/piumi
+        sinc_pt[zero_inds] = 1.0
+        sinc_num_d_nopi = np.cos(piumi)
+        sinc_d = np.empty_like(umi)
+        sinc_d_pt1 = sinc_num_d_nopi/umi
+        piumiumi = (umi*piumi)
+        sinc_d_pt2 = sinc_num/piumiumi
+        sinc_d = sinc_d_pt1 - sinc_d_pt2
+        sinc_d[zero_inds] = 0.0
+        sinc_d2 = None
+        if include_2nd_deriv:
+            sinc_d2_pt11 = -np.pi * sinc_num / umi
+            sinc_d2_mid = sinc_num_d_nopi / umi_sq
+            # d/du sin(pi*x)/(pi*x^2) = ... - 2pi*x*sin(...)/(pi*x^2)^2
+            sinc_d2_pt22 = 2 * piumi * sinc_num / (piumiumi**2)
+            sinc_d2 = sinc_d2_pt11 - 2*sinc_d2_mid + sinc_d2_pt22
+            sinc_d2[zero_inds] = -(np.pi**2)/3 # Limit as u-i -> 0.
+        e_d_pt = e_exp_d*e_pt*sinc_pt
+        sinc_d_pt = sinc_d * e_pt
 
         weights = np.zeros_like(u_np)
         derivs = np.zeros_like(u_np)
         weights[inside_inds] = e_pt * sinc_pt
         derivs[inside_inds] = e_d_pt + sinc_d_pt
+
+        derivs2 = None
+        if include_2nd_deriv:
+            derivs2 = np.zeros_like(derivs)
+            # Derivative was d(frac)*e*s + e*d(s)
+            # New part is thus:
+            # d2(frac)*e*s + d(frac)^2*e*s + 2*d(frac)*e*d(s) * e*d2(s)
+            derivs2[inside_inds] = e_exp_d2*e_pt*sinc_pt + e_exp_d*e_d_pt
+            derivs2[inside_inds] += 2*e_exp_d*sinc_d_pt + e_pt*sinc_d2 
+
         if np.isscalar(u_np):
             weights = weights.item()
             derivs = derivs.item()
+            if include_2nd_deriv:
+                derivs2 = derivs2.item()
+        if include_2nd_deriv:
+            return (weights, derivs, derivs2)
+        
         return (weights, derivs)
 
 
-    def weightDerivativeFilter(self, u:float):
+    def weightDerivativeFilter(self, u: float, include_2nd_deriv: bool):
         indRangeInclusive = self.ctrlPtBoundsInclusive(u)
         derivs = np.empty(indRangeInclusive[1] + 1 - indRangeInclusive[0])
         weights = np.empty(derivs.shape)
+        derivs2 = None
+        if include_2nd_deriv:
+            derivs2 = np.empty_like(derivs)
         for i in range(indRangeInclusive[0], indRangeInclusive[1] + 1):
             si = i - indRangeInclusive[0] # Storage index
-            weights[si], derivs[si] = CinpactCurve.weightAndDerivative(
-                u, i, self.supportRad, self.k
+            deriv_info = CinpactCurve.weightAndDerivative(
+                u, i, self.supportRad, self.k, include_2nd_deriv
             )
+            weights[si], derivs[si] = deriv_info[:2]
+            if include_2nd_deriv:
+                derivs2[si] = deriv_info[2]
         w_sum = weights.sum()
         d_sum = derivs.sum()
-        return -weights*d_sum/(w_sum**2) + derivs/w_sum
-    
+        w_sum_sq = w_sum**2
+        deriv_full = -weights*d_sum/w_sum_sq + derivs/w_sum
+        deriv2_full = None
+        if include_2nd_deriv:
+            deriv2_full = CinpactCurve._quotientDeriv2(
+                weights, w_sum, derivs, d_sum, derivs2, derivs2.sum(), w_sum_sq 
+            )
+            return (deriv_full, deriv2_full)
+        return(deriv_full,)
