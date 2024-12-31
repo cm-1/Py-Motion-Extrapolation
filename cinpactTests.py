@@ -70,9 +70,78 @@ julyPts = [
 
 julyPtsNP = np.array(julyPts)
 
-curve = CinpactCurve(julyPtsNP, True, 10.0, 10.0, 1000)
+
+july_curve = CinpactCurve(julyPtsNP, True, 10.0, 10.0, 1000)
 
 fig, ax = plt.subplots()
-ax.plot(*curve.curvePoints.transpose())
-ax.scatter(*julyPtsNP.transpose())
+ax.plot(*july_curve.curvePoints.transpose())#, marker='o')
+ax.scatter(*julyPtsNP.transpose(), color='orange')
+plt.show()
+
+#%% 
+# Graph that shows that CINPACT pts are not evenly spaced when ctrl pts are
+# evenly spaced along a line.
+pts_on_yeqx = np.linspace([0.0, 0.0], [8.0, 8.0], 8, axis=0)
+cinpact_line = CinpactCurve(pts_on_yeqx, True, 3.0, 3.0, 35)
+fig, ax = plt.subplots()
+ax.plot(*cinpact_line.curvePoints.transpose(), marker='o')
+# ax.scatter(*pts_on_yeqx.transpose(), color="orange")
+plt.show()
+
+
+#%% Graphs sum of unnormalized CINPACT basis functions.
+fig2, ax2 = plt.subplots()
+
+individ_weights = np.empty((len(randPts), len(randCurve.paramVals)))
+for i in range(len(randPts)):
+    individ_weights[i] = CinpactCurve.weightFunc(randCurve.paramVals, i, 3, 3)
+    # ax2.plot(randCurve.paramVals, individ_weights[i])
+
+ax2.plot(randCurve.paramVals, individ_weights.sum(axis=0))
+plt.show()
+
+#%%
+# Graph that shows that a 1D CINPACT curve with ctrl pts that are linearly 
+# ascending will be "wavy", whereas a 1D B-Spline curve will interpolate the
+# inputs perfectly. This has implications for CINPACT's ability to model motion
+# with constant velocity.
+import bspline
+fig2, ax2 = plt.subplots()
+
+def bsplinePtsFromCtrlPts(ctrl_pts, k, num_samples):
+    mpts = [bspline.MotionPoint(pt) for pt in ctrl_pts]
+    ms = bspline.MotionBSpline(mpts, k, False)
+    return bspline.ptsFromNURBS(ms, num_samples, False)
+
+bspline_pts_1D = np.stack([
+    np.arange(10, dtype=float), np.ones(10, dtype=float)
+], axis=-1)
+bspline_pts_10D = np.concat([np.eye(10), np.ones((10, 1))], axis = -1)
+
+
+bpts = bsplinePtsFromCtrlPts(bspline_pts_10D, 3, 500)
+bpts_1D = bsplinePtsFromCtrlPts(bspline_pts_1D, 3, 35)
+
+ax2.scatter(bpts_1D.params, bpts_1D.points)
+
+lin_mat = np.arange(10).reshape(1, 10)
+lin_pts = lin_mat @ bpts.points.T
+ax2.plot(bpts.params, lin_pts.flatten(), label="B-SPLINE for linear input")
+
+c_weights_10 = np.empty((10, len(bpts.params)))
+
+for i in range(10):
+    # ax2.plot(bpts.params, bpts.points[:, i])
+    c_weights_10[i] = CinpactCurve.weightFunc(bpts.params - 2, i, 10, 7.83)
+c_sums_10 = c_weights_10.sum(axis=0, keepdims=True)
+c_nweights_10 = c_weights_10 / c_sums_10
+c_lin_pts = lin_mat @ c_nweights_10
+
+ax2.plot(bpts.params, c_lin_pts.flatten(), label="CINPACT for linear input")
+
+c_weights_10 = np.empty((len(bpts.params), i))
+
+for i in range(10):
+    ax2.plot(bpts.params, c_nweights_10[i])
+ax2.legend()
 plt.show()
