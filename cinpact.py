@@ -233,6 +233,8 @@ class CinpactCurve(CinpactLogic):
 class CinpactAccelExtrapolater:
     def __init__(self, supportRad: float, k: float):
         self.ctrlPtRadius = int(np.ceil(supportRad))
+        if self.ctrlPtRadius <= 2:
+            raise Exception("Support radius must be over 2!")
         self.filters = dict() # Keys are the number of input points.
         for i in range(3, self.ctrlPtRadius  + 1):
             cl = CinpactLogic(i, True, supportRad, k)
@@ -248,14 +250,17 @@ class CinpactAccelExtrapolater:
         # First two predictions are const-pose and const-vel
         predictions[0] = known_data[0]
         predictions[1] = 2 * known_data[1] - known_data[0]
+
+        stop_pt = min(self.ctrlPtRadius, len(known_data))
         # Next, we apply the filters for the segments where the full support
         # radius cannot be filled; each of these gets applied just once.
-        for i in range(3, self.ctrlPtRadius):
+        for i in range(3, stop_pt):
             filter = self.filters[i]
             predictions[i - 1] = applyMaskToPts(known_data[:i], filter)
 
-        # For the rest, we need convolution.
-        predictions[(self.ctrlPtRadius - 1):] = convolveFilter(
-            self.filters[self.ctrlPtRadius], known_data
-        )
+        if stop_pt < len(known_data):
+            # For the rest, we need convolution.
+            predictions[(self.ctrlPtRadius - 1):] = convolveFilter(
+                self.filters[self.ctrlPtRadius], known_data
+            )
         return predictions
