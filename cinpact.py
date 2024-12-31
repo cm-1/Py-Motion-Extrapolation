@@ -99,7 +99,7 @@ class CinpactCurve(CinpactLogic):
                     endCtrlPt = min(endCtrlPt, self.numCtrlPts)
     
     # sin(pi(u-i))/pi(u-i)
-    def normSinc(u: float, i: int):
+    def normSinc(u: float, i: float):
         x = np.asarray(np.pi * (u - i))
         zero_inds = (x == 0.0)
         x[zero_inds] = 1.0 # Prevent division by zero warnings
@@ -110,7 +110,7 @@ class CinpactCurve(CinpactLogic):
         return retVal
 
     # exp[-(k(u-i)^2)/(c^2 - (u-i)^2)]
-    def temperingFunc(u: float, i: int, supportRad: float, k: float):
+    def temperingFunc(u: float, i: float, supportRad: float, k: float):
         umi_all = np.asarray(u - i)
         retVal = np.empty_like(u)
         inside_inds = np.abs(umi_all) < supportRad
@@ -229,6 +229,16 @@ class CinpactCurve(CinpactLogic):
             return (weights, derivs, derivs2)
         
         return (weights, derivs)
+    
+    # We'll allow intermediate/float "orders" for flexibility, especially if we
+    # want to optimize the order, for which having it not-discrete is better.
+    def bsplineTransformU(u: float, i: int, order: float):
+        # i + half_ord -> i
+        # i + 2*half_ord -> i + 1
+        # i -> i - 1
+        half_ord = order / 2.0 # Insert "A half order of..." joke here.
+        new_u = ((u - i) / half_ord) + i - 1 
+        return new_u
 
 class CinpactAccelExtrapolater:
     def __init__(self, supportRad: float, k: float):
