@@ -19,6 +19,33 @@ class CinpactLogic:
             endCtrlPt = min(endCtrlPt, self.numCtrlPts - 1)
         return (startCtrlPt, endCtrlPt)
 
+    
+    def weightDerivativeFilter(self, u: float, include_2nd_deriv: bool):
+        indRangeInclusive = self.ctrlPtBoundsInclusive(u)
+        derivs = np.empty(indRangeInclusive[1] + 1 - indRangeInclusive[0])
+        weights = np.empty(derivs.shape)
+        derivs2 = None
+        if include_2nd_deriv:
+            derivs2 = np.empty_like(derivs)
+        for i in range(indRangeInclusive[0], indRangeInclusive[1] + 1):
+            si = i - indRangeInclusive[0] # Storage index
+            deriv_info = CinpactCurve.weightAndDerivative(
+                u, i, self.supportRad, self.k, include_2nd_deriv
+            )
+            weights[si], derivs[si] = deriv_info[:2]
+            if include_2nd_deriv:
+                derivs2[si] = deriv_info[2]
+        w_sum = weights.sum()
+        d_sum = derivs.sum()
+        w_sum_sq = w_sum**2
+        deriv_full = -weights*d_sum/w_sum_sq + derivs/w_sum
+        deriv2_full = None
+        if include_2nd_deriv:
+            deriv2_full = CinpactCurve._quotientDeriv2(
+                weights, w_sum, derivs, d_sum, derivs2, derivs2.sum(), w_sum_sq 
+            )
+            return (deriv_full, deriv2_full)
+        return(deriv_full,)
 
 class CinpactCurve(CinpactLogic):
     def __init__(self, ctrlPts, isOpen: bool, supportRad: float, k: float, numSubdivPts: int):
@@ -203,30 +230,32 @@ class CinpactCurve(CinpactLogic):
         
         return (weights, derivs)
 
+class CinpactAccelExtrapolater:
+    def __init__(self, supportRad: float, k: float):
+        self.ctrlPtRadius = int(np.ceil(supportRad))
+        self.filters = dict() # Keys are the number of input points.
+        for i in range(3, self.ctrlPtRadius  + 1):
+            cl = CinpactLogic(i, True, supportRad, k)
+            # Get two filters; one for velocity and another for acceleration.
+            v_f, a_f = cl.weightDerivativeFilter(float(i - 1), True)
+            self.filters[i] = v_f #+ 0.5 * a_f # The delta displacement.
+            self.filters[i][-1] += 1.0 # Add displacement to last pose.        
 
-    def weightDerivativeFilter(self, u: float, include_2nd_deriv: bool):
-        indRangeInclusive = self.ctrlPtBoundsInclusive(u)
-        derivs = np.empty(indRangeInclusive[1] + 1 - indRangeInclusive[0])
-        weights = np.empty(derivs.shape)
-        derivs2 = None
-        if include_2nd_deriv:
-            derivs2 = np.empty_like(derivs)
-        for i in range(indRangeInclusive[0], indRangeInclusive[1] + 1):
-            si = i - indRangeInclusive[0] # Storage index
-            deriv_info = CinpactCurve.weightAndDerivative(
-                u, i, self.supportRad, self.k, include_2nd_deriv
-            )
-            weights[si], derivs[si] = deriv_info[:2]
-            if include_2nd_deriv:
-                derivs2[si] = deriv_info[2]
-        w_sum = weights.sum()
-        d_sum = derivs.sum()
-        w_sum_sq = w_sum**2
-        deriv_full = -weights*d_sum/w_sum_sq + derivs/w_sum
-        deriv2_full = None
-        if include_2nd_deriv:
-            deriv2_full = CinpactCurve._quotientDeriv2(
-                weights, w_sum, derivs, d_sum, derivs2, derivs2.sum(), w_sum_sq 
-            )
-            return (deriv_full, deriv2_full)
-        return(deriv_full,)
+    
+
+    def apply(self, known_data):
+        predictions = np.empty_like(known_data)
+        # First two predictions are const-pose and const-vel
+        predictions[0] = known_data[0]
+        predictions[1] = 2 * known_data[1] - known_data[0]
+        # Next, we apply the filters for the segments where the full support
+        # radius cannot be filled; each of these gets applied just once.
+        for i in range(3, self.ctrlPtRadius):
+            filter = self.filters[i]
+            predictions[i - 1] = applyMaskToPts(known_data[:i], filter)
+
+        # For the rest, we need convolution.
+        predictions[(self.ctrlPtRadius - 1):] = convolveFilter(
+            self.filters[self.ctrlPtRadius], known_data
+        )
+        return predictions
