@@ -1,5 +1,6 @@
 import sys
 import numpy as np
+from curvetools import applyMaskToPts, convolveFilter
 
 class CinpactLogic:
     def __init__(self, numCtrlPts: int, isOpen: bool, supportRad: float, k: float):
@@ -154,7 +155,7 @@ class CinpactCurve(CinpactLogic):
             )
 
         zero_inds = umi == 0.0
-        umi[zero_inds] = 1.0 # Prevent divide-by-zero warnings.
+        umi[zero_inds] = umi_sq[zero_inds] = 1 # Stops divide-by-zero warnings.
         piumi = np.pi * umi
 
         sinc_num = np.sin(piumi)

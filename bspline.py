@@ -1,5 +1,7 @@
 
 import numpy as np
+from curvetools import applyMaskToPts
+
 # Class for returning curve points and related info (like radii)
 class CurvePoints:
     def __init__(self, params, points, radii):
@@ -29,17 +31,6 @@ def bSplineSubdivCtrlPts(originalCtrlPts, order, isClosed, numSubdivs):
     for _ in range(numSubdivs):
         newPts = _bSplineSubdivCtrlPtsOnce(newPts, order, isClosed)
     return newPts
-
-
-
-# Here, we assume mask is flat/1D, but "pts" could have any shape so long as
-# len(pts) (i.e., pts.shape[0]) equals len(mask).
-# Going by the documentation for np.dot(a, b), if b is 1D (like our mask), then
-# np.dot() will do a weighted sum along the last axis of a. So, to have that
-# sum be along the FIRST axis instead, we transpose a before dotting, and then
-# to get the desired output shape, we transpose again at the end.
-def applyMaskToPts(pts, mask):
-    return np.dot(pts.transpose(), mask).transpose()
 
 def _bSplineSubdivCtrlPtsOnce(originalCtrlPts, order, isClosed):
     # Filters for orders 2-5
@@ -335,34 +326,12 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
     # bpy.context.scene.objects.active
 
 
-# Tangents are calculated as the derivatives of the interpolating polynomial
-# for five consecutive points containing a given point.
-def tangentsFromPoints(pVals, shouldNormalize: bool = True):
-    numPts = pVals.shape[0]
-
-    tangentVals = np.empty(pVals.shape)
-
-    for i in range(numPts):
-        estT = None
-        if i == 0:
-            estT = (-25)*pVals[0] + 48*pVals[1] - 36*pVals[2] + 16*pVals[3] - 3*pVals[4]
-        elif i == 1:
-            estT = (-3)*pVals[0] - 10*pVals[1] + 18*pVals[2] - 6*pVals[3] + pVals[4]
-        elif i == (numPts - 1) - 1:
-            estT = 3*pVals[numPts-1] + 10*pVals[numPts-2] - 18*pVals[numPts-3] + 6*pVals[numPts-4] - pVals[numPts-5]
-        elif i == (numPts - 1):
-            estT = 25*pVals[numPts-1] - 48*pVals[numPts-2] + 36*pVals[numPts-3] - 16*pVals[numPts-4] + 3*pVals[numPts-5]
-        else:
-            estT = pVals[i-2] - 8*pVals[i-1] + 8*pVals[i+1] - pVals[i+2]
-
-        if shouldNormalize:
-            estT = estT/np.linalg.norm(estT)
-        else:
-            estT /= 12 # Omitted denominator from above calculations.
-        tangentVals[i] = estT
-        
-    return tangentVals
-
+# The code in this file originates from another project that created 
+# rotation minimizing frames (RMFs) along B-Spline curves. The following code
+# was relevant to that project but will likely not be used for this one, so I've
+# commented it out. If I were to use it again, I'd probably want to move it out
+# of this file and rewrite the "firstNormal..." function.
+'''
 # Only calculates the first normal vector, with the expectation that it would
 # be propogated.
 def firstNormalFromUnitTangents(tangentVals):
@@ -397,3 +366,4 @@ def discreteFrenetNormalsApprox(unitTangentVals, closed=False):
         retList.append(singleFrenetNorm(unitTangentVals[i], unitTangentVals[i-1]))
     
     return retList
+'''

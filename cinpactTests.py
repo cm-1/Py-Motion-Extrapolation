@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from cinpact import CinpactCurve, CinpactLogic
-from bspline import tangentsFromPoints
+from curvetools import tangentsFromPoints
 
 #%% Derivative Tests
 randPts = np.random.uniform(-35.0, 35.0, (35, 2))
@@ -37,6 +37,7 @@ for i, u in enumerate(sampleParams):
     selectCtrlPts = randPts[ptRange[0]:ptRange[1] + 1]
     for j, filter in enumerate(dfilters):
         if np.abs(filter.sum()) > 0.0001:
+            print("filter:", filter, "sum=", filter.sum())
             raise Exception("Filter sum issue for order {}!".format(j))
         theoreticals[j][i] = np.dot(selectCtrlPts.transpose(), filter).transpose()
 
