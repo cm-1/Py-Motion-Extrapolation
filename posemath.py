@@ -156,6 +156,104 @@ def areVecArraysInSamePlanes(vecArrays, threshold = 0.0001):
     dotDiffs = np.diff(normDots, 1, axis=0)
     return np.abs(dotDiffs).max() <= threshold
 
+
+def integrateAngularVelocityRK(angular_velocities, starting_poses, order=1):
+    """
+    Numerically integrates angular velocities into final poses using Runge-Kutta methods.
+
+    Parameters:
+        angular_velocities: np.ndarray of shape (n_rigidbodies, n_timesteps, 3)
+            Angular velocities for each rigid body (in xyz components).
+        starting_poses: np.ndarray of shape (n_rigidbodies, 4)
+            Initial quaternions (poses) for each rigid body.
+        order: int
+            Order of the Runge-Kutta method to use (1, 2, or 4).
+
+    Returns:
+        final_poses: np.ndarray of shape (n_rigidbodies, 4)
+            Final quaternions representing poses for each rigid body.
+    """
+    n_rigidbodies = angular_velocities.shape[0]
+    n_timesteps = angular_velocities.shape[1] - 1
+    if order > 1:
+        n_timesteps = n_timesteps // 2
+
+    dt = 1.0 / n_timesteps  # Assume one unit of time passes in total
+
+    # Start with the provided initial poses
+    current_poses = starting_poses.copy()
+    quat_list_shape = (n_rigidbodies, 4)
+
+    for t in range(n_timesteps):
+        w = angular_velocities[:, t]  # Angular velocities for this timestep (shape: n_rigidbodies, 3)
+        w_mid_quat = None
+        w_end_quat = None
+
+        if order > 1:
+            t_ind = t << 1
+            w = angular_velocities[:, t_ind]
+            t_ind += 1
+            w_mid_quat = np.empty(quat_list_shape)
+            w_mid_quat[:, 0] = 0.0
+            w_mid_quat[:, 1:] = angular_velocities[:, t_ind]
+            if order > 2:
+                t_ind += 1
+                w_end_quat = np.empty(quat_list_shape)
+                w_end_quat[:, 0] = 0.0
+                w_end_quat[:, 1:] = angular_velocities[:, t_ind]
+
+
+        # Convert angular velocity to quaternion form
+        w_quat = np.empty(quat_list_shape)
+        w_quat[:, 0] = 0.0
+        w_quat[:, 1:] = w
+
+        if order == 1:  # RK1 (Euler method)
+            dq_dt = 0.5 * multiplyQuatLists(w_quat, current_poses)
+            current_poses += dq_dt * dt
+
+        elif order == 2:  # RK2 (midpoint method)
+            # Step 1: Calculate k1
+            k1 = 0.5 * multiplyQuatLists(w_quat, current_poses)
+
+            # Step 2: Estimate midpoint
+            midpoint_poses = current_poses + k1 * (dt / 2)
+
+            # Step 3: Calculate k2 at the midpoint
+            k2 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses)
+
+            # Final step: Combine results
+            current_poses += k2 * dt
+
+        elif order == 4:  # RK4
+            # Step 1: Calculate k1
+            k1 = 0.5 * multiplyQuatLists(w_quat, current_poses)
+
+            # Step 2: Calculate k2 (midpoint)
+            midpoint_poses_k2 = current_poses + k1 * (dt / 2)
+            k2 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses_k2)
+
+            # Step 3: Calculate k3 (another midpoint)
+            midpoint_poses_k3 = current_poses + k2 * (dt / 2)
+            k3 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses_k3)
+
+            # Step 4: Calculate k4 (endpoint)
+            endpoint_poses = current_poses + k3 * dt
+            k4 = 0.5 * multiplyQuatLists(w_end_quat, endpoint_poses)
+
+            # Final step: Combine results
+            current_poses += (k1 + 2 * k2 + 2 * k3 + k4) * (dt / 6)
+
+        else:
+            raise ValueError("Invalid order. Supported orders are 1 (RK1), 2 (RK2), or 4 (RK4).")
+
+        # Normalize the quaternion to maintain unit length
+        current_poses /= np.linalg.norm(current_poses, axis=1, keepdims=True)
+
+    # Return only the final poses
+    return current_poses
+
+
 # Takes in array of 2D points and, for each 3 consecutive points, gives the 
 # centre of the circle defined by them.
 def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
