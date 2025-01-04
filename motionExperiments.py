@@ -567,7 +567,9 @@ for i, combo in enumerate(combos):
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
     r_mats = calculator.getRotationMatsGTNP(True)
-    fixed_axes = rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
+    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
+    angles = angles.flatten()
+    #rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
     r_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
     r_fixed_axis_closest_rots = pm.matsFromAxisAngleArrays(
         r_fixed_axis_closest_angs, fixed_axes[:-1]
@@ -588,8 +590,18 @@ for i, combo in enumerate(combos):
 
 
 
-    angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
+    # angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
     max_angle = max(max_angle, angles.max())
+
+    ang_vel_vecs = pm.scalarsVecsMul(angles, fixed_axes)
+    ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
+    ang_vel_vecs[1:] += 0.5 * ang_acc_vecs
+    ang_vel_vecs[0] = ang_vel_vecs[1] - ang_acc_vecs[0]
+    extrap_ang_vel_vecs = ang_vel_vecs[1:] + ang_acc_vecs
+    interp_ang_vels = np.linspace(ang_vel_vecs[1:-1], extrap_ang_vel_vecs[:-1], 33, axis=1)
+    rk_preds = pm.integrateAngularVelocityRK(interp_ang_vels, rotations_quats[2:-1], 4)
+
+    rk_preds = pm.replaceAtEnd(r_vel_preds, rk_preds, 1)
 
     angle_diffs = np.diff(angles, 1, axis=0)
     axis_dots = pm.einsumDot(fixed_axes[1:], fixed_axes[:-1])
@@ -814,6 +826,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
     # allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
     allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
+    allResultsObj.addQuaternionResult("RK", rk_preds)
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)

@@ -57,9 +57,60 @@ def quatsFromAxisAngles(unit_axes, angles):
     quaternions = np.hstack((np.cos(half_angs), np.sin(half_angs) * unit_axes))
     return quaternions
 
+# Normalize an array while handling the case where some elements have a norm of
+# zero, which would cause division errors.
+def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
+                         vec_for_zero_norms: np.ndarray = None,
+                         propogate_last_nonzero_vec: bool = True):
+    
+    if norms is None:
+        norms = np.linalg.norm(arrays, axis=-1, keepdims=True)
+
+    zero_norm_inds = (norms == 0).flatten()
+
+    if not np.any(zero_norm_inds):
+        return array / norms
+    
+    pos_norm_inds = np.invert(zero_norm_inds)
+    normed = np.empty_like(array)
+    normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
+    # For zero axes, we can either use a supplied default vector, create our
+    # own default, or propograte the last nonzero vector.
+    if propogate_last_nonzero_vec:
+        # First, we make sure that if the first vec is zero, that we replace it
+        # with some default, since there'd be no previous vec to copy.
+        if zero_norm_inds[0]:
+            if vec_for_zero_norms is None:
+                replacement_vec = np.zeros(array.shape[-1])
+                replacement_vec[0] = 1.0
+                normed[0] = replacement_vec
+            else:
+                normed[0] = vec_for_zero_norms
+        # To copy the last nonzero vectors, we'll use the technique proposed in 
+        # a 2015-05-27 StackOverflow answer by user "jme" (1231929/jme) to a
+        # 2015-05-27 question, "Fill zero values of 1d numpy array with last
+        # non-zero values" (https://stackoverflow.com/q/30488961) by user "mgab"
+        # (3406913/mgab). A 2016-12-16 edit to "Most efficient way to 
+        # forward-fill NaN values in numpy array" by user Xukrao
+        # (7306999/xukrao) shows this to be more efficient than similar
+        # for-loop, numba, pandas, etc. solutions.
+        replacement_inds = np.arange(len(norms))
+        int_zero_inds = np.nonzero(zero_norm_inds)
+        replacement_inds[int_zero_inds] = 0
+        replacement_inds = np.maximum.accumulate(replacement_inds, axis = -1)
+        normed[int_zero_inds] = normed[replacement_inds[int_zero_inds]]
+    else:
+        if vec_for_zero_norms is None:
+            replacement_vec = np.zeros(array.shape[-1])
+            replacement_vec[0] = 1.0
+            normed[zero_norm_inds] = replacement_vec
+        else:
+            normed[zero_norm_inds] = vec_for_zero_norms
+    return normed
+
 def quatsFromAxisAngleVec3s(axisAngleVals):
     angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
-    normed = axisAngleVals / angles
+    normed = safelyNormalizeArray(axisAngleVals, angles)
 
     return quatsFromAxisAngles(normed, angles)
 
@@ -314,7 +365,10 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
             bisect_dir = quats0 + quats1
             bisect_lens = np.linalg.norm(bisect_dir, axis = -1, keepdims=True)
             return bisect_dir / bisect_lens
-
+        if t == 0:
+            return quats0.copy()
+        if t == 1:
+            return quats1.copy()
     retVal = np.empty(quats0.shape)
 
     # Find the angles between the quaternions *interpreted as vec4s*, *not* the
@@ -334,7 +388,7 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     pos_angles = angles[pos_angle_inds, np.newaxis]
     t_reshape = t
     if not t_is_const:
-        t_reshape = t.reshape(pos_angles.shape)
+        t_reshape = t[pos_angle_inds].reshape(pos_angles.shape)
 
     retVal[zero_angle_inds] = quats0[zero_angle_inds]
     
@@ -440,25 +494,19 @@ def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
 
     return thetas
 
-# CURRENT IMPLEMENTATION DOES NOT GUARANTEE ANGLES WITHIN 0-PI RANGE!
+# Angles returned should be in the 0-PI range.
 def axisAnglesFromQuats(quatVals):
-    # From a quaternion, we know the value of cos and plus-or-minus sin.
-    # We'll, for simplicity, assume sin is positive, meaning that the value
-    # returned by arccos is correct and the axis is pointing in the same dir
-    # as the unit axis.
-
-    halfAngles = np.arccos(np.clip(quatVals[:, 0:1], -1.0, 1.0))
-    zero_ang_inds = (halfAngles < 0.000001).flatten()
-    pos_ang_inds = np.invert(zero_ang_inds)
-    angles = np.empty(len(quatVals))
-    axes = np.empty((len(quatVals), 3))
+    # By the same logic as in the function where we find the angles between
+    # rotations represented by pairs of quaternions, we will take the abs of
+    # the cos of the halfangle to extract the one in the 0-pi range.
+    halfAngles = np.arccos(np.clip(np.abs(quatVals[..., 0:1]), -1, 1))
     angles = halfAngles + halfAngles
-    axes[pos_ang_inds] = quatVals[:, 1:][pos_ang_inds] / np.sin(halfAngles[pos_ang_inds])
-    axes[zero_ang_inds] = [1.0, 0.0, 0.0]
+    axes = safelyNormalizeArray(quatVals[..., 1:], np.sin(halfAngles))
     return axes, angles
 
 def multiplyQuatLists(q0, q1):
-    e = np.empty((4, len(q0)), dtype=np.float64)
+    num_qs = len(q0) if q0.ndim > 1 else len(q1)
+    e = np.empty((4, num_qs), dtype=np.float64)
     q0w, q0x, q0y, q0z = q0.transpose()
     q1w, q1x, q1y, q1z = q1.transpose()
  
