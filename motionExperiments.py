@@ -325,6 +325,7 @@ all_rot_angles = []
 all_bcsfa_angles = []
 # all_wahba_angles = np.zeros((0,))
 maxTimestamps = 0
+maxTimestampsWhenSkipped = 0
 max_angle = 0
 for i, combo in enumerate(combos):
     calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
@@ -345,6 +346,7 @@ for i, combo in enumerate(combos):
     allResultsObj.updateGroundTruth(
         translations_gt, rotations_aa_gt, rotations_gt_quats
     )
+    maxTimestampsWhenSkipped = max(maxTimestampsWhenSkipped, len(translations))
 
 
     translation_diffs = np.diff(translations, axis=0)
@@ -874,6 +876,7 @@ allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True
 
 
 print("Max angle:", max_angle)
+print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
 
 allResultsObj.printResults()
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
