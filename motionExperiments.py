@@ -75,13 +75,15 @@ def getRandomQuatError(shape, max_err_rads):
 class PredictionResult:
     name: str
     # predictions: np.ndarray
-    errors: typing.List[np.ndarray]
-    scores: typing.List[float]
+    errors: typing.Dict[typing.Tuple[int, int], np.ndarray]
+    scores: typing.Dict[typing.Tuple[int, int], float]
 
 class ConsolidatedResults:
     def __init__(self): #, numScenarios: int):
-        self.translation_results = dict() # Name -> PredictionResult
-        self.rotation_results = dict() # Name -> PredictionResult
+
+         # Name -> PredictionResult
+        self.translation_results: typing.Dict[str, PredictionResult] = dict()
+        self.rotation_results: typing.Dict[str, PredictionResult] = dict()
 
         # Order in which to display results.
         self._ordered_translation_result_names = []
@@ -92,6 +94,9 @@ class ConsolidatedResults:
         self._translations_gt = None
         self._axisangles_gt = None
         self._quaternions_gt = None
+
+        self._currentKey = None # Current (body, sequence) key.
+        self._allBodSeqKeys = set()
 
     # Predictions that require multiple prior points may lack a prediction for
     # the 2nd point, 3rd point, etc. In this case, the CV version of the code
@@ -120,8 +125,9 @@ class ConsolidatedResults:
 
         return values[1:] - full_predictions
     
-    def updateGroundTruth(self, translations, axisangles, quats): # bod_ID, seq_ID)
-        # self.current_ID = (bod_ID, seq_ID)
+    def updateGroundTruth(self, translations, axisangles, quats, bod_ID, seq_ID):
+        self._currentKey = (bod_ID, seq_ID)
+        self._allBodSeqKeys.add(self._currentKey)
         self._translations_gt = translations
         self._axisangles_gt = axisangles
         self._quaternions_gt = quats
@@ -199,12 +205,12 @@ class ConsolidatedResults:
         return score
 
     def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
-        num_combos = len(results_dict[names[0]].errors)
-        errs = []
-        scores = []
-        for i in range(num_combos):
+        bodSeqKeys = results_dict[names[0]].errors.keys()
+        errs = dict()
+        scores = dict()
+        for k in bodSeqKeys:
             stacked_errs = np.stack([
-                results_dict[n].errors[i] for n in names
+                results_dict[n].errors[k] for n in names
             ], axis = 0)
             stacked_norms = stacked_errs
             if not errs_are_1D:
@@ -219,24 +225,26 @@ class ConsolidatedResults:
             min_norms = np.take_along_axis(stacked_norms, min_inds_1D, axis = 0)
             min_norms = min_norms.flatten()
             if use_shift:
-                default_err = results_dict["Static"].errors[i][0]
+                default_err = results_dict["Static"].errors[k][0]
                 default_norm = default_err
                 if not errs_are_1D:
                     default_norm = np.linalg.norm(default_err)
                 es[0] = default_err
                 min_norms[0] = default_norm
-            errs.append(es)
+            errs[k] = es
 
-            scores.append(ConsolidatedResults.applyThreshold(min_norms, thresh))
+            scores[k] = ConsolidatedResults.applyThreshold(min_norms, thresh)
         results_dict[agg_name] = PredictionResult(agg_name, errs, scores)
         name_order_list.append(agg_name)
 
     def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
         if name in all_results_dict.keys():
-            all_results_dict[name].errors.append(errs)
-            all_results_dict[name].scores.append(score)
+            all_results_dict[name].errors[self._currentKey] = errs
+            all_results_dict[name].scores[self._currentKey] = score
         else:
-            all_results_dict[name] = PredictionResult(name, [errs], [score])
+            errs_dict = {self._currentKey: errs}
+            score_dict = {self._currentKey: score}
+            all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
 
     def printTable(names, results_for_names):
@@ -266,11 +274,15 @@ class ConsolidatedResults:
 
     def printResults(self):
         ordered_t_score_means = [
-            np.array(self.translation_results[n].scores).mean()
+            np.fromiter(
+                self.translation_results[n].scores.values(), dtype=float
+            ).mean()
             for n in self._ordered_translation_result_names
         ]
         ordered_r_score_means = [
-            np.array(self.rotation_results[n].scores).mean()
+            np.fromiter(
+                self.rotation_results[n].scores.values(), dtype=float
+            ).mean()
             for n in self._ordered_rotation_result_names
         ]
 
@@ -344,7 +356,7 @@ for i, combo in enumerate(combos):
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
 
     allResultsObj.updateGroundTruth(
-        translations_gt, rotations_aa_gt, rotations_gt_quats
+        translations_gt, rotations_aa_gt, rotations_gt_quats, combo[0], combo[1]
     )
     maxTimestampsWhenSkipped = max(maxTimestampsWhenSkipped, len(translations))
 
@@ -376,7 +388,7 @@ for i, combo in enumerate(combos):
     # r_vel_preds = pm.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
     r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
-    # r_slerp_preds = pm.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
+    r_slerp_preds = pm.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
@@ -396,8 +408,8 @@ for i, combo in enumerate(combos):
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
     t_quadratic_preds = np.vstack((t_vel_preds[:1], t_quadratic_preds))
 
-    # t_deg4_preds = t_quadratic_preds.copy()
-    # t_deg4_preds[3:] = (17/24) * translations[:-5] - (11/3) * translations[1:-4] + (31/4) * translations[2:-3] - (25/3)*translations[3:-2] + (109/24)*translations[4:-1]
+    t_deg4_preds = t_quadratic_preds.copy()
+    t_deg4_preds[3:] = (17/24) * translations[:-5] - (11/3) * translations[1:-4] + (31/4) * translations[2:-3] - (25/3)*translations[3:-2] + (109/24)*translations[4:-1]
     t_jerk_preds = t_quadratic_preds.copy()
     t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
 
@@ -558,9 +570,9 @@ for i, combo in enumerate(combos):
 
     r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
     r_aa_acc_preds = rotations[2:-1] + r_aa_acc_delta
-    # r_aa_accLERP_preds = rotations[2:-1] + 0.5 * r_aa_acc_delta
+    r_aa_accLERP_preds = rotations[2:-1] + 0.5 * r_aa_acc_delta
     r_aa_acc_preds = np.vstack((r_aa_vel_preds[:1], r_aa_acc_preds))
-    # r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
+    r_aa_accLERP_preds = np.vstack((r_aa_vel_preds[:1], r_aa_accLERP_preds))
 
 
     r_squad_preds = pm.squad(rotations_quats, 2)[:-1]
@@ -653,10 +665,11 @@ for i, combo in enumerate(combos):
     # max_scaledax_diff = np.abs(test_quats - rotation_quat_diffs[:-1]).max()
     ang_accels = np.diff(scaled_axes, 1, axis=0)
     naive_lin_axes = pm.replaceAtEnd(scaled_axes, scaled_axes[1:] + ang_accels, 1)
-    # naive_lin_q_diffs = pm.quatsFromAxisAngleVec3s(naive_lin_axes)
-    # r_naive_lin_preds = pm.multiplyQuatLists(
-    #     naive_lin_q_diffs, rotations_quats[1:-1]
-    # )
+    naive_lin_q_diffs = pm.quatsFromAxisAngleVec3s(naive_lin_axes)
+    r_naive_lin_preds = pm.multiplyQuatLists(
+        naive_lin_q_diffs, rotations_quats[1:-1]
+    )
+
 
     
 
@@ -800,12 +813,12 @@ for i, combo in enumerate(combos):
     #     r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
 
     #---------------------------------------------------------------
-    # all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
-    #     translations, rotations
-    # )))
-    # t_spline_preds = all_spline_preds[:, :3]
-    # r_aa_spline_preds = all_spline_preds[:, 3:]
-    t_spline_preds = spline_pred_calculator.fitAllData(translations)
+    all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
+        translations, rotations
+    )))
+    t_spline_preds = all_spline_preds[:, :3]
+    r_aa_spline_preds = all_spline_preds[:, 3:]
+    # t_spline_preds = spline_pred_calculator.fitAllData(translations)
 
     # t_spline_preds = np.vstack((t_vel_preds[:1], t_spline_preds))
     
@@ -817,12 +830,12 @@ for i, combo in enumerate(combos):
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
-    # allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
+    allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
 
     allResultsObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
     allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
-    # allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
-    # allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
+    allResultsObj.addAxisAngleResult("AA_AccLERP", r_aa_accLERP_preds)
+    allResultsObj.addAxisAngleResult("AA_Spline", r_aa_spline_preds)
     allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
     allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
@@ -830,11 +843,11 @@ for i, combo in enumerate(combos):
     allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
     allResultsObj.addQuaternionResult("RK", rk_preds)
 
-    # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
+    allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
-    # allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
-    # allResultsObj.addQuaternionResult("camobj", camobj_preds)
-    # allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
+    allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
+    allResultsObj.addQuaternionResult("camobj", camobj_preds)
+    allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
@@ -846,7 +859,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Quadratic", t_quadratic_preds)
-    # allResultsObj.addTranslationResult("deg4", t_deg4_preds)
+    allResultsObj.addTranslationResult("deg4", t_deg4_preds)
     allResultsObj.addTranslationResult("Jerk", t_jerk_preds)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
@@ -858,13 +871,15 @@ for i, combo in enumerate(combos):
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
     )
     if (not egFound):
-        lastLerpScore = allResultsObj.translation_results["AccLERP"].scores[-1]
+        allLastLerpScores = allResultsObj.translation_results["AccLERP"].scores
+        last_key = list(allLastLerpScores.keys())[-1]
+        lastLerpScore = allLastLerpScores[last_key]
         accResult = allResultsObj.translation_results["Acc"]
-        lastAccScore = accResult.scores[-1]
+        lastAccScore = accResult.scores[last_key]
         if lastLerpScore > lastAccScore:
             egFound = True
 
-            sampleAccErrs = accResult.errors[-1]
+            sampleAccErrs = accResult.errors[last_key]
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
 
@@ -984,8 +999,8 @@ def getBestFitForInds(inds):
 prev2_angle_step = 0.1
 
 prev2_angle_buf = 0.05
-# Arg of "0" means same figure reused if cell ran again.
-fig = plt.figure(0, figsize=plt.figaspect(1/3)) 
+
+fig = plt.figure(figsize=plt.figaspect(1/3)) 
 ax = fig.add_subplot(1, 3, 1, projection='3d')
 ax2 = fig.add_subplot(1, 3, 2)
 ax3 = fig.add_subplot(1, 3, 3)
@@ -1132,16 +1147,16 @@ ax = fig.subplots()
 
 from matplotlib.colors import to_rgba
 
-vid_ind = 9
+vid_key = allResultsObj._allBodSeqKeys[9]
 keys = ["Vel", "Acc"]#, "VelLERP", "Acc", "AccLERP"]
 key_colours = ["blue", "orange", "green", "red"]
 key_rgbas = [to_rgba(kc) for kc in key_colours]
 
-num_timesteps = len(allResultsObj.translation_results[keys[0]].errors[vid_ind])
+num_timesteps = len(allResultsObj.translation_results[keys[0]].errors[vid_key])
 x_vals = np.arange(1, num_timesteps + 1)
 all_err_norms = []
 for i, key in enumerate(keys):
-    errs = allResultsObj.translation_results[key].errors[vid_ind]
+    errs = allResultsObj.translation_results[key].errors[vid_key]
     err_norms = np.linalg.norm(errs, axis = -1)
     ax.plot(x_vals, err_norms, label=key,
             color=key_colours[i])
