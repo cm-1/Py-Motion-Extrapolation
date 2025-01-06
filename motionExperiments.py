@@ -318,14 +318,18 @@ class ConsolidatedResults:
 
         mean_ax = None
         row_names = []
-        if group_mode == DisplayGrouping.BY_OBJECT:
-            mean_ax = 1
-            row_names = [
-                gtc.shortBodyNameBCOT(n, 7) for n in gtc.BCOT_BODY_NAMES
-            ]
-        elif group_mode == DisplayGrouping.BY_SEQUENCE:
-            mean_ax = 0
-            row_names = [gtc.shortSeqNameBCOT(n) for n in gtc.BCOT_SEQ_NAMES]
+        if group_mode != DisplayGrouping.TOTAL_ONLY:
+            if group_mode == DisplayGrouping.BY_OBJECT:
+                mean_ax = 1
+                row_names = [
+                    gtc.shortBodyNameBCOT(n, 7) for n in gtc.BCOT_BODY_NAMES
+                ]
+            elif group_mode == DisplayGrouping.BY_SEQUENCE:
+                mean_ax = 0
+                row_names = [
+                    gtc.shortSeqNameBCOT(n) for n in gtc.BCOT_SEQ_NAMES
+                ]
+            row_names.append("Avg")
 
         table_titles = ["Translation", "\nRotation"]
         ordered_names_lists = [
@@ -353,6 +357,11 @@ class ConsolidatedResults:
                 col_names = []
                 for means, name in zip(ordered_score_means, ordered_names):
                     if np.any(means >= thresh_means):
+                        if group_mode != DisplayGrouping.TOTAL_ONLY:
+                            overall_avg = np.fromiter(
+                                results[name].scores.values(), dtype=float
+                            ).mean()
+                            means = np.append(means, overall_avg)
                         selected_score_means.append(means)
                         col_names.append(name)
                     else:
@@ -997,7 +1006,8 @@ allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True
 print("Max angle:", max_angle)
 print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
 
-allResultsObj.printResults(DisplayGrouping.TOTAL_ONLY)
+allResultsObj.printResults(DisplayGrouping.BY_SEQUENCE, "Quadratic", "QuatVel")
+allResultsObj.printResults(DisplayGrouping.BY_OBJECT, "Quadratic", "QuatVel")
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
 def stat_results(vals):
     return [ vals.mean(), vals.min(), vals.max(), np.median(vals), np.std(vals)]
