@@ -266,7 +266,7 @@ class ConsolidatedResults:
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
 
-    def printTable(results_for_names, col_names, row_names = None):
+    def printTable(results_for_names, col_names, row_names = None, annotations = None):
         name_lens = []
         row_name_col_width = 0
         no_row_names_given = (row_names is None) or (len(row_names) == 0)
@@ -291,14 +291,23 @@ class ConsolidatedResults:
             print("{val:>{width}}".format(
                 val=r_name, width=row_name_col_width
             ), end = "")
-            for width, col_vals in zip(name_lens, results_for_names):
+            for c_ind in range(len(results_for_names)):
+                width = name_lens[c_ind]
+                col_vals = results_for_names[c_ind]
                 val = col_vals if no_row_names_given else col_vals[r_ind]
+                val_str = "" # Will update soon.
+
                 # If 0 <= number <= 1, use Numpy's default float print digits (8).
                 # Otherwise, decrease precision so printing uses 10 chars total.
                 prec_to_remove = 1 if val < 0 else 0 # Case of "-" sign.
                 if np.abs(val) > 10:
                     prec_to_remove += int(np.log10(np.abs(val)))
-                val_str = str(round(val, 8 - prec_to_remove))
+
+                if not (annotations is None):
+                    val_str = annotations[c_ind, r_ind]
+                    prec_to_remove += len(val_str)
+
+                val_str += str(round(val, 8 - prec_to_remove))
                 # Print value v with padding to make width w.
                 print("{v:>{w}} ".format(v=val_str, w=width), end = "")
             print() # Newline after row.
@@ -336,20 +345,52 @@ class ConsolidatedResults:
             score_means = ordered_score_means
             col_names = ordered_names
             excluded_cols = []
+            annotations = None
             if len(thresh) > 0:
                 thresh_ind = ordered_names.index(thresh)
                 thresh_means = ordered_score_means[thresh_ind]
-                score_means = []
+                selected_score_means = []
                 col_names = []
                 for means, name in zip(ordered_score_means, ordered_names):
                     if np.any(means >= thresh_means):
-                        score_means.append(means)
+                        selected_score_means.append(means)
                         col_names.append(name)
                     else:
                         excluded_cols.append(name)
-   
+                score_means = np.stack(selected_score_means, axis=0)
+
+                # The code below for creating annotations relies on the fact
+                # that "Perfect" results are in the first column in order to
+                # ignore them in the result sorting in a convenient way.
+                if ordered_names[0] != "Perfect":
+                    raise Exception("Code written under now-false assumption \
+                                    that \"Perfect\" is the first column!")
+                sort_inds = np.argsort(score_means[1:], axis=0)[::-1]
+                
+                # The general method for converting the argsort indices into
+                # ordinal rankings comes from the code for scipy's rankdata().
+
+                arrange_1d = np.arange(len(col_names) - 1)
+                arrange = np.broadcast_to(
+                    arrange_1d, sort_inds.shape[::-1]
+                ).transpose()
+                orderings = np.empty_like(sort_inds)
+                np.put_along_axis(orderings, sort_inds, arrange, axis=0)
+                # np.take_along_axis(arrange, sort_inds, axis= 
+
+                # Annotations will start out as "", but we'll specify "<U3" as
+                # the dtype to indicate that the lens can be up to 3 chars.
+                annotations = np.full(score_means.shape, "", dtype="<U3")
+                place_limits = orderings[col_names.index(thresh) - 1]
+                meets_thresh = orderings <= place_limits
+                annots_to_replace = orderings[meets_thresh].astype(str) + "|"
+                annotations[1:][meets_thresh] = annots_to_replace
+
+               
             print("{} Results:".format(title))
-            ConsolidatedResults.printTable(score_means, col_names, row_names)
+            ConsolidatedResults.printTable(
+                score_means, col_names, row_names, annotations
+            )
             if len(thresh) > 0:
                 print("Column to compare against:", thresh)
                 excluded_str = "[]"
