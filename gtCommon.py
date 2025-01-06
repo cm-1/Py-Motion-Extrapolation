@@ -37,8 +37,7 @@ BCOT_SEQ_NAMES = [
     "outdoor_scene2_movable_suspension_cam2",
 ]
 
-def shortBodyNameBCOT(longName):
-    maxLen = 11
+def shortBodyNameBCOT(longName, maxLen = 11):
     if len(longName) < maxLen:
         return longName
     return longName[:maxLen - 3] + "..."

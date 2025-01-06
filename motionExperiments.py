@@ -1,10 +1,12 @@
+# from dataclasses import dataclass, field
+import typing
+from enum import Enum
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
-from dataclasses import dataclass, field
-import typing
 
 from bspline_approximation import bSplineFittingMat, BSplineFitCalculator
 import bspline
@@ -70,13 +72,30 @@ def getRandomQuatError(shape, max_err_rads):
     error_quats[..., 1:] = np.sin(half_angles) * unit_axes
     return error_quats
 
+class DisplayGrouping(Enum):
+    TOTAL_ONLY = 1
+    BY_OBJECT = 2
+    BY_SEQUENCE = 3
 
-@dataclass
+#%%
 class PredictionResult:
-    name: str
-    # predictions: np.ndarray
-    errors: typing.Dict[typing.Tuple[int, int], np.ndarray]
-    scores: typing.Dict[typing.Tuple[int, int], float]
+    def __init__(self, name: str,
+                 errors: typing.Dict[typing.Tuple[int, int], np.ndarray],
+                 scores: typing.Dict[typing.Tuple[int, int], float]
+                 ):
+        self.name: str = name
+        # predictions: np.ndarray
+        self.errors: typing.Dict[typing.Tuple[int, int], np.ndarray] = errors
+        self.scores: typing.Dict[typing.Tuple[int, int], float] = scores
+        self.scores2D: np.ndarray = np.full(
+            (len(gtc.BCOT_BODY_NAMES), len(gtc.BCOT_SEQ_NAMES)), np.nan
+        )
+        for k, v in scores.items():
+            self.scores2D[k[0], k[1]] = v
+        
+    def addScore(self, bodSeqIDTuple: typing.Tuple[int, int], score: float):
+        self.scores[bodSeqIDTuple] = score
+        self.scores2D[bodSeqIDTuple[0], bodSeqIDTuple[1]] = score
 
 class ConsolidatedResults:
     def __init__(self): #, numScenarios: int):
@@ -240,16 +259,24 @@ class ConsolidatedResults:
     def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
         if name in all_results_dict.keys():
             all_results_dict[name].errors[self._currentKey] = errs
-            all_results_dict[name].scores[self._currentKey] = score
+            all_results_dict[name].addScore(self._currentKey, score)
         else:
             errs_dict = {self._currentKey: errs}
             score_dict = {self._currentKey: score}
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
 
-    def printTable(names, results_for_names):
+    def printTable(results_for_names, col_names, row_names = None):
         name_lens = []
-        for name in names:
+        row_name_col_width = 0
+        no_row_names_given = (row_names is None) or (len(row_names) == 0)
+        if no_row_names_given:
+            row_names = [""]
+        else:
+            row_name_col_width = np.max([len(rn) for rn in row_names]) + 1
+        print(" " * row_name_col_width, end = "")
+
+        for name in col_names:
             # We want each printed column to be at least 10 digits plus 2 spaces
             # because the default numpy precision in printing is 8, which means
             # that to match it, we want at least 10 chars for the number in the
@@ -259,42 +286,78 @@ class ConsolidatedResults:
             print("{:>10} ".format(name), end = "")
             name_lens.append(max(10, len(name)))
         print() # Newline after row.
-        for i in range(len(names)):
-            val = results_for_names[i]
-            # If 0 <= number <= 1, use Numpy's default float print digits (8).
-            # Otherwise, decrease precision so printing uses 10 chars total.
-            prec_to_remove = 1 if val < 0 else 0 # Case of "-" sign.
-            if np.abs(val) > 10:
-                prec_to_remove += int(np.log10(np.abs(val)))
-            mean_score = round(results_for_names[i], 8 - prec_to_remove)
 
-            print("{val:>{width}} ".format(val=str(mean_score), width=name_lens[i]), end = "")
-        print() # Newline after row.
+        for r_ind, r_name in enumerate(row_names):
+            print("{val:>{width}}".format(
+                val=r_name, width=row_name_col_width
+            ), end = "")
+            for width, col_vals in zip(name_lens, results_for_names):
+                val = col_vals if no_row_names_given else col_vals[r_ind]
+                # If 0 <= number <= 1, use Numpy's default float print digits (8).
+                # Otherwise, decrease precision so printing uses 10 chars total.
+                prec_to_remove = 1 if val < 0 else 0 # Case of "-" sign.
+                if np.abs(val) > 10:
+                    prec_to_remove += int(np.log10(np.abs(val)))
+                val_str = str(round(val, 8 - prec_to_remove))
+                # Print value v with padding to make width w.
+                print("{v:>{w}} ".format(v=val_str, w=width), end = "")
+            print() # Newline after row.
 
 
-    def printResults(self):
-        ordered_t_score_means = [
-            np.fromiter(
-                self.translation_results[n].scores.values(), dtype=float
-            ).mean()
-            for n in self._ordered_translation_result_names
+    def printResults(self, group_mode: DisplayGrouping, thresh_name_t: str = "",
+                     thresh_name_r: str = ""):
+
+        mean_ax = None
+        row_names = []
+        if group_mode == DisplayGrouping.BY_OBJECT:
+            mean_ax = 1
+            row_names = [
+                gtc.shortBodyNameBCOT(n, 7) for n in gtc.BCOT_BODY_NAMES
+            ]
+        elif group_mode == DisplayGrouping.BY_SEQUENCE:
+            mean_ax = 0
+            row_names = [gtc.shortSeqNameBCOT(n) for n in gtc.BCOT_SEQ_NAMES]
+
+        table_titles = ["Translation", "\nRotation"]
+        ordered_names_lists = [
+            self._ordered_translation_result_names,
+            self._ordered_rotation_result_names
         ]
-        ordered_r_score_means = [
-            np.fromiter(
-                self.rotation_results[n].scores.values(), dtype=float
-            ).mean()
-            for n in self._ordered_rotation_result_names
-        ]
+        threshes = [thresh_name_t, thresh_name_r]
+        results_dicts = [self.translation_results, self.rotation_results]
 
-        print("Translation Results:")
-        ConsolidatedResults.printTable(
-            self._ordered_translation_result_names, ordered_t_score_means
-        )
-        print("\nRotation Results:")
-        ConsolidatedResults.printTable(
-            self._ordered_rotation_result_names, ordered_r_score_means
-        )
+        tr_zip = zip(table_titles, ordered_names_lists, threshes, results_dicts)
+        for title, ordered_names, thresh, results in tr_zip:
+            ordered_score_means = [
+                np.nanmean(results[n].scores2D, axis=mean_ax)
+                for n in ordered_names
+            ]
 
+            score_means = ordered_score_means
+            col_names = ordered_names
+            excluded_cols = []
+            if len(thresh) > 0:
+                thresh_ind = ordered_names.index(thresh)
+                thresh_means = ordered_score_means[thresh_ind]
+                score_means = []
+                col_names = []
+                for means, name in zip(ordered_score_means, ordered_names):
+                    if np.any(means >= thresh_means):
+                        score_means.append(means)
+                        col_names.append(name)
+                    else:
+                        excluded_cols.append(name)
+   
+            print("{} Results:".format(title))
+            ConsolidatedResults.printTable(score_means, col_names, row_names)
+            if len(thresh) > 0:
+                print("Column to compare against:", thresh)
+                excluded_str = "[]"
+                if len(excluded_cols) > 0:
+                    excluded_str = ", ".join(excluded_cols)
+                print("Excluded columns:", excluded_str)
+        return
+#%%
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
@@ -893,7 +956,7 @@ allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True
 print("Max angle:", max_angle)
 print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
 
-allResultsObj.printResults()
+allResultsObj.printResults(DisplayGrouping.TOTAL_ONLY)
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
 def stat_results(vals):
     return [ vals.mean(), vals.min(), vals.max(), np.median(vals), np.std(vals)]
@@ -903,15 +966,15 @@ acc_delta_stat_results = stat_results(all_acc_delta_ratios)
 acc_ortho_stat_results = stat_results(all_acc_ortho_ratios)
 
 print("All vel ratios stats:")
-ConsolidatedResults.printTable(stat_headers, vel_stat_results)
+ConsolidatedResults.printTable(vel_stat_results, stat_headers)
 print()
 
 print("All acc delta ratios stats:")
-ConsolidatedResults.printTable(stat_headers, acc_delta_stat_results)
+ConsolidatedResults.printTable(acc_delta_stat_results, stat_headers)
 print()
 
 print("All acc ortho ratios stats:")
-ConsolidatedResults.printTable(stat_headers, acc_ortho_stat_results)
+ConsolidatedResults.printTable(acc_ortho_stat_results, stat_headers)
 print()
 
 fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
@@ -1079,7 +1142,7 @@ plt.show()
 
 
 
-allResultsObj.printResults()
+allResultsObj.printResults(DisplayGrouping.BY_OBJECT, "Quadratic", "QuatVel")
 
 
 numTimestamps = len(translations_gt)
