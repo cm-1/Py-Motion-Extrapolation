@@ -57,9 +57,60 @@ def quatsFromAxisAngles(unit_axes, angles):
     quaternions = np.hstack((np.cos(half_angs), np.sin(half_angs) * unit_axes))
     return quaternions
 
+# Normalize an array while handling the case where some elements have a norm of
+# zero, which would cause division errors.
+def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
+                         vec_for_zero_norms: np.ndarray = None,
+                         propogate_last_nonzero_vec: bool = True):
+    
+    if norms is None:
+        norms = np.linalg.norm(arrays, axis=-1, keepdims=True)
+
+    zero_norm_inds = (norms == 0).flatten()
+
+    if not np.any(zero_norm_inds):
+        return array / norms
+    
+    pos_norm_inds = np.invert(zero_norm_inds)
+    normed = np.empty_like(array)
+    normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
+    # For zero axes, we can either use a supplied default vector, create our
+    # own default, or propograte the last nonzero vector.
+    if propogate_last_nonzero_vec:
+        # First, we make sure that if the first vec is zero, that we replace it
+        # with some default, since there'd be no previous vec to copy.
+        if zero_norm_inds[0]:
+            if vec_for_zero_norms is None:
+                replacement_vec = np.zeros(array.shape[-1])
+                replacement_vec[0] = 1.0
+                normed[0] = replacement_vec
+            else:
+                normed[0] = vec_for_zero_norms
+        # To copy the last nonzero vectors, we'll use the technique proposed in 
+        # a 2015-05-27 StackOverflow answer by user "jme" (1231929/jme) to a
+        # 2015-05-27 question, "Fill zero values of 1d numpy array with last
+        # non-zero values" (https://stackoverflow.com/q/30488961) by user "mgab"
+        # (3406913/mgab). A 2016-12-16 edit to "Most efficient way to 
+        # forward-fill NaN values in numpy array" by user Xukrao
+        # (7306999/xukrao) shows this to be more efficient than similar
+        # for-loop, numba, pandas, etc. solutions.
+        replacement_inds = np.arange(len(norms))
+        int_zero_inds = np.nonzero(zero_norm_inds)
+        replacement_inds[int_zero_inds] = 0
+        replacement_inds = np.maximum.accumulate(replacement_inds, axis = -1)
+        normed[int_zero_inds] = normed[replacement_inds[int_zero_inds]]
+    else:
+        if vec_for_zero_norms is None:
+            replacement_vec = np.zeros(array.shape[-1])
+            replacement_vec[0] = 1.0
+            normed[zero_norm_inds] = replacement_vec
+        else:
+            normed[zero_norm_inds] = vec_for_zero_norms
+    return normed
+
 def quatsFromAxisAngleVec3s(axisAngleVals):
     angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
-    normed = axisAngleVals / angles
+    normed = safelyNormalizeArray(axisAngleVals, angles)
 
     return quatsFromAxisAngles(normed, angles)
 
@@ -156,6 +207,104 @@ def areVecArraysInSamePlanes(vecArrays, threshold = 0.0001):
     dotDiffs = np.diff(normDots, 1, axis=0)
     return np.abs(dotDiffs).max() <= threshold
 
+
+def integrateAngularVelocityRK(angular_velocities, starting_poses, order=1):
+    """
+    Numerically integrates angular velocities into final poses using Runge-Kutta methods.
+
+    Parameters:
+        angular_velocities: np.ndarray of shape (n_rigidbodies, n_timesteps, 3)
+            Angular velocities for each rigid body (in xyz components).
+        starting_poses: np.ndarray of shape (n_rigidbodies, 4)
+            Initial quaternions (poses) for each rigid body.
+        order: int
+            Order of the Runge-Kutta method to use (1, 2, or 4).
+
+    Returns:
+        final_poses: np.ndarray of shape (n_rigidbodies, 4)
+            Final quaternions representing poses for each rigid body.
+    """
+    n_rigidbodies = angular_velocities.shape[0]
+    n_timesteps = angular_velocities.shape[1] - 1
+    if order > 1:
+        n_timesteps = n_timesteps // 2
+
+    dt = 1.0 / n_timesteps  # Assume one unit of time passes in total
+
+    # Start with the provided initial poses
+    current_poses = starting_poses.copy()
+    quat_list_shape = (n_rigidbodies, 4)
+
+    for t in range(n_timesteps):
+        w = angular_velocities[:, t]  # Angular velocities for this timestep (shape: n_rigidbodies, 3)
+        w_mid_quat = None
+        w_end_quat = None
+
+        if order > 1:
+            t_ind = t << 1
+            w = angular_velocities[:, t_ind]
+            t_ind += 1
+            w_mid_quat = np.empty(quat_list_shape)
+            w_mid_quat[:, 0] = 0.0
+            w_mid_quat[:, 1:] = angular_velocities[:, t_ind]
+            if order > 2:
+                t_ind += 1
+                w_end_quat = np.empty(quat_list_shape)
+                w_end_quat[:, 0] = 0.0
+                w_end_quat[:, 1:] = angular_velocities[:, t_ind]
+
+
+        # Convert angular velocity to quaternion form
+        w_quat = np.empty(quat_list_shape)
+        w_quat[:, 0] = 0.0
+        w_quat[:, 1:] = w
+
+        if order == 1:  # RK1 (Euler method)
+            dq_dt = 0.5 * multiplyQuatLists(w_quat, current_poses)
+            current_poses += dq_dt * dt
+
+        elif order == 2:  # RK2 (midpoint method)
+            # Step 1: Calculate k1
+            k1 = 0.5 * multiplyQuatLists(w_quat, current_poses)
+
+            # Step 2: Estimate midpoint
+            midpoint_poses = current_poses + k1 * (dt / 2)
+
+            # Step 3: Calculate k2 at the midpoint
+            k2 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses)
+
+            # Final step: Combine results
+            current_poses += k2 * dt
+
+        elif order == 4:  # RK4
+            # Step 1: Calculate k1
+            k1 = 0.5 * multiplyQuatLists(w_quat, current_poses)
+
+            # Step 2: Calculate k2 (midpoint)
+            midpoint_poses_k2 = current_poses + k1 * (dt / 2)
+            k2 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses_k2)
+
+            # Step 3: Calculate k3 (another midpoint)
+            midpoint_poses_k3 = current_poses + k2 * (dt / 2)
+            k3 = 0.5 * multiplyQuatLists(w_mid_quat, midpoint_poses_k3)
+
+            # Step 4: Calculate k4 (endpoint)
+            endpoint_poses = current_poses + k3 * dt
+            k4 = 0.5 * multiplyQuatLists(w_end_quat, endpoint_poses)
+
+            # Final step: Combine results
+            current_poses += (k1 + 2 * k2 + 2 * k3 + k4) * (dt / 6)
+
+        else:
+            raise ValueError("Invalid order. Supported orders are 1 (RK1), 2 (RK2), or 4 (RK4).")
+
+        # Normalize the quaternion to maintain unit length
+        current_poses /= np.linalg.norm(current_poses, axis=1, keepdims=True)
+
+    # Return only the final poses
+    return current_poses
+
+
 # Takes in array of 2D points and, for each 3 consecutive points, gives the 
 # centre of the circle defined by them.
 def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
@@ -216,7 +365,10 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
             bisect_dir = quats0 + quats1
             bisect_lens = np.linalg.norm(bisect_dir, axis = -1, keepdims=True)
             return bisect_dir / bisect_lens
-
+        if t == 0:
+            return quats0.copy()
+        if t == 1:
+            return quats1.copy()
     retVal = np.empty(quats0.shape)
 
     # Find the angles between the quaternions *interpreted as vec4s*, *not* the
@@ -236,7 +388,7 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     pos_angles = angles[pos_angle_inds, np.newaxis]
     t_reshape = t
     if not t_is_const:
-        t_reshape = t.reshape(pos_angles.shape)
+        t_reshape = t[pos_angle_inds].reshape(pos_angles.shape)
 
     retVal[zero_angle_inds] = quats0[zero_angle_inds]
     
@@ -342,25 +494,19 @@ def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
 
     return thetas
 
-# CURRENT IMPLEMENTATION DOES NOT GUARANTEE ANGLES WITHIN 0-PI RANGE!
+# Angles returned should be in the 0-PI range.
 def axisAnglesFromQuats(quatVals):
-    # From a quaternion, we know the value of cos and plus-or-minus sin.
-    # We'll, for simplicity, assume sin is positive, meaning that the value
-    # returned by arccos is correct and the axis is pointing in the same dir
-    # as the unit axis.
-
-    halfAngles = np.arccos(np.clip(quatVals[:, 0:1], -1.0, 1.0))
-    zero_ang_inds = (halfAngles < 0.000001).flatten()
-    pos_ang_inds = np.invert(zero_ang_inds)
-    angles = np.empty(len(quatVals))
-    axes = np.empty((len(quatVals), 3))
+    # By the same logic as in the function where we find the angles between
+    # rotations represented by pairs of quaternions, we will take the abs of
+    # the cos of the halfangle to extract the one in the 0-pi range.
+    halfAngles = np.arccos(np.clip(np.abs(quatVals[..., 0:1]), -1, 1))
     angles = halfAngles + halfAngles
-    axes[pos_ang_inds] = quatVals[:, 1:][pos_ang_inds] / np.sin(halfAngles[pos_ang_inds])
-    axes[zero_ang_inds] = [1.0, 0.0, 0.0]
+    axes = safelyNormalizeArray(quatVals[..., 1:], np.sin(halfAngles))
     return axes, angles
 
 def multiplyQuatLists(q0, q1):
-    e = np.empty((4, len(q0)), dtype=np.float64)
+    num_qs = len(q0) if q0.ndim > 1 else len(q1)
+    e = np.empty((4, num_qs), dtype=np.float64)
     q0w, q0x, q0y, q0z = q0.transpose()
     q1w, q1x, q1y, q1z = q1.transpose()
  

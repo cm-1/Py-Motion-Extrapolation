@@ -37,8 +37,7 @@ BCOT_SEQ_NAMES = [
     "outdoor_scene2_movable_suspension_cam2",
 ]
 
-def shortBodyNameBCOT(longName):
-    maxLen = 11
+def shortBodyNameBCOT(longName, maxLen = 11):
     if len(longName) < maxLen:
         return longName
     return longName[:maxLen - 3] + "..."
@@ -176,3 +175,44 @@ class BCOT_Data_Calculator:
     def getRotationsCalcNP(self):
         self.loadData()
         return self._rotationsCalcNP
+
+    # Replace the file-loaded rotation data with a const-angular-accel sim.
+    def replaceRotationData(self):
+        if not self._dataLoaded:
+            raise NotImplementedError("Data must be loaded before replacing!")
+        num_const_a_vals = len(self.getTranslationsGTNP(False))
+        start_ang_vel = np.random.uniform(-0.08, 0.08, 3)
+        start_ang_vel_angle = np.linalg.norm(start_ang_vel)
+        const_a_ax = start_ang_vel / start_ang_vel_angle
+        # The values of 0.1 a few lines above and 0.0015 on the next line were
+        # chosen so that the maximum angular displacement between frames with a
+        # skip amount of 2 would still be under pi radians. In this case with a
+        # step of 3, the max start vel becomes 3*sqrt(0.24), the acceleration is
+        # "increased" by 3^2 = 9 (since 1/s^2 is in the unit), and there'd be
+        # a max of 120 "3-steps" in this dataset (max 360 frames per vid),
+        # so the max velocity becomes 3*sqrt(0.24) + 120*9*0.0015.
+        # Hope there's no mistake in the above math. Didn't double-check because
+        # this code worked "good enough" in tests.
+        const_a = np.random.sample(1)[0] * 0.0015 * const_a_ax
+        # print("const_a:", np.linalg.norm(const_a))
+        const_a_angle = np.linalg.norm(const_a)
+        const_a_times = np.arange(num_const_a_vals).reshape(-1, 1)
+
+        const_a_v_deltas = start_ang_vel_angle * const_a_times
+        const_a_a_deltas = 0.5 * const_a_angle * const_a_times**2
+        const_a_disp_angles = start_ang_vel_angle + const_a_v_deltas + const_a_a_deltas 
+
+        start_quat_2D = pm.normalizeAll(np.random.uniform(-1, 1, (1, 4)))
+        start_mat = pm.matFromAxisAngle(pm.axisAnglesFromQuats(start_quat_2D)[0])
+        repeat_axes = np.repeat(
+            const_a_ax.reshape(1, -1), num_const_a_vals, axis=0
+        )
+        delta_mats = pm.matsFromAxisAngleArrays(
+            const_a_disp_angles.flatten(), repeat_axes 
+        )
+        final_mats = np.einsum(
+            'ij,bjk->bik', start_mat, delta_mats
+        )
+        self._rotationMatsGTNP = final_mats
+        self._rotationsGTNP = pm.axisAngleFromMatArray(final_mats)
+        return

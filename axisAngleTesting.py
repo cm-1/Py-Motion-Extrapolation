@@ -192,3 +192,52 @@ aa_quat_diffs = np.abs(np.stack([
 quat_diffs_per_q = np.sum(aa_quat_diffs, axis = -1)
 if np.max(np.min(quat_diffs_per_q), axis = 0) > 0.0001:
     raise Exception("Quaternion reconstruction failed!")
+
+#%% Testing the Runge-Kutta quaternion integration.
+
+num_const_a_vals = 360
+start_ang_vel = np.random.uniform(-0.1, 0.1, 3)
+start_ang_vel_angle = np.linalg.norm(start_ang_vel)
+const_a_ax = start_ang_vel / start_ang_vel_angle
+const_a = np.random.sample(1)[0] * 0.0015 * const_a_ax
+const_a_angle = np.linalg.norm(const_a)
+const_a_times = np.arange(num_const_a_vals).reshape(-1, 1)[::3]
+const_a_ang_vel_deltas = const_a * const_a_times
+const_a_ang_vels = start_ang_vel + const_a_ang_vel_deltas
+
+const_a_v_deltas = start_ang_vel_angle * const_a_times
+const_a_a_deltas = 0.5 * const_a_angle * const_a_times**2
+const_a_disp_angles = start_ang_vel_angle + const_a_v_deltas + const_a_a_deltas 
+
+half_const_a_angs = const_a_disp_angles.reshape(-1, 1) / 2
+const_a_delta_qs = np.hstack((
+    np.cos(half_const_a_angs), const_a_ax * np.sin(half_const_a_angs)
+))
+
+start_quat = randomQuats(1)[0]
+gt_const_a_qs = pm.multiplyQuatLists(const_a_delta_qs, start_quat)
+
+rk_detail = 1001
+interp_rk_vels = np.linspace(const_a_ang_vels[:-1], const_a_ang_vels[1:], rk_detail, axis=1)
+
+const_a_angles = pm.anglesBetweenQuats(gt_const_a_qs[1:], gt_const_a_qs[:-1]).flatten()
+
+const_a_q_diffs = pm.multiplyQuatLists(
+    gt_const_a_qs[1:], pm.conjugateQuats( gt_const_a_qs[:-1])
+)
+fixed_axes = const_a_q_diffs[:, 1:] / np.linalg.norm(const_a_q_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
+ang_vel_vecs = pm.scalarsVecsMul(const_a_angles, fixed_axes)
+ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
+ang_vel_vecs[1:] += 0.5 * ang_acc_vecs
+ang_vel_vecs[0] = ang_vel_vecs[1] - ang_acc_vecs[0]
+extrap_ang_vel_vecs = ang_vel_vecs[1:] + ang_acc_vecs
+interp_ang_vels = np.linspace(ang_vel_vecs[1:], extrap_ang_vel_vecs, rk_detail, axis=1)
+   
+
+# pred_const_a_qs = pm.integrateAngularVelocityRK(interp_rk_vels, gt_const_a_qs[:-1], 4)[2:]
+pred_const_a_qs = pm.integrateAngularVelocityRK(interp_ang_vels[:-1], gt_const_a_qs[2:-1], 1)
+
+const_a_pred_errs = np.abs(pred_const_a_qs - gt_const_a_qs[3:])
+print("Max RK diff:", const_a_pred_errs.max())
+const_a_pred_angerrs = pm.anglesBetweenQuats(pred_const_a_qs, gt_const_a_qs[3:])
+print("Avg RK angle diff:", const_a_pred_angerrs.mean())
