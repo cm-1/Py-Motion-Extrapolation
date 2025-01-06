@@ -1210,7 +1210,7 @@ ax = fig.subplots()
 
 from matplotlib.colors import to_rgba
 
-vid_key = allResultsObj._allBodSeqKeys[9]
+vid_key = list(allResultsObj._allBodSeqKeys)[9]
 keys = ["Vel", "Acc"]#, "VelLERP", "Acc", "AccLERP"]
 key_colours = ["blue", "orange", "green", "red"]
 key_rgbas = [to_rgba(kc) for kc in key_colours]

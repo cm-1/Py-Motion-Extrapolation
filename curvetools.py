@@ -59,7 +59,7 @@ def tangentsFromPoints(pVals, shouldNormalize: bool = True):
         if shouldNormalize:
             estT = estT/np.linalg.norm(estT)
         else:
-            estT /= 12 # Omitted denominator from above calculations.
+            estT /= 12.0 # Omitted denominator from above calculations.
         tangentVals[i] = estT
         
     return tangentVals
