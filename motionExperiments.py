@@ -1262,8 +1262,10 @@ ax = fig.subplots()
 from matplotlib.colors import to_rgba
 
 vid_key = list(allResultsObj._allBodSeqKeys)[9]
-keys = ["Vel", "Acc"]#, "VelLERP", "Acc", "AccLERP"]
-key_colours = ["blue", "orange", "green", "red"]
+keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
+keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg421q"]#, "VelLERP", "Acc", "AccLERP"]
+keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
+key_colours = ["blue", "orange", "green", "red", "grey", "brown"]
 key_rgbas = [to_rgba(kc) for kc in key_colours]
 
 num_timesteps = len(allResultsObj.translation_results[keys[0]].errors[vid_key])
@@ -1281,7 +1283,7 @@ best_line_cos = np.dstack((best_line_xs, np.zeros_like(best_line_xs)))
 all_err_norms_np = np.array(all_err_norms)
 best_inds = np.argmin(all_err_norms_np, axis=0)
 best_colors = [key_rgbas[i] for i in best_inds]
-blc = LineCollection(best_line_cos, colors=best_colors)
+blc = LineCollection(best_line_cos, colors=best_colors, linewidths=5)
 
 ax.add_collection(blc)
 
