@@ -50,7 +50,7 @@ class SplineFiltersStruct:
         self.ctrlPtsToDerivFilter = ctrlPtsToDerivFilter.reshape(1, -1)
         self.ctrlPtsTo2ndDerivFilter = ctrlPtsTo2ndDerivFilter.reshape(1, -1)
 
-class SplineFittingCase(ABC):
+class ABCSplineFittingCase(ABC):
     def __init__(self, degree, num_inputs, num_outputs, max_num_ctrl_pts,
                  precalced_filters: SplineFiltersStruct):
 
@@ -103,7 +103,7 @@ class SplineFittingCase(ABC):
     def _getFittingMat(self) -> np.ndarray:
         ...
     
-class BSplineFittingCase(SplineFittingCase):
+class BSplineFittingCase(ABCSplineFittingCase):
     def _getFittingMat(self):
         # Just the number of pts in any B-Spline; nothing fitting-specific.
         knot_list = np.arange(self.num_ctrl_pts + self.degree + 1)
@@ -114,7 +114,7 @@ class BSplineFittingCase(SplineFittingCase):
         return matA
 
 
-class SplineFitCalculator(ABC):
+class ABCSplineFitCalculator(ABC):
 
     # This might not need to be its own method. I was thinking of overriding it
     # in subclasses, but then decided against it.
@@ -131,8 +131,8 @@ class SplineFitCalculator(ABC):
             raise Exception("Need at least order=k=(degree + 1) control points!")
 
 
-        self.fit_cases: typing.List[SplineFittingCase] = []
-        self.smooth_cases: typing.List[SplineFittingCase] = []
+        self.fit_cases: typing.List[ABCSplineFittingCase] = []
+        self.smooth_cases: typing.List[ABCSplineFittingCase] = []
         
         self.spline_degree: float = spline_degree
         self.max_num_ctrl_pts: int = max_num_ctrl_pts
@@ -151,7 +151,7 @@ class SplineFitCalculator(ABC):
             self.smooth_cases.append(self.createCase(num_inputs, 0))
 
     @abstractmethod
-    def createCase(self, num_inputs: int, num_outputs: int) -> SplineFittingCase:
+    def createCase(self, num_inputs: int, num_outputs: int) -> ABCSplineFittingCase:
         ...
 
     @abstractmethod
@@ -308,7 +308,7 @@ class SplineFitCalculator(ABC):
         return spline_preds
 
 
-class BSplineFitCalculator(SplineFitCalculator):
+class BSplineFitCalculator(ABCSplineFitCalculator):
     deg_to_pt_filter: typing.Dict[int, np.ndarray] = dict()
 
     def get_deg_ctrl_pt_filter(deg: int):
