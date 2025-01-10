@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
 import bspline
-from bspline_approximation import fitBSpline
+from spline_approximation import fitBSpline
 import gtCommon
 
 from plottools.buttongrid import ButtonGrid, ButtonGridConfig

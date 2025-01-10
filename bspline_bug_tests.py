@@ -1,7 +1,6 @@
 import numpy as np
 
-import bspline_approximation as bsa
-from bspline_approximation import BSplineFitCalculator, SplinePredictionMode
+from spline_approximation import BSplineFitCalculator, SplinePredictionMode
 import bspline
 
 SPLINE_DEGREE = 4

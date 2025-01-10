@@ -5,7 +5,7 @@ import typing
 import numpy as np
 import matplotlib.pyplot as plt
 
-from bspline_approximation import BSplineFitCalculator, SplinePredictionMode
+from spline_approximation import BSplineFitCalculator, SplinePredictionMode
 import gtCommon as gtc
 import posemath as pm
 

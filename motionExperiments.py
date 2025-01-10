@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 
-from bspline_approximation import SplinePredictionMode, BSplineFitCalculator
+from spline_approximation import SplinePredictionMode, BSplineFitCalculator
 import bspline
 
 import gtCommon as gtc
