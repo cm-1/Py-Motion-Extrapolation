@@ -1,10 +1,11 @@
+#%%
 from dataclasses import dataclass
 import typing
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from bspline_approximation import BSplineFitCalculator
+from bspline_approximation import BSplineFitCalculator, SplinePredictionMode
 import gtCommon as gtc
 import posemath as pm
 
@@ -16,7 +17,7 @@ TRANSLATION_THRESH_2 = 20.0
 ROTATION_THRESH_RAD_5 = np.deg2rad(5.0)#5.0)
 ROTATION_THRESH_RAD_2 = np.deg2rad(2.0)
 
-
+#%%
 
 @dataclass
 class PoseData:
@@ -116,6 +117,7 @@ input_range_len = max_input_pts - deg_range_inclusive[0]
 
 out_shape = (deg_range_len, ctrl_pt_range_len, input_range_len, len(combos))
 
+#%%
 results_2cm = np.zeros(out_shape)
 results_2deg = np.zeros(out_shape)
 results_5cm = np.zeros(out_shape)
@@ -123,31 +125,33 @@ results_5deg = np.zeros(out_shape)
 results_mean_sq_dist = np.zeros(out_shape)
 results_mean_sq_angle = np.zeros(out_shape)
 
-'''
+mode = SplinePredictionMode.EXTRAPOLATE
+
+smooth_and_accel = (mode == SplinePredictionMode.SMOOTH_AND_ACCEL)
 for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
     for num_ctrl_pts in range(deg + 1, max_ctrl_pts + 1):
         for num_input_pts in range(num_ctrl_pts, max_input_pts + 1):
             spline_pred_calculator = BSplineFitCalculator(
-                deg, num_ctrl_pts, num_input_pts
+                deg, num_ctrl_pts, num_input_pts, [mode]
             )
             for combo_ind, combo in enumerate(combos):
                 pd = poseDataDict[combo]
 
-'''
-                # all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
-                #     pd.translations, pd.rotations_aa
-                # )))
-'''
-
-
-                # all_spline_preds = spline_pred_calculator.smoothAllData(
-                #     np.hstack((pd.translations, pd.rotations_aa)),
-                #     np.hstack((pd.translations_quad_preds, pd.rotations_preds))
-                # )
-
-                all_spline_preds = spline_pred_calculator.constantAccelPreds(
-                    np.hstack((pd.translations, pd.rotations_aa))
-                )
+                all_spline_preds = None
+                if mode == SplinePredictionMode.EXTRAPOLATE:
+                    all_spline_preds = spline_pred_calculator.fitAllData(
+                        np.hstack((pd.translations, pd.rotations_aa))
+                    )
+                elif mode == SplinePredictionMode.SMOOTH:
+                    all_spline_preds = spline_pred_calculator.smoothAllData(
+                        np.hstack((pd.translations, pd.rotations_aa)),
+                        np.hstack((pd.translations_quad_preds, pd.rotations_preds))
+                    )
+                else:
+                    all_spline_preds = spline_pred_calculator.constantAccelPreds(
+                        np.hstack((pd.translations, pd.rotations_aa)),
+                        smooth_and_accel
+                    )
 
 
                 t_spline_preds = all_spline_preds[:, :3]
@@ -155,13 +159,13 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
 
                 # TODO: Remove this; for now, it's just to verify results
                 # against code that (as far as I can tell) works.
-                # if (deg == 2):
-                #     t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
-                #     t_vel_pred = pd.translations[deg - 1] + t_diff
+                if mode == SplinePredictionMode.EXTRAPOLATE and (deg == 2):
+                    t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
+                    t_vel_pred = pd.translations[deg - 1] + t_diff
                     
-                #     t_spline_preds = np.vstack(([pd.translations[0]], [t_vel_pred], t_spline_preds))
+                    t_spline_preds = np.vstack(([pd.translations[0]], [t_vel_pred], t_spline_preds))
                 
-                #     r_aa_spline_preds = np.vstack((pd.rotations_aa[:2], r_aa_spline_preds))
+                    r_aa_spline_preds = np.vstack((pd.rotations_aa[:2], r_aa_spline_preds))
 
                 t_errs_start = len(pd.translations_gt) - len(t_spline_preds)
                 r_errs_start = len(pd.rotations_gt_aa) - len(r_aa_spline_preds)
@@ -221,22 +225,36 @@ print()
 #%%
 
 np.savez(
-    "./bspline_param_evals_deriv.npz", res_2cm = results_2cm, res_2deg = results_2deg,
+    "./bspline_param_evals_latest.npz", res_2cm = results_2cm, res_2deg = results_2deg,
      res_5cm = results_5cm, res_5deg = results_5deg,
      res_mean_sq_dist = results_mean_sq_dist,
      res_mean_sq_angle = results_mean_sq_angle
 )                        
-'''
+
 #%% 
-load_result = np.load("../../bspline_param_evals_deriv.npz")
+load_target = "./default_filename.npz"
+if mode == SplinePredictionMode.EXTRAPOLATE:
+    load_target = "../../bspline_param_evals2.npz"
+elif mode == SplinePredictionMode.SMOOTH:
+    load_target = "./bspline_param_evals_quad.npz"
+elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
+    load_target = "./bspline_param_evals_smoothderiv.npz"
+elif mode == SplinePredictionMode.CONST_ACCEL:
+    load_target = "../../bspline_param_evals_deriv.npz"
+load_result = np.load(load_target)
 # load_result.close()
 
 #%%
 
 
 # Mean over all body/seq combos.
-data = load_result['res_mean_sq_dist'].mean(axis = -1) 
-
+data = load_result['res_mean_sq_dist'].mean(axis = -1)
+#%% 
+lr2 = np.load("./bspline_param_evals_latest.npz")
+data_latest = lr2['res_mean_sq_dist'].mean(axis = -1)
+ds = data[:data_latest.shape[0], :data_latest.shape[1], :data_latest.shape[2]]
+print("Max load comparison diff:", np.abs(ds - data_latest).max())
+#%%
 # Find out which indices do not contain data because they'd have too few ctrl
 # or input pts for B-Spline fitting.
 data_na = np.full(data.shape, False)
