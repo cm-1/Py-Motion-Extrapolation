@@ -97,8 +97,22 @@ class ABCSplineFittingCase(ABC):
         # Since our time step is not 1, we must explicity square it.
         accFilter *= self.data_u_step**2
 
-        self.inputsToConstAccelFilter = velFilter + 0.5 * accFilter
+        accDeltaFilter = velFilter + 0.5 * accFilter
 
+        # A filter that represents smoothing previous points, then extrapolating
+        # using constant acceleration.
+        max_filter_len = max(len(accFilter), len(self.inputsToLastPtFilter))
+        self.smooth_accel_filter = np.zeros(max_filter_len)
+        acc_filter_len_diff = max_filter_len - len(accFilter)
+        self.smooth_accel_filter[acc_filter_len_diff:] += accDeltaFilter
+        smooth_filter_len_diff = max_filter_len - len(self.inputsToLastPtFilter)
+        self.smooth_accel_filter[smooth_filter_len_diff:] += self.inputsToLastPtFilter
+
+        # Represents adding the result of the "delta" filter to the last point.
+        self.inputsToConstAccelFilter = accDeltaFilter
+        self.inputsToConstAccelFilter[-1] += 1.0
+
+        
     @abstractmethod
     def _getFittingMat(self) -> np.ndarray:
         ...
@@ -246,7 +260,7 @@ class ABCSplineFitCalculator(ABC):
 
         return spline_smooths
 
-    def constantAccelPreds(self, all_input_pts: np.ndarray):
+    def constantAccelPreds(self, all_input_pts: np.ndarray, smooth_before_accel_add: bool):
         if all_input_pts.ndim > 2:
             str_dim = str(all_input_pts.ndim)
             raise Exception("Array dimension " + str_dim + " not supported for Spline smoothing!")
@@ -282,29 +296,31 @@ class ABCSplineFitCalculator(ABC):
             # inputs are available. Case[0] corresponds to degree+1 inputs.
             inputs_beyond_min_req = available_inputs - self.min_inputs_req
             case = self.smooth_cases[inputs_beyond_min_req]
-            filter_len = len(case.inputsToLastPtFilter)
+            acc_filter = case.inputsToConstAccelFilter
+            if smooth_before_accel_add:
+                acc_filter = case.smooth_accel_filter
+            filter_len = len(acc_filter)
 
             startInd = available_inputs - filter_len
             
             ptsToFit = all_input_pts[startInd:available_inputs]
 
-            delta = curvetools.applyMaskToPts(
-                ptsToFit, case.inputsToConstAccelFilter
+            spline_preds[pred_ind] = curvetools.applyMaskToPts(
+                ptsToFit, acc_filter
             )
 
-            spline_preds[pred_ind] = all_input_pts[pred_ind] + delta
-
         main_filter = self.smooth_cases[-1].inputsToConstAccelFilter
+        if smooth_before_accel_add:
+            main_filter = self.smooth_cases[-1].smooth_accel_filter
+
         main_filter_len = len(main_filter)
         len_diff = self.max_num_input_data - main_filter_len
 
-        convolution_delta = curvetools.convolveFilter(
+        main_pred_start = self.max_num_input_data - 1
+        spline_preds[main_pred_start:] = curvetools.convolveFilter(
             main_filter, all_input_pts[len_diff:-1] 
         )
 
-        main_pred_start = self.max_num_input_data - 1
-        main_start_pts = all_input_pts[main_pred_start:-1]
-        spline_preds[main_pred_start:] = main_start_pts + convolution_delta
         return spline_preds
 
 
