@@ -47,11 +47,16 @@ class CinpactLogic:
             return (deriv_full, deriv2_full)
         return(deriv_full,)
 
+    def get_filter(self, u: float, start_ind: int, end_ind: int):
+        i_range = np.arange(start_ind, end_ind)
+        weights = CinpactCurve.weightFunc(u, i_range, self.supportRad, self.k)
+        return weights / weights.sum()
+
 class CinpactCurve(CinpactLogic):
     def __init__(self, ctrlPts, isOpen: bool, supportRad: float, k: float, numSubdivPts: int):
         super().__init__(len(ctrlPts), isOpen, supportRad, k)
         numCtrlPts = len(ctrlPts)
-        self.ctrlPts = ctrlPts
+        self.ctrlPts = np.asarray(ctrlPts, copy=False)
         # If ctrlPts is empty, just leave the curve empty.
         if numCtrlPts == 0:
             self.curvePoints = np.zeros((0,3), dtype=np.float64)
@@ -82,13 +87,11 @@ class CinpactCurve(CinpactLogic):
             u = self.paramVals[p]
             ptSum = np.zeros(self.ctrlPtDim)
             weightSum = 0.0
-            for i in range(startCtrlPt, endCtrlPt):
-                w = CinpactCurve.weightFunc(u, i, supportRad, k)
-                weightSum += w
-                ctrlInd = (i + self.numCtrlPts) % self.numCtrlPts
-                ptSum += w * self.ctrlPts[ctrlInd]
-
-            self.curvePoints[p] = (1.0/weightSum) * ptSum
+            i_vals = np.arange(startCtrlPt, endCtrlPt)
+            ws = CinpactCurve.weightFunc(u, i_vals, supportRad, k)
+            ws /= ws.sum()
+            # ctrlInds = (i_vals + self.numCtrlPts) % self.numCtrlPts
+            self.curvePoints[p] = applyMaskToPts(self.ctrlPts[i_vals], ws)
 
             if (u >= midCtrlPt + 1):
                 midCtrlPt += 1
@@ -112,7 +115,7 @@ class CinpactCurve(CinpactLogic):
     # exp[-(k(u-i)^2)/(c^2 - (u-i)^2)]
     def temperingFunc(u: float, i: float, supportRad: float, k: float):
         umi_all = np.asarray(u - i)
-        retVal = np.empty_like(u)
+        retVal = np.empty_like(umi_all)
         inside_inds = np.abs(umi_all) < supportRad
         umi = umi_all[inside_inds]
         expon = -k*umi*umi/(supportRad*supportRad - umi*umi)
@@ -151,11 +154,7 @@ class CinpactCurve(CinpactLogic):
         # Which is (-k(u-i)^2)2(u-i)/(c^2 - (u-i)^2)^-2 + (-2k(u-i))(...)^-1
         # Then the derivative of sin(...)(...)^-1 is:
         # pi*cos(pi(u-i))/pi(u-i) - pi*sin(pi(u-i))/(pi(u-i))^2
-        
-        u_np = np.asarray(u)
-
-
-        umi_all = u_np - i
+        umi_all = np.asarray(u - i)
 
         inside_inds = np.abs(umi_all) < supportRad    
 
@@ -206,8 +205,8 @@ class CinpactCurve(CinpactLogic):
         e_d_pt = e_exp_d*e_pt*sinc_pt
         sinc_d_pt = sinc_d * e_pt
 
-        weights = np.zeros_like(u_np)
-        derivs = np.zeros_like(u_np)
+        weights = np.zeros_like(umi_all)
+        derivs = np.zeros_like(umi_all)
         weights[inside_inds] = e_pt * sinc_pt
         derivs[inside_inds] = e_d_pt + sinc_d_pt
 
@@ -220,7 +219,7 @@ class CinpactCurve(CinpactLogic):
             derivs2[inside_inds] = e_exp_d2*e_pt*sinc_pt + e_exp_d*e_d_pt
             derivs2[inside_inds] += 2*e_exp_d*sinc_d_pt + e_pt*sinc_d2 
 
-        if np.isscalar(u_np):
+        if np.isscalar(umi_all):
             weights = weights.item()
             derivs = derivs.item()
             if include_2nd_deriv:
