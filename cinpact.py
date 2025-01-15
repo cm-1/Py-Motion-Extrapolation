@@ -145,8 +145,33 @@ class CinpactCurve(CinpactLogic):
             g2 = g**2
         two_gd = 2*gd
         return fd2/g + (-fd*two_gd - f*gd2 + f*gd*two_gd/g)/g2
-        
-    def weightAndDerivative(u: float, i: int, supportRad: float, k: float, include_2nd_deriv: bool):
+
+    def getBCinpactWeights(regular_umi, half_order: float, support_rad_sq: float,
+                           support_rad: float, k: float):
+        bspline_umi = (regular_umi / half_order) - 1
+        valid_interval = np.abs(bspline_umi) < support_rad
+        invalid_interval = np.invert(valid_interval)
+        inner_umi = bspline_umi[valid_interval]
+        umi_sq = inner_umi**2
+
+        ret_val = np.empty_like(bspline_umi)
+
+        piumi = np.pi * inner_umi
+        zero_inds = (piumi == 0.0)
+        piumi[zero_inds] = 1.0 # Prevent division by zero warnings
+        unnormed_weights = np.sin(piumi)/piumi
+        unnormed_weights[zero_inds] = 1.0
+
+        expon = -k*umi_sq/(support_rad_sq - umi_sq)
+        unnormed_weights *= np.exp(expon)
+        ret_val[valid_interval] = unnormed_weights
+        ret_val[invalid_interval] = 0.0
+        return ret_val
+
+    def weightAndDerivative(u: float, i: int, supportRad: float, k: float,
+                            include_2nd_deriv: bool, 
+                            do_bspline_scale: bool = False,
+                            bspline_half_order = None):
         # We need the derivative of:
         # e^(...)sin(...)/(...)
         # Let's start with the derivative of e^(...)
@@ -154,7 +179,10 @@ class CinpactCurve(CinpactLogic):
         # Which is (-k(u-i)^2)2(u-i)/(c^2 - (u-i)^2)^-2 + (-2k(u-i))(...)^-1
         # Then the derivative of sin(...)(...)^-1 is:
         # pi*cos(pi(u-i))/pi(u-i) - pi*sin(pi(u-i))/(pi(u-i))^2
+
         umi_all = np.asarray(u - i)
+        if do_bspline_scale:
+            umi_all = (umi_all / bspline_half_order) - 1
 
         inside_inds = np.abs(umi_all) < supportRad    
 
@@ -224,6 +252,13 @@ class CinpactCurve(CinpactLogic):
             derivs = derivs.item()
             if include_2nd_deriv:
                 derivs2 = derivs2.item()
+            else:
+                derivs2 = np.nan # Placeholder so division doesn't fail later.
+        
+        if do_bspline_scale:
+            derivs /= bspline_half_order
+            derivs2 /= (bspline_half_order**2)
+
         if include_2nd_deriv:
             return (weights, derivs, derivs2)
         

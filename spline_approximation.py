@@ -7,6 +7,7 @@ from enum import Enum
 import numpy as np
 
 import bspline
+from cinpact import CinpactLogic, CinpactCurve
 import curvetools
 
 ndarray_couple_type = typing.Tuple[np.ndarray, np.ndarray]
@@ -26,6 +27,17 @@ def bSplineFittingMat(numCtrlPts, order, numInputPts, uVals, knotVals):
             mat[r][c] = bspline.bSplineInner(u, order, delta, iden[c], knotVals)
 
     return mat
+
+def bSincpactFittingMat(numInputPts: int, numCtrlPts: int, uVals: np.ndarray,
+                       half_order: float, support_rad_sq: float,
+                       support_rad: float, k: float):
+    # raise NotImplementedError()
+    umi_inputs = uVals[:numInputPts, np.newaxis] - np.arange(numCtrlPts)
+    unnormed = CinpactCurve.getBCinpactWeights(
+        umi_inputs, half_order, support_rad_sq, support_rad, k
+    )
+    return unnormed / np.sum(unnormed, axis=1, keepdims=True)
+
 
 def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
     if (len(ptsToFit) + numUnknownPts) != len(uVals):
@@ -50,22 +62,14 @@ class SplinePredictionMode(Enum):
     CONST_ACCEL = 3
     SMOOTH_AND_ACCEL = 4
 
+@dataclass
 class SplineFiltersStruct:
-    def __init__(self, ctrlPtsToLastFilter: np.ndarray,
-                 ctrlPtsToDerivFilter: np.ndarray,
-                 ctrlPtsTo2ndDerivFilter: np.ndarray):
-        self.ctrlPtsToLastFilter = None
-        self.ctrlPtsToDerivFilter = None
-        self.ctrlPtsTo2ndDerivFilter = None
-
-        if ctrlPtsToLastFilter is not None:
-            self.ctrlPtsToLastFilter = ctrlPtsToLastFilter.reshape(1,-1)
-        if ctrlPtsToDerivFilter is not None:
-            self.ctrlPtsToDerivFilter = ctrlPtsToDerivFilter.reshape(1,-1)
-            self.ctrlPtsTo2ndDerivFilter = ctrlPtsTo2ndDerivFilter.reshape(1,-1)
+    ctrlPtsToLastFilter: np.ndarray = None
+    ctrlPtsToDerivFilter: np.ndarray = None
+    ctrlPtsTo2ndDerivFilter: np.ndarray = None
 
 class ABCSplineFittingCase(ABC):
-    def __init__(self, degree, num_inputs, max_num_ctrl_pts,
+    def __init__(self, degree, num_inputs, num_ctrl_pts,
                  precalced_filters: SplineFiltersStruct,
                  modes: typing.List[SplinePredictionMode]):
 
@@ -92,7 +96,9 @@ class ABCSplineFittingCase(ABC):
                 else:
                     raise ValueError(f"Unknown SplinePredictionMode: {mode}")
 
-        self.num_ctrl_pts = min(num_inputs, max_num_ctrl_pts)
+        self.filters_on_ctrl_pts = precalced_filters
+
+        self.num_ctrl_pts = num_ctrl_pts
 
         self.uInterval = (degree, self.num_ctrl_pts) 
 
@@ -111,8 +117,12 @@ class ABCSplineFittingCase(ABC):
                 if i > 0:
                     ipii = copy.copy(ipii)
                 self.by_mode_dict[k] = ipii
-            
-        lastPtFilterMat = precalced_filters.ctrlPtsToLastFilter
+
+        lastPtFilterMat = None
+        if need_extrap or calc_last_smooth_pt:    
+            lastPtFilterMat = precalced_filters.ctrlPtsToLastFilter.reshape(
+                1, -1
+            )
         if need_extrap:
             info = self.by_mode_dict[SplinePredictionMode.EXTRAPOLATE]
             pseudoInvLastRows = info.pseudo_inv[-lastPtFilterMat.shape[1]:]
@@ -131,16 +141,16 @@ class ABCSplineFittingCase(ABC):
 
         if len(accel_keys) > 0:
             shared_acc_info = self.by_mode_dict[accel_keys[0]]
-            ctrlToVelFilter = precalced_filters.ctrlPtsToDerivFilter
-            ctrlToAccFilter = precalced_filters.ctrlPtsTo2ndDerivFilter
+            ctrlToVel = precalced_filters.ctrlPtsToDerivFilter.reshape(1, -1)
+            ctrlToAcc = precalced_filters.ctrlPtsTo2ndDerivFilter.reshape(1, -1)
 
-            assert ctrlToVelFilter.shape[1] == ctrlToAccFilter.shape[1], \
+            assert ctrlToVel.shape[1] == ctrlToAcc.shape[1], \
             "Spline velocity and acceleration filters must have same shape!"
 
             pseudo_inv = shared_acc_info.pseudo_inv
-            velAccPseudoInvRows = pseudo_inv[-ctrlToVelFilter.shape[1]:]
-            velFilter = (ctrlToVelFilter @ velAccPseudoInvRows).flatten()
-            accFilter = (ctrlToAccFilter @ velAccPseudoInvRows).flatten()
+            velAccPseudoInvRows = pseudo_inv[-ctrlToVel.shape[1]:]
+            velFilter = (ctrlToVel @ velAccPseudoInvRows).flatten()
+            accFilter = (ctrlToAcc @ velAccPseudoInvRows).flatten()
 
             
             du = shared_acc_info.data_u_vals[1] - shared_acc_info.data_u_vals[0]
@@ -207,6 +217,28 @@ class BSplineFittingCase(ABCSplineFittingCase):
         )
         return matA
 
+class BSincpactFittingCase(ABCSplineFittingCase):
+    def __init__(self, degree, num_inputs, num_ctrl_pts,
+                 precalced_filters: SplineFiltersStruct,
+                 modes: typing.List[SplinePredictionMode],
+                 cinpact_logic: CinpactLogic, support_rad_sq: float,
+                 half_order: float):
+        # CINPACT logic will be required to create the point-fitting matrix,
+        # which in turn means it must be available before the super constructor!
+        self.cinpact_logic = cinpact_logic
+        self.support_rad_sq = support_rad_sq
+        self.half_order = half_order
+        super().__init__(
+            degree, num_inputs, num_ctrl_pts, precalced_filters, modes
+        )
+
+    def _getFittingMat(self, data_u_vals):
+        return bSincpactFittingMat(
+            self.num_inputs, self.num_ctrl_pts, data_u_vals, self.half_order, 
+            self.support_rad_sq, self.cinpact_logic.supportRad,
+            self.cinpact_logic.k        
+        )
+
 
 class ABCSplineFitCalculator(ABC):
 
@@ -232,30 +264,38 @@ class ABCSplineFitCalculator(ABC):
         self.spline_degree: float = spline_degree
         self.max_num_ctrl_pts: int = max_num_ctrl_pts
         self.max_num_input_data: int = max_num_input_data
+        self.modes = modes
 
-        self.ctrlToLastPtFilter = self._getLastPtFilter()
-        derivFilters = self._get1st2ndDerivativeFilters()
-        self.ctrlToDerivFilter = derivFilters[0]
-        self.ctrlTo2ndDerivFilter = derivFilters[1]
-        self.filter_row_mats = SplineFiltersStruct(
-            self.ctrlToLastPtFilter, derivFilters[0], derivFilters[1]
-        )
+        self.reqs_ctrl_to_last_pt = False
+        self.reqs_ctrl_to_derivs = False
+        for mode in modes:
+            if mode == SplinePredictionMode.EXTRAPOLATE:
+                self.reqs_ctrl_to_last_pt = True
+            elif mode == SplinePredictionMode.SMOOTH:
+                self.reqs_ctrl_to_last_pt = True
+            elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
+                self.reqs_ctrl_to_last_pt = True
+                self.reqs_ctrl_to_derivs = True
+            elif mode == SplinePredictionMode.CONST_ACCEL:
+                self.reqs_ctrl_to_derivs = True
+            else:
+                raise ValueError("Unexpected mode!")
+        
         self.min_inputs_req = self.get_min_inputs_req(spline_degree)
-        for num_inputs in range(self.min_inputs_req, max_num_input_data + 1):
-            self.cases.append(self.createCase(num_inputs, modes))
+        self._createAllCases()
 
     @abstractmethod
-    def createCase(self, num_inputs: int, 
+    def createCase(self, num_inputs: int, num_ctrl_pts: int, 
                    modes: typing.List[SplinePredictionMode]) -> ABCSplineFittingCase:
         ...
 
-    @abstractmethod
-    def _getLastPtFilter(self) -> np.ndarray:
-        ...
-
-    @abstractmethod
-    def _get1st2ndDerivativeFilters(self) -> ndarray_couple_type:
-        ...
+    def _createAllCases(self):
+        num_input_bound = self.max_num_input_data + 1
+        for num_inputs in range(self.min_inputs_req, num_input_bound):
+            num_ctrl_pts = min(num_inputs, self.max_num_ctrl_pts)
+            self.cases.append(self.createCase(
+                num_inputs, num_ctrl_pts, self.modes
+            ))
 
     def fitAllData(self, all_input_pts: np.ndarray):
         if all_input_pts.ndim > 2:
@@ -327,8 +367,8 @@ class ABCSplineFitCalculator(ABC):
 
             max_case_ind = len(self.cases) - 1
             inputs_beyond_min_req = available_inputs - (self.spline_degree + 1)
-            case_ind = min(max_case_ind, inputs_beyond_min_req)
-            case_pseudo_inv = self.cases[case_ind].by_mode_dict[mode].pseudo_inv
+            case = self.cases[min(max_case_ind, inputs_beyond_min_req)]
+            case_pseudo_inv = case.by_mode_dict[mode].pseudo_inv
 
             pseudoInv_measured = case_pseudo_inv[:, :-1]
             ctrlPts = pseudoInv_measured @ ptsToFit_measured
@@ -337,9 +377,9 @@ class ABCSplineFitCalculator(ABC):
 
             # The documentation for np.dot(a, b) states that if b is 1D like our
             # filter, then np.dot() will do a weighted sum along a's last axis.
+            smooth_filter = case.filters_on_ctrl_pts.ctrlPtsToLastFilter
             spline_smooths[pred_ind] = np.dot(
-                ctrlPts[-len(self.ctrlToLastPtFilter):].transpose(),
-                self.ctrlToLastPtFilter
+                ctrlPts[-len(smooth_filter):].transpose(), smooth_filter
             ).flatten()
 
         return spline_smooths
@@ -424,14 +464,28 @@ class BSplineFitCalculator(ABCSplineFitCalculator):
         return f
 
 
-    def createCase(self, num_inputs, modes):
+    def createCase(self, num_inputs, num_ctrl_pts, modes):
         return BSplineFittingCase(
-            self.spline_degree, num_inputs, self.max_num_ctrl_pts, 
-            self.filter_row_mats, modes
+            self.spline_degree, num_inputs, num_ctrl_pts, 
+            self.filters_on_ctrl_pts, modes
         )
 
-    def _getLastPtFilter(self) -> np.ndarray:
-        return BSplineFitCalculator.get_deg_ctrl_pt_filter(self.spline_degree)
+    def _createAllCases(self):
+        last_pt_filter = None
+        deriv_filter = None
+        deriv2_filter = None
+        if self.reqs_ctrl_to_last_pt:
+            last_pt_filter = BSplineFitCalculator.get_deg_ctrl_pt_filter(
+                self.spline_degree
+            )
+        if self.reqs_ctrl_to_derivs:
+            deriv_filter, deriv2_filter = self._get1st2ndDerivativeFilters()                
+        
+        self.filters_on_ctrl_pts = SplineFiltersStruct(
+            last_pt_filter, deriv_filter, deriv2_filter
+        )
+
+        return super()._createAllCases()        
 
     def _diffFilter(orig_filter):
         # [a b c d e] [-1 1 / 0 -1 1 / 0 0 -1 1 ...]
@@ -475,4 +529,96 @@ class BSplineFitCalculator(ABCSplineFitCalculator):
             raise NotImplementedError("Only handles max input count for now!")
 
         return (info.pseudo_inv @ in_data)
+    
+class BSincpactFitCalculator(ABCSplineFitCalculator):
+    def __init__(self, spline_degree: typing.Union[float, int],
+                 max_num_ctrl_pts: int, max_num_input_data: int, 
+                 support_rad: float, k: float,
+                 modes: typing.List[SplinePredictionMode]):
+        # The support radius and k will be used by other methods that the super
+        # constructor calls, so they must be set first!
+        self.k = k
+        self.support_rad = support_rad
+        self.support_rad_sq = support_rad * support_rad
+        self.half_order = (spline_degree + 1.0)/2.0
+        super().__init__(
+            spline_degree, max_num_ctrl_pts, max_num_input_data, modes
+        )
+        
+    def createCase(self, num_inputs, num_ctrl_pts, modes):
+        start_ind = max(0, self.unnormed_filter_len - num_ctrl_pts)
+        
+        individ_weights = self.unnormed_filter_info[0][start_ind:]
+        w_sum = individ_weights.sum()
+        weights = individ_weights / w_sum
+        
+        filters_on_ctrl_pts = None
+        if self.reqs_ctrl_to_derivs:
+            derivs, derivs2 = (
+                ufi[start_ind:] for ufi in self.unnormed_filter_info[1:]
+            )
+            d_sum = derivs.sum()
+            w_sum_sq = w_sum**2
+            deriv_full = -weights*d_sum/w_sum_sq + derivs/w_sum
+            deriv2_full = CinpactCurve._quotientDeriv2(
+                weights, w_sum, derivs, d_sum, derivs2, derivs2.sum(), w_sum_sq 
+            )
+            filters_on_ctrl_pts = SplineFiltersStruct(
+                weights, deriv_full, deriv2_full
+            )
+
+        else:
+            filters_on_ctrl_pts = SplineFiltersStruct(weights, None, None)
+        
+        return BSincpactFittingCase(
+            self.spline_degree, num_inputs, num_ctrl_pts,
+            filters_on_ctrl_pts, modes, self.last_cinpact_logic,
+            self.support_rad_sq, self.half_order
+        )
+
+    def _createAllCases(self):
+        # The B-Cinpact basis function will "start" at coordinate i.
+        # It will actually be nonzero for some points before this, but its
+        # "main" and B-Spline-emulating portion will start at i. Then, its
+        # centre will be at i + half_order. From the centre, it'll be nonzero
+        # for half-order * support-radius further units. So, the nonzero basis 
+        # functions at the last point, which is u=m+1, will be the ones s.t.
+        # i + half_order (1 + support_rad) > m + 1 
+        # => i > m + 1 - half_order (1 + support_rad)
+        first_i_float = self.max_num_ctrl_pts - self.half_order * (1 + self.support_rad)
+        first_i = max(0, np.ceil(first_i_float))
+        i_vals = np.arange(first_i, self.max_num_ctrl_pts)
+
+        self.unnormed_filter_info = None
+        if self.reqs_ctrl_to_derivs:
+            self.unnormed_filter_info = CinpactCurve.weightAndDerivative(
+                self.max_num_ctrl_pts, i_vals, self.support_rad, self.k, True,
+                True, self.half_order
+            )
+        else:
+            umi = self.max_num_ctrl_pts - i_vals
+            unnormed_weights = CinpactCurve.getBCinpactWeights(
+                umi, self.half_order, self.support_rad_sq, self.support_rad,
+                self.k
+            )
+            self.unnormed_filter_info = (unnormed_weights, )
+        self.unnormed_filter_len = len(self.unnormed_filter_info[0])
+
+
+        num_input_bound = self.max_num_input_data + 1
+        last_num_ctrl_pts = -1
+        self.last_cinpact_logic = None
+        for num_inputs in range(self.min_inputs_req, num_input_bound):
+            num_ctrl_pts = min(num_inputs, self.max_num_ctrl_pts)
+            if num_ctrl_pts != last_num_ctrl_pts:
+                last_num_ctrl_pts = num_ctrl_pts
+                self.last_cinpact_logic = CinpactLogic(
+                    num_ctrl_pts, True, self.support_rad, self.k
+                )
+            self.cases.append(self.createCase(
+                num_inputs, num_ctrl_pts, self.modes
+            ))
+
+
+
     

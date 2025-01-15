@@ -129,24 +129,34 @@ lin_pts = lin_mat @ bpts.points.T
 ax2.plot(bpts.params, lin_pts.flatten(), label="B-SPLINE for linear input")
 
 c_weights_10 = np.empty((10, len(bpts.params)))
+cb_weights_10 = np.empty((10, len(bpts.params)))
 
+b_deg2_k = 25.83
+b_deg2_sr = 3.898
+b_deg3_k = 17.27
+b_deg3_sr = 3.684
 for i in range(10):
     ax2.plot(bpts.params, bpts.points[:, i])
     c_from_b_params = CinpactCurve.bsplineTransformU(bpts.params, i, 3)
-    c_weights_10[i] = CinpactCurve.weightFunc(c_from_b_params, i, 3.898, 25.83)
+    cb_weights_10[i] = CinpactCurve.weightFunc(c_from_b_params, i, b_deg2_sr, b_deg3_k)
+    c_weights_10[i] = CinpactCurve.weightFunc(bpts.params - 3, i, b_deg2_sr, b_deg3_k)
 
-c_sums_10 = c_weights_10.sum(axis=0, keepdims=True)
-c_nweights_10 = c_weights_10 / c_sums_10
+c_nweights_10 = c_weights_10 / c_weights_10.sum(axis=0, keepdims=True)
+cb_nweights_10 = cb_weights_10 / cb_weights_10.sum(axis=0, keepdims=True)
 c_lin_pts = lin_mat @ c_nweights_10
+cb_lin_pts = lin_mat @ cb_nweights_10
+
 
 ax2.scatter(
-    bpts.params[::10], c_lin_pts.flatten()[::10], facecolors="none", 
+    bpts.params[::10], cb_lin_pts.flatten()[::10], facecolors="none", 
     edgecolors="orange", label="B-CINPACT for linear input"
 )
+
+ax2.plot(bpts.params, c_lin_pts.flatten(), label="CINPACT for linear input")
 
 c_weights_10 = np.empty((len(bpts.params), i))
 
 for i in range(10):
-    ax2.plot(bpts.params, c_nweights_10[i], dashes=[1,1])
+    ax2.plot(bpts.params, cb_nweights_10[i], dashes=[1,1])
 ax2.legend()
 plt.show()
