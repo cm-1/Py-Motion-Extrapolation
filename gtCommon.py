@@ -95,11 +95,14 @@ class BCOT_Data_Calculator:
                 d["result_directory"]
             )
             
-    def isBodySeqPairValid(bodyIndex, seqIndex):
+    def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
         BCOT_Data_Calculator._setupPosePaths()
 
         seq = BCOT_SEQ_NAMES[seqIndex]
         bod = BCOT_BODY_NAMES[bodyIndex]
+
+        if exclude_cam2 and "cam2" in seq:
+            return False
         
         posePathGT = BCOT_Data_Calculator._DATASET_DIR / seq / bod
         return posePathGT.is_dir()

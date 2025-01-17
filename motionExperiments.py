@@ -328,6 +328,7 @@ class ConsolidatedResults:
                 mean_ax = 0
                 row_names = [
                     gtc.shortSeqNameBCOT(n) for n in gtc.BCOT_SEQ_NAMES
+                    if "cam2" not in n
                 ]
             row_names.append("Avg")
 
@@ -344,6 +345,9 @@ class ConsolidatedResults:
             ordered_score_means = [
                 np.nanmean(results[n].scores2D, axis=mean_ax)
                 for n in ordered_names
+            ]
+            ordered_score_means = [
+                ms[np.invert(np.isnan(ms))] for ms in ordered_score_means
             ]
 
             score_means = ordered_score_means
@@ -411,7 +415,7 @@ class ConsolidatedResults:
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
             combos.append((b,s))
 
 skipAmount = 2
