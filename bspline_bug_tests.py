@@ -1,7 +1,6 @@
 import numpy as np
 
-import bspline_approximation as bsa
-from bspline_approximation import BSplineFitCalculator
+from spline_approximation import BSplineFitCalculator, SplinePredictionMode
 import bspline
 
 SPLINE_DEGREE = 4
@@ -27,7 +26,10 @@ weights = radii = np.ones(DESIRED_CTRL_PTS, dtype=int)
 outputs = bspline.specifiedPtsFromNURBS(ctrl_pts, weights, m, k, knots, muList, params, radii)
 out_pts = outputs.points
 
-fitter = BSplineFitCalculator(SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST)
+fit_modes = [SplinePredictionMode.EXTRAPOLATE]
+fitter = BSplineFitCalculator(
+    SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST, fit_modes
+)
 
 res_extrap = fitter.fitAllData(out_pts)[-1]
 

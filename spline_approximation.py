@@ -1,7 +1,8 @@
+import copy
 from abc import ABC, abstractmethod
-# from dataclasses import dataclass
+from dataclasses import dataclass
 import typing
-# from enum import Enum
+from enum import Enum
 
 import numpy as np
 
@@ -37,84 +38,177 @@ def fitBSpline(numCtrlPts, order, ptsToFit, uVals, knotVals, numUnknownPts = 0):
     fitted_ctrl_pts = np.linalg.lstsq(mat, ptsToFit, rcond = None)[0]
     return fitted_ctrl_pts
 
-# class SplinePredictionMode(Enum):
-#     EXTRAPOLATE = 1
-#     SMOOTH = 2
-#     CONST_ACCEL = 3
+@dataclass 
+class PseudoInvAndFilterInfo:
+    data_u_vals: np.ndarray
+    pseudo_inv: np.ndarray
+    filter_on_input: np.ndarray = None # Might need to be filled in later
+
+class SplinePredictionMode(Enum):
+    EXTRAPOLATE = 1
+    SMOOTH = 2
+    CONST_ACCEL = 3
+    SMOOTH_AND_ACCEL = 4
 
 class SplineFiltersStruct:
     def __init__(self, ctrlPtsToLastFilter: np.ndarray,
                  ctrlPtsToDerivFilter: np.ndarray,
                  ctrlPtsTo2ndDerivFilter: np.ndarray):
-        self.ctrlPtsToLastFilter = ctrlPtsToLastFilter.reshape(1, -1)
-        self.ctrlPtsToDerivFilter = ctrlPtsToDerivFilter.reshape(1, -1)
-        self.ctrlPtsTo2ndDerivFilter = ctrlPtsTo2ndDerivFilter.reshape(1, -1)
+        self.ctrlPtsToLastFilter = None
+        self.ctrlPtsToDerivFilter = None
+        self.ctrlPtsTo2ndDerivFilter = None
 
-class SplineFittingCase(ABC):
-    def __init__(self, degree, num_inputs, num_outputs, max_num_ctrl_pts,
-                 precalced_filters: SplineFiltersStruct):
+        if ctrlPtsToLastFilter is not None:
+            self.ctrlPtsToLastFilter = ctrlPtsToLastFilter.reshape(1,-1)
+        if ctrlPtsToDerivFilter is not None:
+            self.ctrlPtsToDerivFilter = ctrlPtsToDerivFilter.reshape(1,-1)
+            self.ctrlPtsTo2ndDerivFilter = ctrlPtsTo2ndDerivFilter.reshape(1,-1)
 
-        num_u_vals = num_inputs + num_outputs
+class ABCSplineFittingCase(ABC):
+    def __init__(self, degree, num_inputs, max_num_ctrl_pts,
+                 precalced_filters: SplineFiltersStruct,
+                 modes: typing.List[SplinePredictionMode]):
+
+        need_extrap = False
+        smooth_ctrl_keys = []
+        calc_last_smooth_pt = False
+        save_last_smooth_pt = False
+        calc_non_smoothed_accel = False
+        accel_keys = []
+        for mode in modes:
+            if mode == SplinePredictionMode.EXTRAPOLATE:
+                need_extrap = True
+            else:
+                smooth_ctrl_keys.append(mode)
+                if mode == SplinePredictionMode.SMOOTH:
+                    calc_last_smooth_pt = True
+                    save_last_smooth_pt = True
+                elif mode == SplinePredictionMode.CONST_ACCEL:
+                    accel_keys.append(mode)
+                    calc_non_smoothed_accel = True
+                elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
+                    calc_last_smooth_pt = True
+                    accel_keys.append(mode)
+                else:
+                    raise ValueError(f"Unknown SplinePredictionMode: {mode}")
 
         self.num_ctrl_pts = min(num_inputs, max_num_ctrl_pts)
 
-        uInterval = (degree, self.num_ctrl_pts) 
-
-        self.data_u_vals = np.linspace(uInterval[0], uInterval[1], num_u_vals)
-        self.data_u_step = self.data_u_vals[1] - self.data_u_vals[0]
+        self.uInterval = (degree, self.num_ctrl_pts) 
 
         self.degree = degree
         self.num_inputs = num_inputs
-        matA = self._getFittingMat()
+
+        self.by_mode_dict: \
+            typing.Dict[SplinePredictionMode, PseudoInvAndFilterInfo] = dict()
+        
+        if need_extrap:
+            ipii = self._getInitialPseudoInvInfo(num_inputs + 1)
+            self.by_mode_dict[SplinePredictionMode.EXTRAPOLATE] = ipii
+        if len(smooth_ctrl_keys) > 0:
+            ipii = self._getInitialPseudoInvInfo(num_inputs)
+            for i, k in enumerate(smooth_ctrl_keys):
+                if i > 0:
+                    ipii = copy.copy(ipii)
+                self.by_mode_dict[k] = ipii
+            
+        lastPtFilterMat = precalced_filters.ctrlPtsToLastFilter
+        if need_extrap:
+            info = self.by_mode_dict[SplinePredictionMode.EXTRAPOLATE]
+            pseudoInvLastRows = info.pseudo_inv[-lastPtFilterMat.shape[1]:]
+            inputsToLastPtFilterRowVec = lastPtFilterMat @ pseudoInvLastRows
+            info.filter_on_input = inputsToLastPtFilterRowVec.flatten()
+        
+        last_smooth_filter = None
+        if calc_last_smooth_pt:
+            info = self.by_mode_dict[smooth_ctrl_keys[0]]
+            pseudoInvLastRows = info.pseudo_inv[-lastPtFilterMat.shape[1]:]
+            inputsToLastPtFilterRowVec = lastPtFilterMat @ pseudoInvLastRows
+            last_smooth_filter = inputsToLastPtFilterRowVec.flatten()
+            if save_last_smooth_pt:
+                info = self.by_mode_dict[SplinePredictionMode.SMOOTH]
+                info.filter_on_input = last_smooth_filter
+
+        if len(accel_keys) > 0:
+            shared_acc_info = self.by_mode_dict[accel_keys[0]]
+            ctrlToVelFilter = precalced_filters.ctrlPtsToDerivFilter
+            ctrlToAccFilter = precalced_filters.ctrlPtsTo2ndDerivFilter
+
+            assert ctrlToVelFilter.shape[1] == ctrlToAccFilter.shape[1], \
+            "Spline velocity and acceleration filters must have same shape!"
+
+            pseudo_inv = shared_acc_info.pseudo_inv
+            velAccPseudoInvRows = pseudo_inv[-ctrlToVelFilter.shape[1]:]
+            velFilter = (ctrlToVelFilter @ velAccPseudoInvRows).flatten()
+            accFilter = (ctrlToAccFilter @ velAccPseudoInvRows).flatten()
+
+            
+            du = shared_acc_info.data_u_vals[1] - shared_acc_info.data_u_vals[0]
+
+
+            # From the perspective of the "Spline", each time step is not 1 
+            # unit, but instead the distance between u values we chose for our
+            # points when doing the least-squares fitting. Because it is simpler
+            # to, e.g., have consecutive integer knots than consecutive integer 
+            # sample locations, the result is that the space between these 
+            # sampled u values, and thus the "time", will not be 1. So, the time
+            # step we multiply the velocity by to obtain displacement will be
+            # this u sample step.
+            velFilter *= du # delta_time*velocity
+            
+            # Since our time step is not 1, we must explicity square it.
+            accFilter *= du**2
+
+            accDeltaFilter = velFilter + 0.5 * accFilter
+
+            for mode in accel_keys:
+                if mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
+                    # A filter that represents smoothing previous points, then 
+                    # extrapolating using constant acceleration.
+                    smooth_filter_len = len(last_smooth_filter)
+                    acc_filter_len = len(accFilter)
+                    filter_len = max(acc_filter_len, smooth_filter_len)
+                    smooth_accel_filter = np.zeros(filter_len)
+                    acc_filter_len_diff = filter_len - acc_filter_len
+                    smooth_accel_filter[acc_filter_len_diff:] += accDeltaFilter
+                    smooth_filter_len_diff = filter_len - smooth_filter_len
+                    smooth_accel_filter[smooth_filter_len_diff:] += last_smooth_filter
+                    self.by_mode_dict[mode].filter_on_input = smooth_accel_filter
+                elif mode == SplinePredictionMode.CONST_ACCEL:
+                    self.by_mode_dict[mode].filter_on_input = accDeltaFilter
+            # We do this at the end to avoid a copy of the "delta" filter that
+            # might also be used in the smooth+accel case. Here, adding 1.0
+            # represents adding the result of the "delta" filter to the last pt.
+            if calc_non_smoothed_accel:
+                item = self.by_mode_dict[SplinePredictionMode.CONST_ACCEL]
+                item.filter_on_input[-1] += 1.0
+
+    def _getInitialPseudoInvInfo(self, data_u_val_count):
+        data_u_vals = np.linspace(*self.uInterval, data_u_val_count)
+            
+        matA = self._getFittingMat(data_u_vals)
 
         matAtA = matA.transpose() @ matA
-        self.pseudoInv = np.linalg.inv(matAtA) @ matA.transpose()
-
-        lastPtFilterMat = precalced_filters.ctrlPtsToLastFilter
-        pseudoInvLastRows = self.pseudoInv[-lastPtFilterMat.shape[1]:]
-        inputsToLastPtFilterRowVec = lastPtFilterMat @ pseudoInvLastRows
-        self.inputsToLastPtFilter = inputsToLastPtFilterRowVec.flatten()
-
-        ctrlToVelFilter = precalced_filters.ctrlPtsToDerivFilter
-        ctrlToAccFilter = precalced_filters.ctrlPtsTo2ndDerivFilter
-
-        assert ctrlToVelFilter.shape[1] == ctrlToAccFilter.shape[1], \
-        "Spline velocity and acceleration filters must have same shape!"
-
-        velAccPseudoInvRows = self.pseudoInv[-ctrlToVelFilter.shape[1]:]
-        velFilter = (ctrlToVelFilter @ velAccPseudoInvRows).flatten()
-        accFilter = (ctrlToAccFilter @ velAccPseudoInvRows).flatten()
-
-        # From the perspective of the "Spline", each time step is not 1 unit,
-        # but instead the distance between u values we chose for our points when
-        # doing the least-squares fitting. Because it is simpler to, e.g., have
-        # consecutive integer knots than consecutive integer sample locations,
-        # the result is that the space between these sampled u values, and thus 
-        # the "time", will not be 1. So, the time step we multiply the velocity
-        # by to obtain displacement will be this u sample step.
-        velFilter *= self.data_u_step # delta_time*velocity
+        pseudo_inv = np.linalg.inv(matAtA) @ matA.transpose()
         
-        # Since our time step is not 1, we must explicity square it.
-        accFilter *= self.data_u_step**2
-
-        self.inputsToConstAccelFilter = velFilter + 0.5 * accFilter
-
+        return PseudoInvAndFilterInfo(data_u_vals, pseudo_inv)
+    
     @abstractmethod
-    def _getFittingMat(self) -> np.ndarray:
+    def _getFittingMat(self, data_u_vals) -> np.ndarray:
         ...
     
-class BSplineFittingCase(SplineFittingCase):
-    def _getFittingMat(self):
+class BSplineFittingCase(ABCSplineFittingCase):
+    def _getFittingMat(self, data_u_vals):
         # Just the number of pts in any B-Spline; nothing fitting-specific.
         knot_list = np.arange(self.num_ctrl_pts + self.degree + 1)
         matA = bSplineFittingMat(
-            self.num_ctrl_pts, self.degree + 1, self.num_inputs, self.data_u_vals,
+            self.num_ctrl_pts, self.degree + 1, self.num_inputs, data_u_vals,
             knot_list
         )
         return matA
 
 
-class SplineFitCalculator(ABC):
+class ABCSplineFitCalculator(ABC):
 
     # This might not need to be its own method. I was thinking of overriding it
     # in subclasses, but then decided against it.
@@ -122,7 +216,9 @@ class SplineFitCalculator(ABC):
     def get_min_inputs_req(degree: float):
         return int(np.ceil(degree)) + 1
 
-    def __init__(self, spline_degree, max_num_ctrl_pts, max_num_input_data):
+    def __init__(self, spline_degree: typing.Union[float, int],
+                 max_num_ctrl_pts: int, max_num_input_data: int,
+                 modes: typing.List[SplinePredictionMode]):
         if (max_num_input_data < spline_degree + 1):
             raise Exception("Need at least order=k=(degree + 1) input pts for calc!")
         if max_num_ctrl_pts > max_num_input_data:
@@ -131,8 +227,7 @@ class SplineFitCalculator(ABC):
             raise Exception("Need at least order=k=(degree + 1) control points!")
 
 
-        self.fit_cases: typing.List[SplineFittingCase] = []
-        self.smooth_cases: typing.List[SplineFittingCase] = []
+        self.cases: typing.List[ABCSplineFittingCase] = []
         
         self.spline_degree: float = spline_degree
         self.max_num_ctrl_pts: int = max_num_ctrl_pts
@@ -147,11 +242,11 @@ class SplineFitCalculator(ABC):
         )
         self.min_inputs_req = self.get_min_inputs_req(spline_degree)
         for num_inputs in range(self.min_inputs_req, max_num_input_data + 1):
-            self.fit_cases.append(self.createCase(num_inputs, 1))
-            self.smooth_cases.append(self.createCase(num_inputs, 0))
+            self.cases.append(self.createCase(num_inputs, modes))
 
     @abstractmethod
-    def createCase(self, num_inputs: int, num_outputs: int) -> SplineFittingCase:
+    def createCase(self, num_inputs: int, 
+                   modes: typing.List[SplinePredictionMode]) -> ABCSplineFittingCase:
         ...
 
     @abstractmethod
@@ -168,6 +263,7 @@ class SplineFitCalculator(ABC):
             raise Exception("Array dimension " + str_dim + " not supported for \
                             Spline fitting!")
         
+        mode = SplinePredictionMode.EXTRAPOLATE
         num_spline_preds = len(all_input_pts) - self.min_inputs_req 
                                     
         # The below is just to accomodate either an array of floats or of vecs.
@@ -179,20 +275,20 @@ class SplineFitCalculator(ABC):
             
         min_input_ind = self.min_inputs_req - 1
         for last_input_ind in range(min_input_ind, self.max_num_input_data - 1):
-            case = self.fit_cases[prediction_num]
-            filter_len = len(case.inputsToLastPtFilter)
+            case_filter = self.cases[prediction_num].by_mode_dict[mode].filter_on_input
+            filter_len = len(case_filter)
             input_start = (last_input_ind + 1) - filter_len
 
             ptsToFit = all_input_pts[input_start:(last_input_ind + 1)]
 
         
             spline_preds[prediction_num] = curvetools.applyMaskToPts(
-                ptsToFit, case.inputsToLastPtFilter
+                ptsToFit, case_filter
             )
 
             prediction_num += 1
 
-        main_filter = self.fit_cases[-1].inputsToLastPtFilter
+        main_filter = self.cases[-1].by_mode_dict[mode].filter_on_input
         main_filter_len = len(main_filter)
         len_diff = self.max_num_input_data - main_filter_len
 
@@ -207,6 +303,7 @@ class SplineFitCalculator(ABC):
             str_dim = str(all_input_pts.ndim)
             raise Exception("Array dimension " + str_dim + " not supported for Spline smoothing!")
 
+        mode = SplinePredictionMode.SMOOTH
         # We'll output as many predictions as were inputted.
         # We may not be able to smooth all of them; if some cannot be smoothed,
         # they will just be returned as they are.
@@ -228,13 +325,14 @@ class SplineFitCalculator(ABC):
             ptsToFit_measured = all_input_pts[startInd:(available_inputs - 1)]
             ptToFit_pred = all_preds[pred_ind:(pred_ind + 1)]
 
-            max_case_ind = len(self.smooth_cases) - 1
+            max_case_ind = len(self.cases) - 1
             inputs_beyond_min_req = available_inputs - (self.spline_degree + 1)
-            case = self.smooth_cases[min(max_case_ind, inputs_beyond_min_req)]
+            case_ind = min(max_case_ind, inputs_beyond_min_req)
+            case_pseudo_inv = self.cases[case_ind].by_mode_dict[mode].pseudo_inv
 
-            pseudoInv_measured = case.pseudoInv[:, :-1]
+            pseudoInv_measured = case_pseudo_inv[:, :-1]
             ctrlPts = pseudoInv_measured @ ptsToFit_measured
-            pseudoInv_pred = case.pseudoInv[:, -1:]
+            pseudoInv_pred = case_pseudo_inv[:, -1:]
             ctrlPts += pseudoInv_pred @ ptToFit_pred
 
             # The documentation for np.dot(a, b) states that if b is 1D like our
@@ -246,11 +344,15 @@ class SplineFitCalculator(ABC):
 
         return spline_smooths
 
-    def constantAccelPreds(self, all_input_pts: np.ndarray):
+    def constantAccelPreds(self, all_input_pts: np.ndarray, smooth_before_accel_add: bool):
         if all_input_pts.ndim > 2:
             str_dim = str(all_input_pts.ndim)
             raise Exception("Array dimension " + str_dim + " not supported for Spline smoothing!")
-
+        mode = None
+        if smooth_before_accel_add:
+            mode = SplinePredictionMode.SMOOTH_AND_ACCEL
+        else:
+            mode = SplinePredictionMode.CONST_ACCEL
         # We will have a prediction for all points except for the first.
         output_shape = (len(all_input_pts) - 1, ) + all_input_pts.shape[1:]
         spline_preds = np.empty(output_shape)
@@ -281,34 +383,31 @@ class SplineFitCalculator(ABC):
             # We have different B-Spline fitting cases depending on how many
             # inputs are available. Case[0] corresponds to degree+1 inputs.
             inputs_beyond_min_req = available_inputs - self.min_inputs_req
-            case = self.smooth_cases[inputs_beyond_min_req]
-            filter_len = len(case.inputsToLastPtFilter)
+            acc_filter = self.cases[inputs_beyond_min_req].by_mode_dict[mode].filter_on_input
+            filter_len = len(acc_filter)
 
             startInd = available_inputs - filter_len
             
             ptsToFit = all_input_pts[startInd:available_inputs]
 
-            delta = curvetools.applyMaskToPts(
-                ptsToFit, case.inputsToConstAccelFilter
+            spline_preds[pred_ind] = curvetools.applyMaskToPts(
+                ptsToFit, acc_filter
             )
 
-            spline_preds[pred_ind] = all_input_pts[pred_ind] + delta
+        main_filter = self.cases[-1].by_mode_dict[mode].filter_on_input
 
-        main_filter = self.smooth_cases[-1].inputsToConstAccelFilter
         main_filter_len = len(main_filter)
         len_diff = self.max_num_input_data - main_filter_len
 
-        convolution_delta = curvetools.convolveFilter(
+        main_pred_start = self.max_num_input_data - 1
+        spline_preds[main_pred_start:] = curvetools.convolveFilter(
             main_filter, all_input_pts[len_diff:-1] 
         )
 
-        main_pred_start = self.max_num_input_data - 1
-        main_start_pts = all_input_pts[main_pred_start:-1]
-        spline_preds[main_pred_start:] = main_start_pts + convolution_delta
         return spline_preds
 
 
-class BSplineFitCalculator(SplineFitCalculator):
+class BSplineFitCalculator(ABCSplineFitCalculator):
     deg_to_pt_filter: typing.Dict[int, np.ndarray] = dict()
 
     def get_deg_ctrl_pt_filter(deg: int):
@@ -325,10 +424,10 @@ class BSplineFitCalculator(SplineFitCalculator):
         return f
 
 
-    def createCase(self, num_inputs, num_outputs):
+    def createCase(self, num_inputs, modes):
         return BSplineFittingCase(
-            self.spline_degree, num_inputs, num_outputs, self.max_num_ctrl_pts,
-            self.filter_row_mats
+            self.spline_degree, num_inputs, self.max_num_ctrl_pts, 
+            self.filter_row_mats, modes
         )
 
     def _getLastPtFilter(self) -> np.ndarray:
@@ -365,10 +464,15 @@ class BSplineFitCalculator(SplineFitCalculator):
         return (fd1, fd2)
 
     def getCtrlPts(self, in_data):
-        case = self.fit_cases[-1]
+        case = self.cases[-1]
 
-        if len(in_data) != len(case.data_u_vals) - 1:
+        if SplinePredictionMode.EXTRAPOLATE not in case.by_mode_dict.keys():
+            raise NotImplementedError("Only EXTRAPOLATE mode supported so far!")
+
+        info = case.by_mode_dict[SplinePredictionMode.EXTRAPOLATE]
+
+        if len(in_data) != len(info.data_u_vals) - 1:
             raise NotImplementedError("Only handles max input count for now!")
 
-        return (case.pseudoInv @ in_data)
+        return (info.pseudo_inv @ in_data)
     

@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 
-from bspline_approximation import bSplineFittingMat, BSplineFitCalculator
+from spline_approximation import SplinePredictionMode, BSplineFitCalculator
 import bspline
 
 import gtCommon as gtc
@@ -420,9 +420,9 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 
 skipAmount = 2
 
-
+fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
-    SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST
+    SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST, fit_modes
 )
 
 allResultsObj = ConsolidatedResults()#len(combos))
