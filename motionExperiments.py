@@ -3,13 +3,14 @@ import typing
 from enum import Enum
 
 import numpy as np
+from numpy.polynomial import Polynomial
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 
 from spline_approximation import SplinePredictionMode, BSplineFitCalculator
-import bspline
+from cinpact import CinpactAccelExtrapolater
 
 import gtCommon as gtc
 from gtCommon import BCOT_Data_Calculator
@@ -17,8 +18,7 @@ from gtCommon import BCOT_Data_Calculator
 import posemath as pm
 import poseextrapolation as pex
 
-TRANSLATION_THRESH = 20.0
-ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
+ADD_NUMERICAL_TESTS = False
 
 SPLINE_DEGREE = 1
 PTS_USED_TO_CALC_LAST = 5 # Must be at least spline's degree + 1.
@@ -43,6 +43,11 @@ def generalizedLogistic(x: np.ndarray, alpha: float, beta: float):
 
 def gudermannian(x: np.ndarray):
     return 2.0 * np.arctan(np.tanh(x / 2.0))
+
+def algebraicSigmoid(x: np.ndarray, k: float, scale: float):
+    denom = (1.0 + np.abs(x/scale)**k)**(1.0/k)
+    return x / denom
+
 # rough_mats are the approximate frame axes.
 def wahba(rough_mats):
     U, S, Vh = np.linalg.svd(rough_mats)
@@ -71,6 +76,102 @@ def getRandomQuatError(shape, max_err_rads):
     error_quats[..., 0:1] = np.cos(half_angles)
     error_quats[..., 1:] = np.sin(half_angles) * unit_axes
     return error_quats
+
+# Numerical TODO items:
+# -  (skip1 test is all that's left) Godot thing
+# -  RK4: dot-mag
+# - Only use RK4 at all when fa angle decreasing.
+# - Only use (RK4, fa-acc) when acc is within some sort of time-based limit.
+# -   dot-mag fixed-axis.
+def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats):
+    # Stuff that's needed for all of the predictions below:
+    ang_vel_vecs = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
+    ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
+    # ang_vel_vecs[1:] += 0.5 * ang_acc_vecs   
+    # ang_vel_vecs[0] = ang_vel_vecs[1] - ang_acc_vecs[0]
+
+    # Stuff that's used for at least two of the predictions below:
+    extrap_ang_vel_vecs = ang_vel_vecs[1:] + ang_acc_vecs
+    num_start_vecs = len(ang_vel_vecs[1:])
+    interp_ang_vels = np.linspace(ang_vel_vecs[1:], extrap_ang_vel_vecs, 33, axis=1)
+
+
+    constspeed_extrap_vecs = pm.scalarsVecsMul(
+        angles[1:-1], pm.normalizeAll(extrap_ang_vel_vecs)
+    )
+
+    interp_ang_vels2 = np.linspace(ang_vel_vecs[1:], constspeed_extrap_vecs, 33, axis=1)
+
+    
+    num_substeps_slerp = 33
+    constspeed_slerp_ang_vels = np.empty((
+        num_start_vecs, num_substeps_slerp + 1, 3))
+    constspeed_slerp_ang_vels[:, 0, :] = ang_vel_vecs[1:]
+    constspeed_slerp_ang_vels[:, -1, :] = constspeed_extrap_vecs
+    for i in range(1, num_substeps_slerp):
+        # The explicit float conversion here isn't needed in Python, but it
+        # serves as a reminder/error-proofing in case this code is ever moved
+        # over to another language like C++ where it does matter.
+        constspeed_slerp_ang_vels[:, i, ] = pm.quatSlerp(
+            ang_vel_vecs[1:], constspeed_extrap_vecs, float(i)/num_substeps_slerp
+        )
+    
+    # |ax + (1-a)y|^2 = a^2|x|^2 + (1-a)^2|y|^2 + a(1-a)*dot(x,y)
+    sq_ang_vel_lens_ALT = pm.einsumDot(ang_vel_vecs, ang_vel_vecs)
+    sq_ang_vel_lens = angles[:-1]**2
+    sq_extrap_ang_vel_lens = pm.einsumDot(extrap_ang_vel_vecs, extrap_ang_vel_vecs)
+    ang_vel_interddots = pm.einsumDot(ang_vel_vecs[1:], extrap_ang_vel_vecs)
+    alphas = np.linspace(0.0, 1.0, interp_ang_vels.shape[1])
+    betas = 1.0 - alphas
+    interp_sq_lens = np.outer(sq_ang_vel_lens, alphas**2)
+    interp_sq_lens += np.outer(ang_vel_interddots, alphas*betas)
+    interp_sq_lens += np.outer(sq_extrap_ang_vel_lens, betas**2)
+
+    interp_sq_lens_alt = pm.einsumDot(interp_ang_vels, interp_ang_vels)
+
+    
+
+
+    proj_ang_vel_scalars = np.einsum('abi,ai->ab', interp_ang_vels, ang_vel_vecs[1:])
+    proj_ang_vel_scalars /= interp_sq_lens
+    proj_interp_ang_vels = interp_ang_vels * proj_ang_vel_scalars[..., np.newaxis]
+
+    rk_preds = pm.integrateAngularVelocityRK(interp_ang_vels, rotations_quats[2:-1], 4)
+
+    rk_slerp_preds = pm.integrateAngularVelocityRK(constspeed_slerp_ang_vels, rotations_quats[2:-1], 4)
+    rkcslin_preds = pm.integrateAngularVelocityRK(interp_ang_vels2, rotations_quats[2:-1], 4)
+
+    rk_proj_preds = pm.integrateAngularVelocityRK(proj_interp_ang_vels, rotations_quats[2:-1], 4)
+
+
+    # Godot thing
+    godot_vels = interp_ang_vels / (interp_ang_vels.shape[1] - 1)    
+    godot_preds = rotations_quats[2:-1].copy()
+    for i in range(interp_ang_vels.shape[1] - 1):
+        godot_diffs = pm.quatsFromAxisAngleVec3s(godot_vels[:, i])
+        godot_preds = pm.multiplyQuatLists(godot_diffs, godot_preds)
+
+    # Non-numerical fixed-axis dot thing.
+    parallel_ang_acc_scalars = pm.einsumDot(ang_acc_vecs, fixed_axes[1:-1])
+    parallel_angs = angles[1:-1] + parallel_ang_acc_scalars**2
+    accproj_diffs = pm.quatsFromAxisAngles(fixed_axes[1:-1], parallel_angs)
+    accproj_preds = pm.multiplyQuatLists(accproj_diffs, rotations_quats[2:-1])
+
+    if np.abs(sq_ang_vel_lens_ALT - sq_ang_vel_lens).max() > 0.0001:
+        raise Exception("Made a mistake!")
+    else:
+        raise Exception("No mistake, but duplicate code should del now!")
+
+    if np.abs(interp_sq_lens - interp_sq_lens_alt).max() > 0.0001:
+        raise Exception("Made a mistake!")
+    else:
+        raise Exception("No mistake, but duplicate code should del now!")
+
+    return {
+        "RK": rk_preds, "RKCSLIN": rkcslin_preds, "Godot": godot_preds,
+        "RKSlerp": rk_slerp_preds, "RKproj": rk_proj_preds, 
+        "accproj": accproj_preds}
+
 
 class DisplayGrouping(Enum):
     TOTAL_ONLY = 1
@@ -307,7 +408,7 @@ class ConsolidatedResults:
                     val_str = annotations[c_ind, r_ind]
                     prec_to_remove += len(val_str)
 
-                val_str += str(round(val, 8 - prec_to_remove))
+                val_str += str(np.round(val, 8 - prec_to_remove))
                 # Print value v with padding to make width w.
                 print("{v:>{w}} ".format(v=val_str, w=width), end = "")
             print() # Newline after row.
@@ -424,6 +525,7 @@ fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
     SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST, fit_modes
 )
+cinpact_extrapolator = CinpactAccelExtrapolater(3, 3)
 
 allResultsObj = ConsolidatedResults()#len(combos))
 
@@ -452,6 +554,7 @@ all_vel_acc_2D_solves = np.zeros((0, 2))
 
 all_rot_angles = []
 all_bcsfa_angles = []
+all_next_bcsfa_angles = []
 # all_wahba_angles = np.zeros((0,))
 maxTimestamps = 0
 maxTimestampsWhenSkipped = 0
@@ -505,7 +608,7 @@ for i, combo in enumerate(combos):
     # r_vel_preds = pm.quatSlerp(rotations_quats[:-2], rotations_quats[1:-1], 2)
     r_aa_vel_preds = rotations[1:-1] + rotation_aa_diffs[:-1]
 
-    r_slerp_preds = pm.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.75)
+    r_slerp_preds = pm.quatSlerp(rotations_quats[1:-1], r_vel_preds, 0.8525)
 
     t_acc_delta = translation_diffs[1:-1] + (0.5 * translations_acc)
     t_acc_preds = translations[2:-1] + t_acc_delta
@@ -702,6 +805,7 @@ for i, combo in enumerate(combos):
     angles = angles.flatten()
     #rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
     r_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
+    r_next_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[:-2], r_mats[1:-1], fixed_axes[1:])
     r_fixed_axis_closest_rots = pm.matsFromAxisAngleArrays(
         r_fixed_axis_closest_angs, fixed_axes[:-1]
     ) 
@@ -724,20 +828,13 @@ for i, combo in enumerate(combos):
     # angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
     max_angle = max(max_angle, angles.max())
 
-    ang_vel_vecs = pm.scalarsVecsMul(angles, fixed_axes)
-    ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
-    ang_vel_vecs[1:] += 0.5 * ang_acc_vecs
-    ang_vel_vecs[0] = ang_vel_vecs[1] - ang_acc_vecs[0]
-    extrap_ang_vel_vecs = ang_vel_vecs[1:] + ang_acc_vecs
-    interp_ang_vels = np.linspace(ang_vel_vecs[1:-1], extrap_ang_vel_vecs[:-1], 33, axis=1)
-    rk_preds = pm.integrateAngularVelocityRK(interp_ang_vels, rotations_quats[2:-1], 4)
-
-    rk_preds = pm.replaceAtEnd(r_vel_preds, rk_preds, 1)
 
     angle_diffs = np.diff(angles, 1, axis=0)
+    angle_diffs_cond = np.zeros_like(angle_diffs)
     axis_dots = pm.einsumDot(fixed_axes[1:], fixed_axes[:-1])
-    angle_diffs[axis_dots < np.cos(np.deg2rad(1))] = 0
-    angle_ratios = 2 + (angle_diffs[:-1]/angles[1:-1])
+    axes_almost_eq = axis_dots < np.cos(np.deg2rad(1))
+    angle_diffs_cond[axes_almost_eq] = angle_diffs[axes_almost_eq]
+    angle_ratios = 2 + (angle_diffs_cond[:-1]/angles[1:-1])
 
     next_axis_angs = pm.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
     angle_diffs2 = angles[1:-1] - next_axis_angs
@@ -752,7 +849,7 @@ for i, combo in enumerate(combos):
     r_fixed_axis_preds2[0] = r_vel_preds[0]
 
     # wahba_angles = pm.replaceAtEnd(angles[:-1], angWahbaFunc(angles[:-1]))
-    sigmoid_angles = pm.replaceAtEnd(angles[:-1], gudermannian(angles[:-1]))
+    sigmoid_angles = algebraicSigmoid(angles[:-1], 0.75, 2 * np.pi)
     sigmoid_q_diffs = pm.quatsFromAxisAngles(fixed_axes[:-1], sigmoid_angles)
     sigmoid_pred = pm.multiplyQuatLists(sigmoid_q_diffs, rotations_quats[1:-1])
     # wahba_qs = pm.quatsFromAxisAngleVec3s(wahba_pred)
@@ -761,21 +858,22 @@ for i, combo in enumerate(combos):
     all_rot_angles.append(angles[:-1])   
     # all_wahba_angles = np.concatenate((all_wahba_angles, wahba_angles.flatten()))
     all_bcsfa_angles.append(r_fixed_axis_closest_angs.flatten())
+    all_next_bcsfa_angles.append(r_next_fixed_axis_closest_angs.flatten())
     
     camobj_preds = np.empty(r_vel_preds.shape)
     camobj_preds[0] = r_vel_preds[0]
     camobj_preds[1:] = pex.camObjConstAngularVelPreds(rotations_quats[:-1], r_vel_preds)[-1]
 
-    # r_rotqdiff_diffs = pm.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
-    # r_rotqdiff_preds = np.empty(r_vel_preds.shape)
-    # r_rotqdiff_preds[0] = r_vel_preds[0]
-    # r_rotqdiff_preds[1:] = pm.multiplyQuatLists(r_rotqdiff_diffs, rotations_quats[2:-1])
+    r_rotqdiff_diffs = pm.quatSlerp(rotation_quat_diffs[:-2], rotation_quat_diffs[1:-1], 2)
+    r_rotqdiff_preds = np.empty(r_vel_preds.shape)
+    r_rotqdiff_preds[0] = r_vel_preds[0]
+    r_rotqdiff_preds[1:] = pm.multiplyQuatLists(r_rotqdiff_diffs, rotations_quats[2:-1])
 
-    # r_movaxis_axes = pm.reflectVecsOverLines(fixed_axes[:-2], fixed_axes[1:-1], True)
-    # r_movaxis_diffs = pm.quatsFromAxisAngles(r_movaxis_axes, angles[1:-1] + angle_diffs[:-1])
-    # r_movaxis_preds = np.empty(r_vel_preds.shape)
-    # r_movaxis_preds[0] = r_vel_preds[0]
-    # r_movaxis_preds[1:] = pm.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
+    r_movaxis_axes = pm.reflectVecsOverLines(fixed_axes[:-2], fixed_axes[1:-1], True)
+    r_movaxis_diffs = pm.quatsFromAxisAngles(r_movaxis_axes, angles[1:-1] + angle_diffs[:-1])
+    r_movaxis_preds = np.empty(r_vel_preds.shape)
+    r_movaxis_preds[0] = r_vel_preds[0]
+    r_movaxis_preds[1:] = pm.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
 
     scaled_axes = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
     # test_quats = pm.quatsFromAxisAngleVec3s(scaled_axes)
@@ -900,35 +998,6 @@ for i, combo in enumerate(combos):
     #     raise Exception ("Array slice len error!")
 
 
-
-    # t_spline_preds = np.empty((num_spline_preds, 3))
-    # r_aa_spline_preds = np.empty((num_spline_preds, 3))
-    # for j in range(SPLINE_DEGREE, len(translations) - 1):
-    #     startInd = max(0, j - PTS_USED_TO_CALC_LAST + 1)
-    #     ctrlPtCount = min(j + 1, DESIRED_CTRL_PTS)
-    #     uInterval = (SPLINE_DEGREE, ctrlPtCount)#j + 1 - startInd)
-    #     numTotal = j + 1 - startInd + 1
-    #     knotList = np.arange(ctrlPtCount + SPLINE_DEGREE + 1)
-    
-    
-    #     uVals = np.linspace(uInterval[0], uInterval[1], numTotal)
-
-    #     ptsToFit_j = np.empty((j + 1 - startInd, 6))
-    #     ptsToFit_j[:, :3] = translations[startInd:(j+1)]
-    #     ptsToFit_j[:, 3:] = rotations[startInd:(j+1)]
-    #     ctrlPts = np.empty((ctrlPtCount, 0)) 
-    #     # Note: Use of pseudoinverse is much faster than calling linalg.lstsqr
-    #     # each iteration and gives results that, so far, seem identical.
-    #     mat = splineMats[min(j - (SPLINE_DEGREE), len(splineMats) - 1)]
-
-    #     ctrlPts = (mat @ ptsToFit_j)
-
-    #     next_spline_pt = bspline.bSplineInner(
-    #         uVals[-1], SPLINE_DEGREE + 1, ctrlPtCount - 1, ctrlPts, knotList
-    #     )
-    #     t_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[:3]
-    #     r_aa_spline_preds[j - (SPLINE_DEGREE)] = next_spline_pt[3:]
-
     #---------------------------------------------------------------
     all_spline_preds = spline_pred_calculator.fitAllData(np.hstack((
         translations, rotations
@@ -958,7 +1027,26 @@ for i, combo in enumerate(combos):
     allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
     # allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
     allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
-    allResultsObj.addQuaternionResult("RK", rk_preds)
+
+    if ADD_NUMERICAL_TESTS:
+        numerical_res_dict = numericalIdeas(
+            angles, fixed_axes, angle_diffs, r_fixed_axis_closest_angs,
+            r_next_fixed_axis_closest_angs, rotations_quats
+        )
+        for numerical_k, numerical_r in numerical_res_dict.items():
+            if numerical_r.shape[1] != 4:
+                raise Exception("Expected a quaternion result here!")
+            numerical_r_full = pm.replaceAtEnd(r_vel_preds, numerical_r, 1)
+
+            allResultsObj.addQuaternionResult(numerical_k, numerical_r_full)
+
+        rk_dec_only = r_vel_preds.copy()
+        ang_dec_inds = angle_diffs[:-1] < 0.0
+        rk_dec_only[1:][ang_dec_inds] = numerical_res_dict["RK"][ang_dec_inds]
+
+
+
+        allResultsObj.addQuaternionResult("RKdeconly", rk_dec_only)
 
     allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
@@ -982,7 +1070,10 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
     allResultsObj.addTranslationResult("Circ", c_trans_preds)
     allResultsObj.addTranslationResult("Screw", t_screw_preds)
-    # allResultsObj.addTranslationResult("StatVelAcc", t_poly_preds)
+    # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
+    #     translations[:-1]
+    # ))
+    allResultsObj.addTranslationResult("StatVelAcc", t_poly_preds)
     
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
@@ -1094,9 +1185,14 @@ plt.show()
 
 
 #%%
+# TODO:
+# - Angle and/or dot between last axes.
+# - np.diff of various angle combinations.
 
-all_prev1_angles = np.concatenate([angs[1:] for angs in all_rot_angles])
-all_prev2_angles = np.concatenate([angs[:-1] for angs in all_rot_angles])
+# all_prev1_angles = np.concatenate([angs[1:] for angs in all_rot_angles])
+# all_prev2_angles = np.concatenate([angs[:-1] for angs in all_rot_angles])
+all_prev2_angles = np.concatenate([angs[:-1] for angs in all_next_bcsfa_angles])
+all_prev1_angles = np.concatenate([bcsfas[:-1] for bcsfas in all_bcsfa_angles])
 concatenated_bcsfa_angles2 = np.concatenate([
     bcsfas[1:] for bcsfas in all_bcsfa_angles
 ])
@@ -1108,11 +1204,12 @@ p2_p1_bcs_stack = np.stack([
 def getBestFitForInds(inds):
     x = all_prev1_angles[inds]
     y = concatenated_bcsfa_angles2[inds]
-    mat = np.stack((x, np.ones_like(x)), axis=1)
-    best_fit = np.linalg.lstsq(mat, y, rcond=None)[0]
-    print(best_fit)
+    poly = Polynomial.fit(x, y, 1)
+
     cxs = np.array([0, half_pi])
-    return np.stack([cxs, best_fit[1] + best_fit[0] * cxs])
+    line_coords = [cxs, poly(cxs)]
+    print(line_coords)
+    return np.stack(line_coords)
 
 prev2_angle_step = 0.1
 
@@ -1125,6 +1222,7 @@ ax3 = fig.add_subplot(1, 3, 3)
 
 curr_prev2_val = 0.0
 max_prev2_angle = all_prev2_angles.max()
+dashwidth = 0.5
 while curr_prev2_val + prev2_angle_step < max_prev2_angle:
     curr_prev2_max = curr_prev2_val + prev2_angle_step
     prev2_label = "{:0.2f}-{:0.2f}".format(curr_prev2_val, curr_prev2_max)
@@ -1135,9 +1233,18 @@ while curr_prev2_val + prev2_angle_step < max_prev2_angle:
     ax.scatter(*filtered_p2_p1_bcs, label=prev2_label)
     ax2.scatter(*filtered_p2_p1_bcs[1:], label=prev2_label)
     curr_prev2_val += prev2_angle_step
-    best_fit_coords = getBestFitForInds(curr_prev2_inds)
-    ax3.plot(*best_fit_coords, label=prev2_label)
-
+    fit_is_valid = False
+    if np.any(curr_prev2_inds):
+        best_fit_coords = getBestFitForInds(curr_prev2_inds)
+        best_fit_deltas = np.diff(best_fit_coords, axis=-1)
+        best_fit_slope = best_fit_deltas[1] / best_fit_deltas[0]
+        if abs(best_fit_slope) < 2:
+            ax3.plot(*best_fit_coords, label=prev2_label, ls=(0, (dashwidth, 1)))
+            dashwidth += 0.5
+            fit_is_valid = True
+        if not fit_is_valid:
+            ax3.plot([0, 0], [1, 0], label=prev2_label)
+    
 
 planeYZ = np.meshgrid([-half_pi, half_pi], [-half_pi, half_pi])
 planeX = np.zeros_like(planeYZ[0])
@@ -1158,8 +1265,8 @@ best_fit_plot, = ax2.plot(*best_fit_coords)
 p2_p1_bcs_lims = np.stack([
     np.min(p2_p1_bcs_stack, axis=0), np.max(p2_p1_bcs_stack, axis=0)
 ], axis=-1)
-ax2.set_xlim(*p2_p1_bcs_lims[1])
-ax2.set_ylim(*p2_p1_bcs_lims[2])
+ax2.axis([-0.5, 2, -0.5, 2])
+
 ax.set_xlim(*p2_p1_bcs_lims[0])
 ax.set_ylim(*p2_p1_bcs_lims[1])
 ax.legend()
@@ -1266,8 +1373,6 @@ ax = fig.subplots()
 from matplotlib.colors import to_rgba
 
 vid_key = list(allResultsObj._allBodSeqKeys)[9]
-keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
-keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg421q"]#, "VelLERP", "Acc", "AccLERP"]
 keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
 key_colours = ["blue", "orange", "green", "red", "grey", "brown"]
 key_rgbas = [to_rgba(kc) for kc in key_colours]
