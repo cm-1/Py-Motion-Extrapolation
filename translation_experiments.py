@@ -161,6 +161,15 @@ vel_deg2_stats_struct = getStatsStruct(vel_deg2_errs)
 
 for skip_amt in range(3):
     print("\nSkip {}:".format(skip_amt))
+
+    # Finding the min or max lower or upper bound for the mean confidence
+    # intervals depending on whether motion type is static or not, to ensure
+    # that the statement it's always positive for static predictions and always
+    # negative for others is valid. For now, I only care about reference frames
+    # aligned with motion.
+    ref_frame_names = ("world", "local", "v1", "v2")
+    min_static_mclbs = {rfn: 1000.0 for rfn in ref_frame_names[-2:]}
+    max_nonstatic_mcubs = {rfn: -1000.0 for rfn in ref_frame_names[-2:]}
     for pk in prediction_kinds:
         print("  " + pk + ":")
         for mk in motion_kinds_plus:
@@ -172,7 +181,18 @@ for skip_amt in range(3):
             all_stats = (
                 world_stats, local_stats, vel_deg1_stats, vel_deg2_stats
             )
-            for name, stat in zip(("world", "local", "v1", "v2"), all_stats):
+            for name, stat in zip(ref_frame_names, all_stats):
+                if "v" in name:
+                    if "static" in pk:
+                        curr_mclb = np.asarray(stat.mean_conf[0])
+                        min_static_mclbs[name] = np.min(np.append(
+                            curr_mclb, min_static_mclbs[name]
+                        ))
+                    else:
+                        curr_mcub = np.asarray(stat.mean_conf[1])
+                        max_nonstatic_mcubs[name] = np.max(np.append(
+                            curr_mcub, max_nonstatic_mcubs[name]
+                        ))
                 if stat.mean.ndim == 0:
                     ps = "      {}: m={} ({}, {}), s={}".format(
                         name, stat.mean, stat.mean_conf[0], stat.mean_conf[1],
@@ -187,6 +207,8 @@ for skip_amt in range(3):
                     print("        mc =", stat.mean_conf)
             print()
         print("  " + ("-" * 78))
+    print("Min mean confidence interval lower bound for 'static' motion:", min_static_mclbs)
+    print("Max mean confidence interval upper bound for other motion:", max_nonstatic_mcubs)
 #%%
 
 skip_key = 0
