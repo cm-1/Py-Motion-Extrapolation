@@ -784,9 +784,11 @@ for i, combo in enumerate(combos):
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
     #     raise Exception("Made a mistake!")
 
-    t_poly_preds = t_quadratic_preds.copy()
-    vel_bounce = (unit_vel_dots < -0.99)
-    t_poly_preds[1:][vel_bounce] = t_vel_preds[1:][vel_bounce]
+    # THE BELOW, WHILE POPULAR IN GAMING DEAD RECKONING PAPERS, SEEMS TO PERFORM
+    # ABYSMALLY ON THE BCOT BENCHMARK!
+    # t_poly_preds = t_quadratic_preds.copy()
+    # vel_bounce = (unit_vel_dots < -0.99) #
+    # t_poly_preds[1:][vel_bounce] = t_vel_preds[1:][vel_bounce]
 
     r_aa_acc_delta = rotation_aa_diffs[1:-1] + (0.5 * rotations_aa_acc)
     r_aa_acc_preds = rotations[2:-1] + r_aa_acc_delta
@@ -1073,7 +1075,6 @@ for i, combo in enumerate(combos):
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
     # ))
-    allResultsObj.addTranslationResult("StatVelAcc", t_poly_preds)
     
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
