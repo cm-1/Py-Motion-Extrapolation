@@ -9,7 +9,11 @@ from gtCommon import BCOT_Data_Calculator
 import gtCommon as gtc
 
 ErrStats = namedtuple(
-    "ErrStats", ['mean', 'mean_conf', 'std_dev', 'N']
+    "ErrStats",
+    [
+        'mean', 'mean_conf', 'std_dev', 'N', 'eigvals', 'eigvecs', 'det',
+        'avg_dist_from_mean', 'avg_sq_dist_from_mean'
+    ]
 )
 
 motion_kinds = [
@@ -17,6 +21,15 @@ motion_kinds = [
     "static_suspension", "static_trans"
 ]
 
+def getMinPrecisionForVec(vec: np.ndarray):
+    return int(np.max(np.ceil(-np.log10(np.abs(vec)))))
+
+def formatVec(vec: np.ndarray, prec: int = None):
+        if prec is None:
+            min_prec_req = getMinPrecisionForVec(vec)
+            prec = max(min_prec_req, 2)
+        items = ["{:.{}f}".format(v, prec) for v in vec]
+        return "[{}]".format(', '.join(items))
 
 combos = []
 for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
@@ -155,12 +168,24 @@ def meanConfInterval(mean, std_dev, N, significance = 0.05):
 def getStats(errs, skip_amt: int, motion_kind: str, pred_kind: str):
     errs_subset = errs[skip_amt][pred_kind][motion_kind]
     mean = np.mean(errs_subset, axis=0, keepdims=True)
+    diffs_from_mean = errs_subset - mean
+    avg_dist = np.linalg.norm(diffs_from_mean, axis=-1).mean()
+    avg_sq_dist = pm.einsumDot(diffs_from_mean, diffs_from_mean).mean()
     std_dev = np.std(errs_subset, axis=0, mean=mean, ddof=1)
     mean = mean.flatten()
     if len(mean) == 1:
         mean = mean[0]
     mc = meanConfInterval(mean, std_dev, len(errs_subset))
-    return ErrStats(mean, mc, std_dev, len(errs_subset))
+    cov = np.cov(errs_subset.transpose())
+    eigVals, eigVecs = np.linalg.eig(cov)
+    det = np.linalg.det(cov)
+    # if np.abs(det - np.prod(eigVals)) > 0.0001:
+    #     raise Exception("Determinant not as expected!")
+
+    return ErrStats(
+        mean, mc, std_dev, len(errs_subset), eigVals, eigVecs, det,
+        avg_dist, avg_sq_dist
+    )
 
 motion_kinds_plus = motion_kinds + ["all"]
 def getStatsStruct(errs):
@@ -216,21 +241,23 @@ for skip_amt in range(3):
                         max_nonstatic_mcubs[name] = np.max(np.append(
                             curr_mcub, max_nonstatic_mcubs[name]
                         ))
-                if "v" in name:
-                    vel_mean = float(stat.mean[0])
-                    vel_mean_conf0 = float(stat.mean_conf[0][0])
-                    vel_mean_conf1 = float(stat.mean_conf[1][0])
-                    vel_std = float(stat.std_dev[0])
-                    ps = "      {}: m={} ({}, {}), s={}".format(
-                        name, vel_mean, vel_mean_conf0, vel_mean_conf1, vel_std
-                    )
-                    print(ps)
-                else:
-                    ps = "      {}: m={}, s={}".format(
-                        name, stat.mean, stat.std_dev
-                    )
-                    print(ps)
-                    print("        mc =", stat.mean_conf)
+                print("      {} ({} samples):".format(name, stat.N))
+                print("        - Mean: {}, 0.95 conf: ({}, {})".format(
+                    formatVec(stat.mean),
+                    formatVec(stat.mean_conf[0]), formatVec(stat.mean_conf[1])
+                ))
+                s = "        - Avg Distance to Mean: {}, Squared: {}".format(
+                    stat.avg_dist_from_mean, stat.avg_sq_dist_from_mean
+                )
+                print(s)
+                print("        - Det:", stat.det, end=", ")
+                eig_order = np.argsort(stat.eigvals)[::-1]
+                ordered_eigs = stat.eigvals[eig_order]
+                print("Eigenvalues:", formatVec(ordered_eigs), end=", ")
+                print("s:", formatVec(stat.std_dev))
+                print("        - Eigenvectors:")
+                for eig_ind in eig_order:
+                    print("         ", formatVec(stat.eigvecs[eig_ind]))
             print()
         print("  " + ("-" * 78))
     print("Min mean confidence interval lower bound for 'static' motion:", min_static_mclbs)
