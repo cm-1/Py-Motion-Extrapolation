@@ -64,7 +64,7 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
                          propogate_last_nonzero_vec: bool = True):
     
     if norms is None:
-        norms = np.linalg.norm(arrays, axis=-1, keepdims=True)
+        norms = np.linalg.norm(array, axis=-1, keepdims=True)
 
     zero_norm_inds = (norms == 0).flatten()
 
@@ -147,6 +147,17 @@ def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
     parallels = scalarsVecsMul(dots, dirs)
     orthos = vectors - parallels
     return (parallels, orthos)
+
+def getOrthonormalFrames(vecs0, vecs1 = None):
+    matrices = np.empty(vecs0.shape[:-1] + (3, 3))
+    matrices[..., 0] = safelyNormalizeArray(vecs0)
+    if vecs1 is None:
+        vecs1 = np.ones_like(vecs0)
+    v0v1dot = einsumDot(matrices[..., 0], vecs1)
+    parallels = scalarsVecsMul(v0v1dot, matrices[..., 0])
+    matrices[..., 1] = safelyNormalizeArray(vecs1 - parallels)
+    matrices[..., 2] = np.cross(matrices[..., 0], matrices[..., 1])
+    return matrices
 
 def getPlaneAxes(roughAxes0, roughAxes1):
     nax0 = normalizeAll(roughAxes0)
