@@ -87,6 +87,7 @@ def getRandomQuatError(shape, max_err_rads):
 # - Only use RK4 at all when fa angle decreasing.
 # - Only use (RK4, fa-acc) when acc is within some sort of time-based limit.
 # -   dot-mag fixed-axis.
+# - O(3)
 def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats):
     # Stuff that's needed for all of the predictions below:
     ang_vel_vecs = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
