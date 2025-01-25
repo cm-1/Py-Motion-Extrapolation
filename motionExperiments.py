@@ -18,6 +18,10 @@ from gtCommon import BCOT_Data_Calculator
 import posemath as pm
 import poseextrapolation as pex
 
+TRANSLATION_THRESH = 20.0#50.0
+
+ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
+
 ADD_NUMERICAL_TESTS = False
 
 SPLINE_DEGREE = 1
