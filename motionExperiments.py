@@ -530,6 +530,9 @@ fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
     SPLINE_DEGREE, DESIRED_CTRL_PTS, PTS_USED_TO_CALC_LAST, fit_modes
 )
+acc_mode = [SplinePredictionMode.CONST_ACCEL]
+b_acc_calc_4 = BSplineFitCalculator(2, 4, 4, acc_mode)
+b_acc_calc_5 = BSplineFitCalculator(2, 5, 5, acc_mode)
 cinpact_extrapolator = CinpactAccelExtrapolater(3, 3)
 
 allResultsObj = ConsolidatedResults()#len(combos))
@@ -826,9 +829,12 @@ for i, combo in enumerate(combos):
     
 
     
-    # wahba_inputs = 2 * r_mats[1:-1] - r_mats[:-2]
-    # wahba_outputs = wahba(wahba_inputs)
-    # wahba_pred = pm.axisAngleFromMatArray(wahba_outputs) 
+    wahba_inputs = 3 * r_mats[2:-1] - 3 * r_mats[1:-2] + r_mats[:-3]
+    wahba_outputs = wahba(wahba_inputs)
+    wahba_pred = np.empty_like(r_aa_vel_preds)
+    wahba_pred[1:] = pm.axisAngleFromMatArray(wahba_outputs) 
+    first_vel_ax, first_vel_ang = pm.axisAnglesFromQuats(r_vel_preds[:1])
+    wahba_pred[0] = pm.scalarsVecsMul(first_vel_ang.flatten(), first_vel_ax)[0]
 
 
 
@@ -1032,7 +1038,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addAxisAngleResult("Fixed axis bcs", r_fixed_axis_bcs)
     allResultsObj.addQuaternionResult("Fixed axis acc", r_fixed_axis_preds)
     allResultsObj.addQuaternionResult("Fixed axis acc2", r_fixed_axis_preds2)
-    # allResultsObj.addAxisAngleResult("Wahba", wahba_pred)
+    allResultsObj.addAxisAngleResult("Wahba_acc", wahba_pred)
     allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
 
     if ADD_NUMERICAL_TESTS:
@@ -1080,7 +1086,13 @@ for i, combo in enumerate(combos):
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
     # ))
-    
+    allResultsObj.addTranslationResult("B-Acc4", b_acc_calc_4.constantAccelPreds(
+        translations, False
+    ))
+    allResultsObj.addTranslationResult("B-Acc5", b_acc_calc_5.constantAccelPreds(
+        translations, False
+    ))
+
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP(False))
     )
@@ -1102,13 +1114,16 @@ allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "
 allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
-
+allResultsObj.applyBestTranslationResult(["Spline2", "Circ"], "cagg", True)
+allResultsObj.applyBestTranslationResult(["Acc", "Jerk", "Circ", "Quadratic"], "sagg", True)
+allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk", "B-Acc4", "B-Acc5"], "opt-switch", False)
 
 print("Max angle:", max_angle)
 print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
 
 allResultsObj.printResults(DisplayGrouping.BY_SEQUENCE, "Quadratic", "QuatVel")
 allResultsObj.printResults(DisplayGrouping.BY_OBJECT, "Quadratic", "QuatVel")
+allResultsObj.printResults(DisplayGrouping.TOTAL_ONLY)
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
 def stat_results(vals):
     return [ vals.mean(), vals.min(), vals.max(), np.median(vals), np.std(vals)]
