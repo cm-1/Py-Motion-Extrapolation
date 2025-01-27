@@ -224,7 +224,7 @@ print()
 
 #%%
 
-np.savez(
+np.savez_compressed(
     "./bspline_param_evals_latest.npz", res_2cm = results_2cm, res_2deg = results_2deg,
      res_5cm = results_5cm, res_5deg = results_5deg,
      res_mean_sq_dist = results_mean_sq_dist,

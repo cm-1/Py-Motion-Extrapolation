@@ -1,0 +1,5 @@
+{'target': np.float64(-11.72846748875302), 'params': {'degree': np.float64(2.15795469210041), 'k': np.float64(38.581947468050636), 'max_num_ctrl_pts': np.float64(4.695983340914363), 'max_num_inputs': np.float64(3.3609884277468662), 'supportRad': np.float64(6.599713431683167)}}
+
+{'target': np.float64(-12.337108744730305), 'params': {'degree': np.float64(1.2022217185160322), 'k': np.float64(22.112919900003934), 'max_num_ctrl_pts': np.float64(6.945097310412974), 'max_num_inputs': np.float64(3.609935589205085), 'supportRad': np.float64(3.6801486021800027)}}
+
+{'target': np.float64(-13.711153429948668), 'params': {'degree': np.float64(2.658682978013509), 'k': np.float64(20.517543777012254), 'max_num_ctrl_pts': np.float64(4.866599227382745), 'max_num_inputs': np.float64(2.0579156367512486), 'supportRad': np.float64(4.055168217743982)}}
