@@ -29,14 +29,27 @@ def compress_npz(input_dir, output_postfix = "_c"):
                 for key in data.files:
                     original = data[key]
                     compressed = new_data[key]
-                    if not np.array_equal(original, compressed, True):
+                    if not np.array_equal(original, compressed):
                         diff_inds = original != compressed
-                        diff_orig = original[diff_inds]
-                        diff_compressed = compressed[diff_inds]
-                        raise ValueError(
-                            f"Data mismatch for key '{key}' in file {file}: \
-                                {diff_orig} vs. {diff_compressed}"
+                        diff_ind_tups = np.argwhere(diff_inds)
+                        print(
+                            len(diff_ind_tups),
+                            "differences (out of", original.size, "elements)",
+                            "detected at indices:\n", diff_ind_tups
+                        )
+                        # If the difference is only because of NaNs in the data:
+                        if not np.array_equal(original, compressed, True):
+                            diff_orig = original[diff_inds]
+                            diff_compressed = compressed[diff_inds]
+                            raise ValueError(
+                                f"Data mismatch for '{key}' in file {file}: \
+                                    {diff_orig} vs. {diff_compressed}"
+                                )
+                        else:
+                            e = "Data for '{}' in file {} has unexpected NaN values!".format(
+                                key, file
                             )
+                            raise ValueError(e)
             print(f"Compressed and verified: {file}")
 
 # Specify the input and output directories

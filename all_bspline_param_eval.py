@@ -62,39 +62,24 @@ for combo in combos:
     r_vel_preds = pm.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_gt_quats[1:-1]
     )
-    r_slerp_preds = pm.quatSlerp(rotations_gt_quats[1:-1], r_vel_preds, 0.75)
+    r_slerp_preds = pm.quatSlerp(rotations_gt_quats[1:-1], r_vel_preds, 1.0)#0.75)
 
     
     # Converts quaternions to axis-angle, then corrects jumps.
     # TODO: Document better, maybe find way to combine with mat->AA code?
-    angles = 2 * np.arccos(r_slerp_preds[:, 0])
-    axes = r_slerp_preds[:, 1:]
-    '''
-    angleInds = np.arange(len(angles))
-    zeroAngleThresh = 0.0001
-    zeroAngleInds = np.nonzero(angles < zeroAngleThresh)
-    angleInds[zeroAngleInds] = 0
-    angleInds = np.maximum.accumulate(angleInds)
-    axes[zeroAngleInds] = axes[angleInds[zeroAngleInds]]
-    angle_dots = pm.einsumDot(axes[1:], axes[:-1]) 
+    unitAxes, angles = pm.axisAnglesFromQuats(r_slerp_preds)
+    angles = angles.flatten()
+
+    angle_dots = pm.einsumDot(unitAxes[1:], unitAxes[:-1]) 
     needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
-    angles[..., 1:][needs_flip] = -angles[..., 1:][needs_flip]
-    sinVals = np.sin(angles/2.0)
-    unitAxes = axes / sinVals[..., np.newaxis]
-    unitAxes[zeroAngleInds] = unitAxes[angleInds[zeroAngleInds]]
-    numIssueAxesAtFront = 0
-    while numIssueAxesAtFront < len(angles):
-        if angles[numIssueAxesAtFront] >= zeroAngleThresh:
-            break
-        numIssueAxesAtFront += 1
-    unitAxes[:numIssueAxesAtFront] = 0.0
+    angles[1:][needs_flip] = -angles[1:][needs_flip]
+    unitAxes[1:][needs_flip] = -unitAxes[1:][needs_flip]
     np_tau = 2.0 * np.pi
     tau_facs = np.round(np.diff(angles) / np_tau)
     angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
-    angles[..., 1:] -= angle_corrections
-    r_slerp_preds_aa = pm.applyScalarsToVecs(angles, unitAxes)
-    '''
-    r_slerp_preds_aa = angles[..., np.newaxis] * axes / np.sin(0.5 * angles[..., np.newaxis])
+    angles[1:] -= angle_corrections
+    r_slerp_preds_aa = pm.scalarsVecsMul(angles, unitAxes)
+    
     r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))
     
     t_quad_preds = 3 * translations[2:-1] - 3 * translations[1:-2] + translations[:-3]
@@ -234,13 +219,13 @@ np.savez_compressed(
 #%% 
 load_target = "./default_filename.npz"
 if mode == SplinePredictionMode.EXTRAPOLATE:
-    load_target = "../../bspline_param_evals2.npz"
+    load_target = "./results/bspline_param_evals2_c.npz"
 elif mode == SplinePredictionMode.SMOOTH:
-    load_target = "./bspline_param_evals_quad.npz"
+    load_target = "./results/bspline_param_evals_quad_c.npz"
 elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
-    load_target = "./bspline_param_evals_smoothderiv.npz"
+    load_target = "./results/bspline_param_evals_smoothderiv_c.npz"
 elif mode == SplinePredictionMode.CONST_ACCEL:
-    load_target = "../../bspline_param_evals_deriv.npz"
+    load_target = "./results/bspline_param_evals_deriv_c.npz"
 load_result = np.load(load_target)
 # load_result.close()
 
