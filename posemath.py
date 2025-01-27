@@ -61,7 +61,8 @@ def quatsFromAxisAngles(unit_axes, angles):
 # zero, which would cause division errors.
 def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
                          vec_for_zero_norms: np.ndarray = None,
-                         propogate_last_nonzero_vec: bool = True):
+                         propagate_last_nonzero_vec: bool = True,
+                         propagate_back_if_first_vecs_zero: bool = False):
     
     if norms is None:
         norms = np.linalg.norm(array, axis=-1, keepdims=True)
@@ -76,14 +77,22 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
     normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
     # For zero axes, we can either use a supplied default vector, create our
     # own default, or propograte the last nonzero vector.
-    if propogate_last_nonzero_vec:
+    if propagate_last_nonzero_vec:
         # First, we make sure that if the first vec is zero, that we replace it
         # with some default, since there'd be no previous vec to copy.
         if zero_norm_inds[0]:
             if vec_for_zero_norms is None:
-                replacement_vec = np.zeros(array.shape[-1])
-                replacement_vec[0] = 1.0
-                normed[0] = replacement_vec
+                if propagate_back_if_first_vecs_zero:
+                    search_ind = 1
+                    while search_ind < len(zero_norm_inds):
+                        if not zero_norm_inds[search_ind]:
+                            normed[0] = normed[search_ind]
+                            break
+                        search_ind += 1
+                else:
+                    replacement_vec = np.zeros(array.shape[-1])
+                    replacement_vec[0] = 1.0
+                    normed[0] = replacement_vec
             else:
                 normed[0] = vec_for_zero_norms
         # To copy the last nonzero vectors, we'll use the technique proposed in 
@@ -110,7 +119,9 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
 
 def quatsFromAxisAngleVec3s(axisAngleVals):
     angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
-    normed = safelyNormalizeArray(axisAngleVals, angles)
+    normed = safelyNormalizeArray(
+        axisAngleVals, angles, propagate_back_if_first_vecs_zero=True
+    )
 
     return quatsFromAxisAngles(normed, angles)
 
