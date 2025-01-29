@@ -35,7 +35,7 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 
     curvePts = cinpact.CinpactCurve(calc, True, init_c, init_k, 1000).curvePoints
 
-    scaled_w = (w - w.min()) / w.ptp()
+    scaled_w = (w - w.min()) / np.ptp(w)
     colors = plt.cm.coolwarm(scaled_w)
 
     fig = plt.figure()
