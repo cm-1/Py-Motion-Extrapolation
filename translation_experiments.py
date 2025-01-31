@@ -1,5 +1,6 @@
 import typing
 from collections import namedtuple
+import json
 
 import numpy as np
 from scipy.stats import t as sp_t
@@ -12,7 +13,7 @@ ErrStats = namedtuple(
     "ErrStats",
     [
         'mean', 'mean_conf', 'std_dev', 'N', 'eigvals', 'eigvecs', 'det',
-        'avg_dist_from_mean', 'avg_sq_dist_from_mean'
+        'avg_dist_from_mean', 'avg_sq_dist_from_mean', 'cov_mat'
     ]
 )
 
@@ -30,6 +31,29 @@ def formatVec(vec: np.ndarray, prec: int = None):
             prec = max(min_prec_req, 2)
         items = ["{:.{}f}".format(v, prec) for v in vec]
         return "[{}]".format(', '.join(items))
+
+# https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence#Multivariate_normal_distributions
+# Not super useful, but I was sort of curious and it was fast to implement.
+def getKLDivergence(mean0: np.ndarray, mean1: np.ndarray,
+                  cov_mat0: np.ndarray, cov_mat1: np.ndarray,
+                  det0: float = None, det1: float = None):
+    k = len(mean0)
+    assert k == len(mean1), \
+        "Dimensions ({}, {}) don't match!".format(k, len(mean1))
+    
+    if det0 is None:
+        det0 = np.linalg.det(cov_mat0)
+    if det1 is None:
+        det1 = np.linalg.det(cov_mat1)
+
+    cov_mat1_inv = np.linalg.inv(cov_mat1)
+    trace_input = cov_mat1_inv @ cov_mat0
+    tr = np.trace(trace_input)
+
+    mean_diff = (mean1 - mean0).reshape(-1, 1)
+    mean_pt = mean_diff.transpose() @ cov_mat1_inv @ mean_diff
+    ln_pt = np.log(det1 / det0)
+    return (tr - k + mean_pt + ln_pt) /  2.0
 
 combos = []
 for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
@@ -184,7 +208,7 @@ def getStats(errs, skip_amt: int, motion_kind: str, pred_kind: str):
 
     return ErrStats(
         mean, mc, std_dev, len(errs_subset), eigVals, eigVecs, det,
-        avg_dist, avg_sq_dist
+        avg_dist, avg_sq_dist, cov
     )
 
 motion_kinds_plus = motion_kinds + ["all"]
@@ -254,7 +278,12 @@ for skip_amt in range(3):
                 eig_order = np.argsort(stat.eigvals)[::-1]
                 ordered_eigs = stat.eigvals[eig_order]
                 print("Eigenvalues:", formatVec(ordered_eigs), end=", ")
-                print("s:", formatVec(stat.std_dev))
+                print("s:", formatVec(stat.std_dev), end = ", ")
+                kl_val = getKLDivergence(
+                    stat.mean, world_stats.mean,
+                    stat.cov_mat, world_stats.cov_mat, stat.det, world_stats.det
+                )
+                print("KL:", kl_val)
                 print("        - Eigenvectors:")
                 for eig_ind in eig_order:
                     print("         ", formatVec(stat.eigvecs[eig_ind]))
@@ -270,3 +299,23 @@ motion_key = "all"
 print(local_stats_struct[skip_key][pred_key][motion_key])
 print(vel_deg1_stats_struct[skip_key][pred_key][motion_key])
 print(vel_deg2_stats_struct[skip_key][pred_key][motion_key])
+
+#%%
+# Commenting this out because I already viewed the plot and it showed that
+# there is no direct linear, quadratic, etc. relationship between them.
+# import matplotlib.pyplot as plt
+
+# plt.scatter(all_dets, all_dists)
+# plt.show()
+
+class StatsJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, ErrStats):
+            ...
+            # TODO: handle namedtuple
+        return super().default(obj)
+    
+# print(json.dumps(local_stats_struct, cls=StatsJSONEncoder, indent=2))
+    

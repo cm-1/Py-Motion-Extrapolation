@@ -1,3 +1,27 @@
+'''
+Let's say we want to fit a quadratic Bezier to three points: X0, X1, X2.
+For control points in **Euclidean** space, P0=X0, P2=X1, and if we set
+P1 = 2X1 - (X0 + X2)/2, then we have, at u = 0.5:
+  B(u) = 0.5(0.5(P0 + P1) + 0.5(P1 + P2))
+       = (P0 + 2P1 + P2)/4
+       = (X0 + 4X1 - X0 - X2 + X2)/4
+       = X1,
+as we want.
+Now, that's good for _interpolating_ points with a quadratic polynomial, but
+how about doing a constant-acceleration extrapolation? It can be shown that
+the const-acceleration point at the next timestep is given by 3X2 - 3X1 + X0.
+This point is achieved at u = 1.5: our line points will be -0.5P0 + 1.5P1 and
+-0.5P1 + 1.5P2. The final output will be 0.25P0 - 0.75P1 - 0.75P1 + 2.25P2
+= 0.25X0 - 3X1 + 0.75X1 + 0.75X2 + 2.25X2 = X0 - 3X1 + 3X2 as desired!
+
+THE PROBLEM: The above works for EUCLIDEAN Bezier curves, but it fails for
+Bezier curves on the sphere!
+
+The below math was my attempt to find an interpolating Bezier quadratic on the
+sphere; I'm not sure if it's possible to get a solution analytically, and I've
+paused investigation for now so that I can work on other tasks.
+'''
+
 import sympy as sp
 from sympy import simplify
 
@@ -292,3 +316,59 @@ soln_s = sp.solve(slerp_eqs, v_list, check=False, simplify=False)
 #Solve linear version, then try solving nonlinear?
 
 # https://docs.sympy.org/latest/modules/solvers/solvers.html#systems-of-polynomial-equations
+
+
+# Quadratic bez : (1-u)**2 P0 + 2u(1-u)P1 + uuP2
+# Derivative: -2(1-u)P0 + 2(1 - 2u)P1 + 2uP2 = 2[(1-u)(P1 - P0) + u(P2 - P1)]
+# Derivative at u=0.5: P2 - P0
+
+# Let's say we have another Bez curve: (1-2u)**2 P0 + 4u(1-2u)A + 4uuP1
+# Then this derivative is -4(1-2u)P0 + 4(1 - 4u)A + 8uP1
+# Derivative at 0 is -4P0 + 4A
+# Derivative at 0.5 is: 
+
+# (x-2)(x-1)/2 y0 + x(2-x)y1 + x(x-1)/2 y2
+# deriv: (2x-3)/2 y0 + (2-2x)y1 + (2x-1)/2 y2
+# deriv at 1: 0.5(y2 - y0)
+
+# Want to find A, B s.t. P1 - A =p B - P1 =p P2 - P0
+# P2 - B =p P2 - P0
+# 2P1 - 2P0 = 4A - 4P0 => A = (P1 + P0)/2
+
+# 0.5/cos(0.5a) =sqrt(0.5/(1 + cos(a)))
+# d0 = 0.5sec(0.5a)(q0 + p1)
+# d1 = 0.5sec(0.5b)(p1 + q2)
+# q1 = normalized(a'q0 + (a'+b')p1 + b'q2)
+# a'(q0q1 + p1q1) = b'(q2q1 + p1q1)
+# sqrt(0.5/(1 + q0p1))(q0q1 + p1q1) = sqrt(0.5/(1 + q2p1))(q2q1 + p1q1)
+#(q0q1 + p1q1)^2 / (1 + q0p1) = (q2q1 + p1q1)^2 / (1 + q2p1)
+# (1 + q2p1)(x^2 + 2x*p1q1 + p1q1)^2 = (1 + q0p1)(y^2 + 2y*p1q1 + p1q1^2)
+
+
+# q1 2cos(a) - q0
+# q1 2cos(b) - q2
+# p1 = 0.5sec(0.5c) * (q1 2(cos(a)+cos(b)) - q0 - q2)
+
+# d0 = 0.5sec(0.5d) * (0.5sec(0.5c) )
+
+'''
+m + v = a(x+y)
+m - v = b(y+z)
+2m = ax + (a+b)y + bz
+y = (2m - ax - bz)/(a+b)
+(a+b)y0 = 2m0 - ax0 - bz0
+(a+b)y1 = 2m1 - ax1 - bz1
+(a+b)y2 = 2m2 - ax2 - bz2
+m0(ax0 + ay0 - by0 - bz0) + m1(ax1 + ay1 - by1 - bz1) + m2(ax2 + ay2 - by2 - bz2) = 0
+
+m*(ax + (a-b)y - bz) = 0
+
+b = 2(a*v)v - a
+v2 = 2(m*v)m - v
+b = 2(c*v2)v2 - c
+b = 2(2(m*v)m*c - v*c)v2 - c
+b = [4m*vm*c - 2v*c](2(m*v)m - v) - c
+b = [8((m*v)^2)(m*c) - 4(m*v)(v*c)]m + [2(v*c) - 4(m*v)(m*c)]v - c
+
+c - a = [8((m*v)^2)(m*c) - 4(m*v)(v*c)]m + [2(v*c) -2(a*v) - 4(m*v)(m*c)]v
+'''

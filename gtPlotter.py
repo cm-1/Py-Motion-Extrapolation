@@ -35,12 +35,14 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 
     curvePts = cinpact.CinpactCurve(calc, True, init_c, init_k, 1000).curvePoints
 
-    scaled_w = (w - w.min()) / w.ptp()
+    scaled_w = (w - w.min()) / np.ptp(w)
     colors = plt.cm.coolwarm(scaled_w)
 
     fig = plt.figure()
     plt.subplots_adjust(bottom = 0.25)
     ax = fig.add_subplot(projection='3d')
+    # The below gives a 1:1:1 aspect ratio.
+    ax.set_box_aspect(np.ptp(gt, axis=0))
     scatterGT = ax.scatter(x, y, z, marker='.', edgecolors=colors)
     if not showOnlyGT:
         colorsCalc = colors[1::(skipAmt + 1)]
@@ -104,6 +106,8 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
         
     plt.show()
 
+calculator.loadData()
+# calculator.replaceDataWithHelix(False)
 plotGTvsCalc(calculator.getTranslationsGTNP(False), calculator.getTranslationsCalcNP(), False)
 
 print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)

@@ -137,6 +137,12 @@ def camObjConstAngularVelPreds(known_rotations_qs: np.ndarray, backup_prediction
         Ct_quats, pm.multiplyQuatLists(B_k_quats, M_quats)
     )
 
+    # Below is used for debugging if I'm passing in an input that should have
+    # a "perfect" solution available:
+    # C_test = pm.rotateVecsByQuats(C_quats[1:], step2_diff_unit_axes[1:])
+    # if np.abs(C_test - step2_diff_unit_axes[:-1]).max() > 0.0001:
+    #     print("OK, messed something up! Num valid inds:", valid_inds.sum())
+
     if backup_predictions is not None:
         C_eval_pt1 = pm.multiplyQuatLists(C_quats, rotation_q_diffs[1:])
         C_eval_qs = pm.multiplyQuatLists(C_eval_pt1, Ct_quats)

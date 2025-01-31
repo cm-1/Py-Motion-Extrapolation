@@ -34,7 +34,7 @@ for combo in combos:
     all_translations[combo[:2]] = calculator.getTranslationsGTNP(False)
     aa_rotations = calculator.getRotationsGTNP(False)
     quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
-    all_rotations[combo:2] = quats
+    all_rotations[combo[:2]] = quats
 #%%
 class MOTION_MODEL(Enum):
     STATIC = 1
@@ -66,7 +66,7 @@ err3D_lists = get_per_combo_and_motion_mod_datastruct()
 err_norm_lists = get_per_combo_and_motion_mod_datastruct()
 min_norm_labels = get_per_combo_datastruct()
 
-motion_data = {md: {ck[:2]: [] for ck in combos} for md in MOTION_DATA}
+all_motion_data = get_per_combo_datastruct()
 
 for skip_amt in range(3):
     step = 1 + skip_amt
@@ -80,7 +80,8 @@ for skip_amt in range(3):
         inv_quats = pm.conjugateQuats(quats)
         quat_diffs = pm.multiplyQuatLists(quats[1:], inv_quats[:-1])
 
-        vel_axes, vel_angs = pm.axisAnglesFromQuats(quat_diffs)
+        vel_axes, vel_angs_unflat = pm.axisAnglesFromQuats(quat_diffs)
+        vel_angs = vel_angs_unflat.flatten()
 
         prev_translations = translations[:-1]
         deg1_vels = np.diff(prev_translations, 1, axis=0)
@@ -103,7 +104,8 @@ for skip_amt in range(3):
 
         n_jerk_preds = len(t_jerk_preds)
 
-        motion_data[MOTION_DATA.TIMESTEP][c2].append(np.full(n_jerk_preds, step))
+        motion_data = dict()
+        motion_data[MOTION_DATA.TIMESTEP] = np.full(n_jerk_preds, step)
 
         deg1_vel_subset = deg1_vels[-n_jerk_preds:]
         deg2_vel_subset = deg1_vels[-n_jerk_preds:]
@@ -112,35 +114,32 @@ for skip_amt in range(3):
         deg1_speeds = np.linalg.norm(deg1_vel_subset, axis=-1, keepdims=True)
         deg2_speeds = np.linalg.norm(deg2_vel_subset, axis=-1, keepdims=True)
         acc_mags = np.linalg.norm(acc_subset, axis=-1, keepdims=True)
-        motion_data[MOTION_DATA.SPEED_DEG1][c2].append(deg1_speeds.flatten() / step)
-        motion_data[MOTION_DATA.SPEED_DEG2][c2].append(deg2_speeds.flatten() / step)
-        motion_data[MOTION_DATA.ACC_MAG][c2].append(acc_mags.flatten() / step**2)
-        motion_data[MOTION_DATA.JERK_MAG][c2].append(np.linalg.norm(
-            t_jerk_amt, axis=-1
-        ) / step**3)
+        jerk_mags = np.linalg.norm(t_jerk_amt, axis=-1) 
+        motion_data[MOTION_DATA.SPEED_DEG1] = deg1_speeds.flatten() / step
+        motion_data[MOTION_DATA.SPEED_DEG2] = deg2_speeds.flatten() / step
+        motion_data[MOTION_DATA.ACC_MAG] = acc_mags.flatten() / step**2
+        motion_data[MOTION_DATA.JERK_MAG] = jerk_mags / step**3
 
-        motion_data[MOTION_DATA.ROT_SPEED][c2].append(
-            vel_angs[-n_jerk_preds:] / step
-        )
+        motion_data[MOTION_DATA.ROT_SPEED] = vel_angs[-n_jerk_preds:] / step
 
         unit_vels_deg1 = deg1_vel_subset / deg1_speeds
         unit_vels_deg2 = deg2_vel_subset / deg2_speeds
         unit_accs = acc_subset / acc_mags
         vd1a_dots = np.clip(pm.einsumDot(unit_vels_deg1, unit_accs), -1.0, 1.0)
         vd2a_dots = np.clip(pm.einsumDot(unit_vels_deg2, unit_accs), -1.0, 1.0)
-        motion_data[MOTION_DATA.ACC_ANG_WITH_VEL_DEG1][c2].append(
-            np.arccos(vd1a_dots)
-        )
-        motion_data[MOTION_DATA.ACC_ANG_WITH_VEL_DEG2][c2].append(
-            np.arccos(vd2a_dots)
-        )
+        motion_data[MOTION_DATA.ACC_ANG_WITH_VEL_DEG1] = np.arccos(vd1a_dots)
+        motion_data[MOTION_DATA.ACC_ANG_WITH_VEL_DEG2] = np.arccos(vd2a_dots)
 
         curr_err_norms = np.empty((len(MOTION_MODEL), n_jerk_preds))
 
         t_subset = translations[-n_jerk_preds:]
 
-        pre_jerk_preds = np.empty(4)
+        pre_jerk_preds = np.empty((4,3))
+        ind_before_jerk = -(n_jerk_preds + 1)
         for i, motion_mod in enumerate(MOTION_MODEL):
+            if motion_mod != MOTION_MODEL.JERK:
+                el_before_jerk = temp_preds[motion_mod][ind_before_jerk]
+                pre_jerk_preds[i] = el_before_jerk
             pred_subset = temp_preds[motion_mod][-n_jerk_preds:]
 
             errs = t_subset - pred_subset
@@ -148,23 +147,40 @@ for skip_amt in range(3):
 
             curr_err_norms[i] = np.linalg.norm(errs, axis=-1)
             err_norm_lists[motion_mod][skip_amt][c2] = curr_err_norms[i]
-        
+        pre_jerk_errs = translations[ind_before_jerk] - pre_jerk_preds
+        pre_jerk_norms = np.linalg.norm(pre_jerk_errs, axis=-1)
         min_norm_labels[skip_amt][c2] = np.argmin(curr_err_norms, axis=0)
         last_labels = np.roll(min_norm_labels[skip_amt][c2], 1)
-        last
+        last_labels[0] = np.argmin(pre_jerk_norms)
+        motion_data[MOTION_DATA.LAST_BEST_LABEL] = last_labels
+
+        all_motion_data[skip_amt][c2] = motion_data
 
 motion_kinds_plus = motion_kinds + ["all"]
 #%%
+
 def concatForComboSubset(data, combo_subset):
     ret_val = []
     for els_for_skip in data:
         subset_via_combos = [els_for_skip[ck[:2]] for ck in combo_subset]
-        concated = np.concatenate(subset_via_combos) 
+        concated = None
+        if isinstance(subset_via_combos[0], dict):
+            concated = dict()
+            for k in subset_via_combos[0].keys():
+                concated[k] = np.concatenate([svc[k] for svc in subset_via_combos])
+        else:
+            concated = np.concatenate(subset_via_combos) 
         ret_val.append(concated)
     return ret_val
 
 def combosByBod(bods):
     return [c for c in combos if c[0] in bods]
+
+def get2DArrayFromDataStruct(data):
+    ks = list(data[0].keys())
+    concated = {k: np.concatenate([d[k] for d in data]) for k in ks}
+    stacked = np.stack([concated[k] for k in ks])
+    return ks, stacked
 
 # def concatForKeys(data, keys):
 #     return np.stack((data[k] for k in keys))
@@ -177,34 +193,52 @@ train_bodies, test_bodies = train_test_split(bod_arange, test_size = 0.2, random
 train_combos = combosByBod(train_bodies)
 test_combos = combosByBod(test_bodies)
 
-train_speeds = concatForComboSubset(speeds_deg1, train_combos)
+
+train_data = concatForComboSubset(all_motion_data, train_combos)
 train_labels = concatForComboSubset(min_norm_labels, train_combos)
 test_labels = concatForComboSubset(min_norm_labels, test_combos)
-test_speeds = concatForComboSubset(speeds_deg1, test_combos)
+test_data = concatForComboSubset(all_motion_data, test_combos)
 
+
+concat_train_labels = np.concatenate(train_labels)
+concat_test_labels = np.concatenate(test_labels)
+data_headers_enums, concat_train_data = get2DArrayFromDataStruct(train_data)
+concat_test_data = get2DArrayFromDataStruct(test_data)[1]
 #%%
 import matplotlib.pyplot as plt
-TRAIN_SKIP = 2
 
 max_depth = 14
 scores = np.empty(max_depth)
 depths = np.arange(1, max_depth + 1)
 for d in depths:
     clf = sk_tree.DecisionTreeClassifier(max_depth=d)
-    clf = clf.fit(train_speeds[TRAIN_SKIP].reshape(-1, 1), train_labels[TRAIN_SKIP])
+    clf = clf.fit(concat_train_data.T, concat_train_labels)
 
-    scores[d-1] = clf.score(test_speeds[TRAIN_SKIP].reshape(-1,1), test_labels[TRAIN_SKIP])
-
+    scores[d-1] = clf.score(concat_test_data.T, concat_test_labels)
+#%%
 plt.plot(depths, scores)
 plt.show()
 
 #%%
-clf = sk_tree.DecisionTreeClassifier(max_depth=3)
-clf = clf.fit(train_speeds[TRAIN_SKIP].reshape(-1, 1), train_labels[TRAIN_SKIP])
+clf = sk_tree.DecisionTreeClassifier(max_depth=5)
+clf = clf.fit(concat_train_data.T, concat_train_labels)
 
+#%%
 
-
+feature_names = [e.name for e in data_headers_enums]
+class_names = ['1', '2', '3', '4', '5']
 sk_tree.plot_tree(
-    clf, feature_names=["v"], class_names=['1', '2', '3', '4', '5'], fontsize=5
+    clf, feature_names=feature_names, 
+    class_names=class_names, fontsize=5
 )
 plt.show()
+
+#%%
+from sklearn.tree import export_graphviz
+
+export_graphviz(
+    clf, out_file="tree.dot", 
+    feature_names=feature_names, 
+    class_names=class_names,
+    filled=True, rounded=True, special_characters=True
+)

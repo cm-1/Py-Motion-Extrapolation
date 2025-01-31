@@ -179,11 +179,57 @@ class BCOT_Data_Calculator:
         self.loadData()
         return self._rotationsCalcNP
 
-    # Replace the file-loaded rotation data with a const-angular-accel sim.
-    def replaceRotationData(self):
+    def _getNumFrames(self):
         if not self._dataLoaded:
-            raise NotImplementedError("Data must be loaded before replacing!")
-        num_const_a_vals = len(self.getTranslationsGTNP(False))
+            self.loadData()
+        return len(self._translationsGTNP)
+
+    @staticmethod
+    def _randFloat(upper: float, lower: float = None):
+        if lower is None:
+            lower = -upper
+        # Return single float extracted from array of length 1.
+        return np.random.uniform(lower, upper, 1)[0]
+    
+    # Updates self and then returns the random rotation.
+    def _applyRandRotToAll(self, rot_mats):
+        rr = pm.randomRotationMat()
+        # Front-multiply each other matrix by our random one.
+        new_mats = np.einsum('ij,bjk->bik', rr, rot_mats)
+        self._rotationMatsGTNP = new_mats
+        self._rotationsGTNP = pm.axisAngleFromMatArray(new_mats)
+        return rr
+
+    # The times parameter may either 1D array or a "keepdims=True" result.
+    # The axis can be a vec3 or an array of vec3s.
+    # Returns a (matrices, angles) tuple.
+    @staticmethod
+    def _constAngAccelRotMats(times: np.ndarray, axis: np.ndarray, v: float,
+                           a: float, start_angle: float = 0.0):
+        
+        num_frames = len(times)
+
+        # We need a "keepdims=True" version of the times for multiplications.
+        times_rs = times.reshape(-1, 1) if times.ndim < 2 else times
+
+        # If "axis" is a single vec3 instead of many of them, we need to
+        # make a copy of the axis for each frame.
+        all_axes_given = (axis.ndim == 2 and len(axis) == num_frames)
+        axes = axis if all_axes_given else np.repeat([axis], num_frames, axis=0)
+            
+        const_a_v_deltas = v * times_rs
+        const_a_a_deltas = 0.5 * a * times_rs**2 if a != 0.0 else 0.0
+        const_a_disp_angles = start_angle + const_a_v_deltas + const_a_a_deltas 
+
+        delta_mats = pm.matsFromAxisAngleArrays(
+            const_a_disp_angles.flatten(), axes 
+        )
+
+        return (delta_mats, const_a_disp_angles)
+
+    # Replace the file-loaded rotation data with a const-angular-accel sim.
+    def replaceDataWithConstAngAccel(self):
+        num_const_a_vals = self._getNumFrames()
         start_ang_vel = np.random.uniform(-0.08, 0.08, 3)
         start_ang_vel_angle = np.linalg.norm(start_ang_vel)
         const_a_ax = start_ang_vel / start_ang_vel_angle
@@ -196,26 +242,98 @@ class BCOT_Data_Calculator:
         # so the max velocity becomes 3*sqrt(0.24) + 120*9*0.0015.
         # Hope there's no mistake in the above math. Didn't double-check because
         # this code worked "good enough" in tests.
-        const_a = np.random.sample(1)[0] * 0.0015 * const_a_ax
+        const_a = np.random.sample(1)[0] * 0.0015 #* const_a_ax
         # print("const_a:", np.linalg.norm(const_a))
-        const_a_angle = np.linalg.norm(const_a)
+        # const_a_angle = np.linalg.norm(const_a)
         const_a_times = np.arange(num_const_a_vals).reshape(-1, 1)
 
-        const_a_v_deltas = start_ang_vel_angle * const_a_times
-        const_a_a_deltas = 0.5 * const_a_angle * const_a_times**2
-        const_a_disp_angles = start_ang_vel_angle + const_a_v_deltas + const_a_a_deltas 
+        delta_mats, _ = self._constAngAccelRotMats(
+            const_a_times, const_a_ax, start_ang_vel_angle, const_a,
+            start_ang_vel_angle
+        )
 
-        start_quat_2D = pm.normalizeAll(np.random.uniform(-1, 1, (1, 4)))
-        start_mat = pm.matFromAxisAngle(pm.axisAnglesFromQuats(start_quat_2D)[0])
-        repeat_axes = np.repeat(
-            const_a_ax.reshape(1, -1), num_const_a_vals, axis=0
-        )
-        delta_mats = pm.matsFromAxisAngleArrays(
-            const_a_disp_angles.flatten(), repeat_axes 
-        )
-        final_mats = np.einsum(
-            'ij,bjk->bik', start_mat, delta_mats
-        )
-        self._rotationMatsGTNP = final_mats
-        self._rotationsGTNP = pm.axisAngleFromMatArray(final_mats)
+        _ = self._applyRandRotToAll(delta_mats)
+        
         return
+    
+
+    def replaceDataWithHelix(self, useAccel: bool):
+        if useAccel:
+            self._spiralHelixHelper(self._spiralHelixWithAccXY)
+        else:
+            self._spiralHelixHelper(self._helixXY)
+
+    def _spiralHelixHelper(self, custom_func):
+        num_frames = self._getNumFrames()
+
+        rot_rate = self._randFloat(np.pi / 4)
+        v_mag = self._randFloat(35)
+
+        times = np.arange(num_frames)
+        z_axes = np.zeros((num_frames, 3))
+        z_axes[:, -1] = 1.0
+
+        rot_mats, thetas = self._constAngAccelRotMats(
+            times, z_axes, rot_rate, 0.0
+        )
+        thetas = thetas.flatten()
+
+        c = np.cos(thetas)
+        s = np.sin(thetas)
+
+        # Call the custom function to get xs and ys
+        xs, ys, zs = custom_func(v_mag, rot_rate, times, c, s)
+
+        
+        centred_spiral = np.stack((xs, ys, zs), axis=-1)
+
+        spiral_shift = np.random.uniform(-50, 50, 3)
+        vertical_spiral = centred_spiral + spiral_shift
+
+        spiral_tilt = self._applyRandRotToAll(rot_mats)
+        self._translationsGTNP = vertical_spiral @ spiral_tilt.transpose()
+
+        return
+
+    def _spiralHelixWithAccXY(self, v_mag: float, rot_rate: float,
+                              times: np.ndarray,
+                              cos_vals: np.ndarray, sin_vals: np.ndarray):
+        a_in_vdir = 0#self._randFloat(3.35)
+        a_ortho = 0# self._randFloat(3.35)
+
+        # Let R_k be our 2D object-to-world rotation matrix at frame k.
+        # We want our velocity at time k to be R_k * (v_0 + a_0 * t). If we let
+        # v_0 = [v, 0] for some v and a_0 = [a_v, a_p], then we want our
+        # velocity to be (v + a_v*t)[cos, sin] + a_p*t[-sin, cos]. 
+        # If we then take the integral of this, we get the following:
+        ratio_v_no_t = (v_mag - a_ortho / rot_rate) / rot_rate
+        ratio_v_t = (a_in_vdir / rot_rate) * times
+        ratio_v = ratio_v_no_t + ratio_v_t
+
+        ratio_no_v_no_t = (a_in_vdir) / (rot_rate ** 2)
+        ratio_no_v_t = (a_ortho / rot_rate) * times
+        ratio_no_v = ratio_no_v_no_t + ratio_no_v_t
+
+        xs = ratio_v * sin_vals + ratio_no_v * cos_vals
+        ys = ratio_no_v * sin_vals - ratio_v * cos_vals
+
+        v_z = self._randFloat(3.35)
+        a_z = self._randFloat(0.35)
+        zs = v_z * times + (a_z/2.0) * (times**2)
+
+
+        return xs, ys, zs
+
+    def _helixXY(self, v_mag: float, rot_rate: float, times: np.ndarray, 
+                 cos_vals: np.ndarray, sin_vals: np.ndarray):
+
+        v_z = self._randFloat(3.35)
+        zs = v_z * times
+
+        # Let R_k be our 2D object-to-world rotation matrix at frame k.
+        # We want our velocity at time k to be R_k * v_0. If we let v_0 = [v, 0]
+        # for some v, then we want our velocity to be
+        # v[cos(theta_k), sin(theta_k)]. If we then take the integral of this,
+        # we get the position we have below.
+        ratio = v_mag/rot_rate
+        return ratio * sin_vals, -ratio * cos_vals, zs
