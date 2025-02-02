@@ -502,7 +502,16 @@ class ConsolidatedResults:
                 annotations = np.full(score_means.shape, "", dtype="<U3")
                 place_limits = orderings[col_names.index(thresh) - 1]
                 meets_thresh = orderings <= place_limits
-                annots_to_replace = orderings[meets_thresh].astype(str) + "|"
+                annot_num_strs = orderings[meets_thresh].astype("<U2")
+                annots_to_replace = None
+                # Get major (i.e., leftmost) version number.
+                np_vers = int(np.version.short_version.split(".")[0])
+                # Numpy version < 2 doesn't have np.strings, but np.char is 
+                # deprecated in versions 2+.
+                if np_vers >= 2:
+                    annots_to_replace = np.strings.add(annot_num_strs, "|")
+                else:
+                    annots_to_replace = np.char.add(annot_num_strs, "|")
                 annotations[1:][meets_thresh] = annots_to_replace
 
                
@@ -1225,7 +1234,14 @@ p2_p1_bcs_stack = np.stack([
 def getBestFitForInds(inds):
     x = all_prev1_angles[inds]
     y = concatenated_bcsfa_angles2[inds]
-    poly = Polynomial.fit(x, y, 1)
+    # For numpy version < 2.0, need to handle edge cases explicitly.
+    poly = None
+    if len(y) > 1:
+        poly = Polynomial.fit(x, y, 1)
+    elif len(y) == 1:
+        poly = Polynomial([y[0], 0.0])
+    else:
+        poly = Polynomial([0.0, 0.0])
 
     cxs = np.array([0, half_pi])
     line_coords = [cxs, poly(cxs)]
