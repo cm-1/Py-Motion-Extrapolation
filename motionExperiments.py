@@ -1437,3 +1437,6 @@ ax.set_ylim(bottom = -5)
 ax.legend()
 plt.show()
 
+# Self-reminder. I'm not committing the TODO file right now, since I'd rather
+# keep it elsewhere on the cloud.
+print("REMEMBER TO CHECK TODO FILE FOR FURTHER TASKS!")

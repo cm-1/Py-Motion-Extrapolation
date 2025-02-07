@@ -15,6 +15,11 @@ def convolveFilter(filter, data: np.ndarray):
     Returns:
         np.ndarray: The convolution result.
     """
+    # TODO: Uncomment this once slight efficiency difference is known to no
+    # longer be worth it!
+    # assert len(data) >= len(filter) and len(filter) > 0, \
+    #     "Must have len(data) >= len(filter) > 0!"
+
     # Calculate the number of sliding windows for a step size of 1.
     num_windows = len(data) + 1 - len(filter)
     # The shape of the strided array view we will create, where each element
