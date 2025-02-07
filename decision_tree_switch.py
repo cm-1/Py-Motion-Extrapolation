@@ -54,16 +54,13 @@ class MOTION_DATA(Enum):
     ACC_ANG_WITH_VEL_DEG1 = 8
     ACC_ANG_WITH_VEL_DEG2 = 9
 
-def get_per_combo_and_motion_mod_datastruct():
-    return {mm: [
-        {ck[:2]: None for ck in combos} for _ in range(3)
-    ] for mm in MOTION_MODEL}
+
 
 def get_per_combo_datastruct():
     return [{ck[:2]: None for ck in combos} for _ in range(3)]
 
-err3D_lists = get_per_combo_and_motion_mod_datastruct()
-err_norm_lists = get_per_combo_and_motion_mod_datastruct()
+err3D_lists = get_per_combo_datastruct()
+err_norm_lists = get_per_combo_datastruct()
 min_norm_labels = get_per_combo_datastruct()
 
 all_motion_data = get_per_combo_datastruct()
@@ -136,6 +133,8 @@ for skip_amt in range(3):
 
         pre_jerk_preds = np.empty((4,3))
         ind_before_jerk = -(n_jerk_preds + 1)
+        curr_err_norms_dict = dict()
+        curr_errs_3D = dict()
         for i, motion_mod in enumerate(MOTION_MODEL):
             if motion_mod != MOTION_MODEL.JERK:
                 el_before_jerk = temp_preds[motion_mod][ind_before_jerk]
@@ -143,23 +142,26 @@ for skip_amt in range(3):
             pred_subset = temp_preds[motion_mod][-n_jerk_preds:]
 
             errs = t_subset - pred_subset
-            err3D_lists[motion_mod][skip_amt][c2] = errs
+            curr_errs_3D[motion_mod] = errs
 
             curr_err_norms[i] = np.linalg.norm(errs, axis=-1)
-            err_norm_lists[motion_mod][skip_amt][c2] = curr_err_norms[i]
+            curr_err_norms_dict[motion_mod] = curr_err_norms[i]
         pre_jerk_errs = translations[ind_before_jerk] - pre_jerk_preds
         pre_jerk_norms = np.linalg.norm(pre_jerk_errs, axis=-1)
         min_norm_labels[skip_amt][c2] = np.argmin(curr_err_norms, axis=0)
+        min_norms = np.min(curr_err_norms, axis=0)
         last_labels = np.roll(min_norm_labels[skip_amt][c2], 1)
         last_labels[0] = np.argmin(pre_jerk_norms)
         motion_data[MOTION_DATA.LAST_BEST_LABEL] = last_labels
 
         all_motion_data[skip_amt][c2] = motion_data
+        err_norm_lists[skip_amt][c2] = curr_err_norms_dict
+        err3D_lists[skip_amt][c2] = curr_errs_3D
 
 motion_kinds_plus = motion_kinds + ["all"]
 #%%
 
-def concatForComboSubset(data, combo_subset):
+def concatForComboSubset(data, combo_subset, keys = None):
     ret_val = []
     for els_for_skip in data:
         subset_via_combos = [els_for_skip[ck[:2]] for ck in combo_subset]
@@ -176,10 +178,11 @@ def concatForComboSubset(data, combo_subset):
 def combosByBod(bods):
     return [c for c in combos if c[0] in bods]
 
-def get2DArrayFromDataStruct(data):
-    ks = list(data[0].keys())
+def get2DArrayFromDataStruct(data, ks = None, stack_axis = 0):
+    if ks is None:
+        ks = list(data[0].keys())
     concated = {k: np.concatenate([d[k] for d in data]) for k in ks}
-    stacked = np.stack([concated[k] for k in ks])
+    stacked = np.stack([concated[k] for k in ks], stack_axis)
     return ks, stacked
 
 # def concatForKeys(data, keys):
@@ -196,49 +199,71 @@ test_combos = combosByBod(test_bodies)
 
 train_data = concatForComboSubset(all_motion_data, train_combos)
 train_labels = concatForComboSubset(min_norm_labels, train_combos)
+train_errs = concatForComboSubset(err_norm_lists, train_combos)
 test_labels = concatForComboSubset(min_norm_labels, test_combos)
 test_data = concatForComboSubset(all_motion_data, test_combos)
+test_errs = concatForComboSubset(err_norm_lists, test_combos)
 
 
 concat_train_labels = np.concatenate(train_labels)
 concat_test_labels = np.concatenate(test_labels)
 data_headers_enums, concat_train_data = get2DArrayFromDataStruct(train_data)
-concat_test_data = get2DArrayFromDataStruct(test_data)[1]
+concat_test_data = get2DArrayFromDataStruct(test_data, data_headers_enums)[1]
+
+motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
+concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, -1)[1]
+concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, -1)[1]
+
+#%%
+def assessPredError(concat_errs, pred_labels):
+    pred_labels_rs = pred_labels.reshape(-1,1)
+    taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
+    return taken_errs.mean()
+
 #%%
 import matplotlib.pyplot as plt
+from custom_tree.weighted_impurity import WeightedErrorCriterion
+mc = WeightedErrorCriterion(1, np.array([5], dtype=np.intp))
+y_errs_reshape = concat_train_errs.reshape((
+    concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
+))
+mc.set_y_errs(y_errs_reshape)
 
-max_depth = 14
+max_depth = 5
 scores = np.empty(max_depth)
 depths = np.arange(1, max_depth + 1)
 for d in depths:
-    clf = sk_tree.DecisionTreeClassifier(max_depth=d)
+    clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
     clf = clf.fit(concat_train_data.T, concat_train_labels)
-
-    scores[d-1] = clf.score(concat_test_data.T, concat_test_labels)
+    graph_pred = clf.predict(concat_test_data.T)
+    scores[d-1] = assessPredError(concat_test_errs, graph_pred)
 #%%
 plt.plot(depths, scores)
 plt.show()
 
-#%%
-clf = sk_tree.DecisionTreeClassifier(max_depth=5)
-clf = clf.fit(concat_train_data.T, concat_train_labels)
 
-#%%
+mclf = sk_tree.DecisionTreeClassifier(max_depth=5, criterion=mc)
+mclf = mclf.fit(concat_train_data.T, concat_train_labels)
+mclfps = mclf.predict(concat_test_data.T).copy()
 
-feature_names = [e.name for e in data_headers_enums]
-class_names = ['1', '2', '3', '4', '5']
-sk_tree.plot_tree(
-    clf, feature_names=feature_names, 
-    class_names=class_names, fontsize=5
-)
-plt.show()
-
+s2_inds = concat_test_data[0] == 3
+mc_err = assessPredError(concat_test_errs[s2_inds, :], mclfps[s2_inds])
+print("Error for my decision tree on skip2:", mc_err)
+print("Done!", mclfps)
 #%%
 from sklearn.tree import export_graphviz
+import pathlib
+
+tree_path = pathlib.Path(__file__).parent.resolve() / "results" / "tree.dot"
+feature_names = [e.name for e in data_headers_enums]
+class_names = ['1', '2', '3', '4', '5']
 
 export_graphviz(
-    clf, out_file="tree.dot", 
+    mclf, out_file=str(tree_path), 
     feature_names=feature_names, 
     class_names=class_names,
-    filled=True, rounded=True, special_characters=True
+    filled=True, rounded=True, special_characters=True,
+    
 )
+# Convert to .pdf with:
+# Graphviz\bin\dot.exe -Tpdf tree.dot -o tree.pdf
