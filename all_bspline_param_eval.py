@@ -107,8 +107,8 @@ results_2cm = np.zeros(out_shape)
 results_2deg = np.zeros(out_shape)
 results_5cm = np.zeros(out_shape)
 results_5deg = np.zeros(out_shape)
-results_mean_sq_dist = np.zeros(out_shape)
-results_mean_sq_angle = np.zeros(out_shape)
+results_mean_dist = np.zeros(out_shape)
+results_mean_angle = np.zeros(out_shape)
 
 mode = SplinePredictionMode.EXTRAPOLATE
 
@@ -190,15 +190,15 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                     deg_ind, num_ctrl_ind, num_ins_ind, combo_ind
                 ] = res_5deg
                 
-                t_d_sq = (t_err_norms**2).mean()
-                results_mean_sq_dist[
+                t_d = (t_err_norms).mean()
+                results_mean_dist[
                     deg_ind, num_ctrl_ind, num_ins_ind, combo_ind
-                ] = t_d_sq
+                ] = t_d
                 
-                r_a_sq = (r_aa_errs**2).mean()
-                results_mean_sq_angle[
+                r_a = (r_aa_errs).mean()
+                results_mean_angle[
                     deg_ind, num_ctrl_ind, num_ins_ind, combo_ind
-                ] = r_a_sq
+                ] = r_a
             
             # Print out current progress, as this can take a long time.
             progress_str = "\rdeg {}, ctrl {}, num_in {}".format(
@@ -212,8 +212,8 @@ print()
 np.savez_compressed(
     "./bspline_param_evals_latest.npz", res_2cm = results_2cm, res_2deg = results_2deg,
      res_5cm = results_5cm, res_5deg = results_5deg,
-     res_mean_sq_dist = results_mean_sq_dist,
-     res_mean_sq_angle = results_mean_sq_angle
+     res_mean_dist = results_mean_dist,
+     res_mean_angle = results_mean_angle
 )                        
 
 #%% 
@@ -233,12 +233,16 @@ load_result = np.load(load_target)
 
 
 # Mean over all body/seq combos.
-data = load_result['res_mean_sq_dist'].mean(axis = -1)
+data_2cm = load_result['res_2cm'].mean(axis = -1)
+
 #%% 
 lr2 = np.load("./bspline_param_evals_latest.npz")
-data_latest = lr2['res_mean_sq_dist'].mean(axis = -1)
-ds = data[:data_latest.shape[0], :data_latest.shape[1], :data_latest.shape[2]]
-print("Max load comparison diff:", np.abs(ds - data_latest).max())
+# data_latest = lr2['res_2cm'].mean(axis = -1)
+# ds = data_2cm[:data_latest.shape[0], :data_latest.shape[1], :data_latest.shape[2]]
+data = lr2['res_mean_dist'].mean(axis = -1)
+for k in load_result.files:
+    print("Max load comparison diff for key", k, ":", np.abs(load_result[k] - lr2[k]).max())
+
 #%%
 # Find out which indices do not contain data because they'd have too few ctrl
 # or input pts for B-Spline fitting.
@@ -286,7 +290,7 @@ for level in range(data.shape[0]):
 ax.set_title('3D Surface Plot for Each Order')
 ax.set_xlabel('Num input pts')
 ax.set_ylabel('Num ctrl pts (m + 1)')
-ax.set_zlabel('Mean squared distance')
+ax.set_zlabel('Mean distance')
 ax.legend()
 
 plt.show(block=True)
