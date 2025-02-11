@@ -159,16 +159,17 @@ def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
     orthos = vectors - parallels
     return (parallels, orthos)
 
-def getOrthonormalFrames(vecs0, vecs1 = None):
-    matrices = np.empty(vecs0.shape[:-1] + (3, 3))
-    matrices[..., 0] = safelyNormalizeArray(vecs0)
+def getOrthonormalFrames(vecs0: np.ndarray, vecs1: np.ndarray = None,
+                         vecs0_are_unit_len: bool = False):
+    mats = np.empty(vecs0.shape[:-1] + (3, 3))
+    mats[..., 0] = vecs0 if vecs0_are_unit_len else safelyNormalizeArray(vecs0)
     if vecs1 is None:
         vecs1 = np.ones_like(vecs0)
-    v0v1dot = einsumDot(matrices[..., 0], vecs1)
-    parallels = scalarsVecsMul(v0v1dot, matrices[..., 0])
-    matrices[..., 1] = safelyNormalizeArray(vecs1 - parallels)
-    matrices[..., 2] = np.cross(matrices[..., 0], matrices[..., 1])
-    return matrices
+    v0v1dot = einsumDot(mats[..., 0], vecs1)
+    parallels = scalarsVecsMul(v0v1dot, mats[..., 0])
+    mats[..., 1] = safelyNormalizeArray(vecs1 - parallels)
+    mats[..., 2] = np.cross(mats[..., 0], mats[..., 1])
+    return mats
 
 def getPlaneAxes(roughAxes0, roughAxes1):
     nax0 = normalizeAll(roughAxes0)
@@ -361,6 +362,14 @@ def rotateBySinCos2D(vecs, cosines, sines):
 
     return einsumMatVecMul(rot_mats, vecs)
 
+def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
+    if normalization_needed:
+        vecs0 = normalizeAll(vecs0)
+        vecs1 = normalizeAll(vecs1)
+
+    vals_preds_dot = einsumDot(vecs0, vecs1)
+    return np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
+
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
 # look at the formula for the scalar component of quaternion multiplication for 
@@ -370,8 +379,8 @@ def rotateBySinCos2D(vecs, cosines, sines):
 # see why. Then 2acos is either abs(angle) or abs(2pi - angle); either way, it
 # will be the correct angle between 0 and pi.
 def anglesBetweenQuats(quats0, quats1):
-    vals_preds_dot = einsumDot(quats0, quats1)
-    half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
+    # Start by finding the angle between quats when they're interpreted as vec4s
+    half_angle = anglesBetweenVecs(quats0, quats1, False)
     return half_angle + half_angle
 
 def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):

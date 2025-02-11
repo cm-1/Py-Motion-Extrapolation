@@ -9,6 +9,6 @@ import numpy
 
 setup(
     name='weighted_impurity',
-    ext_modules=cythonize("weighted_impurity.pyx"),
+    ext_modules=cythonize("weighted_impurity.pyx", annotate=True),
     include_dirs=[numpy.get_include()]
 )
