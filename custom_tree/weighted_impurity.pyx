@@ -1,16 +1,35 @@
-# TODO:
-# - Testing if ys have changed since last but y_errs have not.
-# - Missing sums
-# - Performance stuff, like boundscheck(False)
-# - In set_y_errs, check that shape is correct!
-# - Check annotated output
-# - README on __cinit__
+# Notes and possible TODO items:
+# - I did not have missing values in my training data, and so I did not bother
+#   to override and adapt the code in init_missing() where self.sum_missing was 
+#   updated; for this criterion to correctly handle missing values, that must
+#   be added to this file.
+# - Testing if ys have changed since last but y_errs have not? The problem is the
+#   check would inevitably be in init(), which gets called a lot, meaning there'd 
+#   be a small performance hit. But the test for _y_errs_supplied in init does
+#   not seem to affect performance, so maybe it'd be fine.
+# - In the annotated output, lines were things like "self.sum_total" are used 
+#   are highlighted, because I guess "self" calls require Python interaction.
+#   In some areas of scikit-learn's code, they're make a "local reference" to
+#   the memoryviews in "self" and then read/write using those in the for loops.
+#   I tried doing the same for the "sum" arrays and y_errs, but to my surprise,
+#   the code took much longer to execute afterwards! So maybe I was doing
+#   something wrong... or maybe it means that the other places this is done,
+#   such as for sample_weights and sample_indices, could be sped up by "undoing"
+#   this paradigm that I copied over from the scikit-learn code?
+# - While setting boundscheck(False) and wraparound(False) have a noticeable
+#   speed improvement, and as far as I can tell the "start" and "end" params in
+#   all sklearn code that calls these functions give "good" indices, this could
+#   possibly change in future sklearn code, particularly wraparound.
 
-# from libc.stdio cimport printf
+# - Still need to investigate some stuff re: copy and deepcopy.
+
+from libc.stdio cimport printf
+from libc.string cimport memset
+import sys # For printing warning string.
 
 from sklearn.utils._typedefs cimport float64_t, int8_t, intp_t
 
-from libc.string cimport memset
+cimport cython
 
 import numpy as np
 cimport numpy as cnp
@@ -30,22 +49,93 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
     """
 
     cdef const float64_t[:, :, ::1] y_errs
+    cdef bint _y_errs_supplied
+
+    def __cinit__(self, intp_t n_outputs,
+                  cnp.ndarray[intp_t, ndim=1] n_classes):
+        """Initialize the attributes this criterion shares with the base class.
+
+        Attributes specific to this subclass (in our case, the errors for each
+        classication for each sample) need to be set via a separate method,
+        since it seems that __cinit__ parameters cannot be changed from the
+        base class's when subclassing in the same way that one can override
+        a Python class's __init__ with new parameters.
+        TODO: Maybe one can write an __init__ with different parameters that
+        then calls the base class __cinit__? Not sure and don't have time to
+        research or experiment right now.
+
+        Parameters
+        ----------
+        n_outputs : intp_t
+            The number of targets, the dimensionality of the prediction
+        n_classes : numpy.ndarray, dtype=intp_t
+            The number of unique classes in each target
+        """
+
+        # The base class __cinit__ is called by default; we do not need to do
+        # something like the super().__init__() done for Python classes.
+        # So we'll just initialize our subclass-specific attribute(s) and then
+        # we're done.
+        self._y_errs_supplied = False
+
+    
 
     def __deepcopy__(self, memo):
-        """Override deepcopy to manually handle copying y_errs."""
-        new_obj = WeightedErrorCriterion(self.n_outputs, np.array(self.n_classes, dtype=np.intp))
+        """
+        Override deepcopy to ensure subclass attributes are present in the copy,
+        as the default copy and deepcopy do not copy these attributes in the
+        same way as they would in a Python class.
+        """
+        new_obj = WeightedErrorCriterion(
+            self.n_outputs, np.array(self.n_classes, dtype=np.intp)
+        )
         
-        # Explicitly copy the y_errs memoryview
-        new_obj.y_errs = self.y_errs  # Shallow copy reference
+        # Explicitly copy the subclass attributes.
+        new_obj._y_errs_supplied = self._y_errs_supplied
+        if self._y_errs_supplied:
+            new_obj.y_errs = self.y_errs
+        else:
+            warn_str = (
+                "Criterion is being copied before y_errs were supplied; "
+                "this is likely not expected or desired behaviour!"
+            )
+            print(warn_str, file=sys.stderr)
         return new_obj
 
-    cpdef int set_y_errs(self, cnp.ndarray[float64_t, ndim=3] y_errs):
+
+    def set_y_errs(self, cnp.ndarray[float64_t, ndim=3] y_errs):
+        """Set the errors for each class for each training sample.
+
+        It seems that when subclassing in Cython, you cannot change the
+        __cinit__ arguments from the ones used by the base class, so for now,
+        the only workaround I'm aware of is to use this separate function 
+        (though maybe there's a way to override __init__ that would work?). 
+
+        Parameters
+        ----------
+        y_errs : ndarray of shape (n_samples, n_outputs, max_n_classes),
+            dtype=float64_t
+            The error for each class for each sample.
+        """
+
+        # print("Value of y_errs before supplied:", self.y_errs)
+        if y_errs.shape[1] != self.n_outputs:
+            raise ValueError(
+                "y_errs.shape[1] does not equal the number of tree outputs!"
+            )
+        if y_errs.shape[2] != self.max_n_classes:
+            raise ValueError(
+                "y_errs.shape[2] does not equal the max number of classes!"
+            )
         self.y_errs = np.ascontiguousarray(y_errs, dtype=np.float64)
-        return 0
+        self._y_errs_supplied = True
+        return
 
     # The code for this override is nearly identical to the base class's, except
     # that sum_total's calculated from self.y_errs instead of self.y and an
     # error is raised if self.y_errs has not been set yet.
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef int init(
         self,
         const float64_t[:, ::1] y,
@@ -79,8 +169,11 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         end : intp_t
             The last sample to use in the mask
         """
-        #if not self.y_errs_supplied:
-        #    raise Exception("Per-class errors not supplied to criterion!")
+        # While init() is called a lot, adding the below check does not seem to
+        # have a noticeable effect on performance at all, so it's probably worth
+        # keeping this.
+        if not self._y_errs_supplied:
+            raise Exception("Per-class errors not supplied to criterion!")
         self.y = y
         self.sample_weight = sample_weight
         self.sample_indices = sample_indices
@@ -122,6 +215,8 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
 
     # The code for this override is nearly identical to the one in the base 
     # class, except that sums are calculated from self.y_errs instead of self.y.
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef int update(self, intp_t new_pos) except -1 nogil:
         """Updated statistics by moving sample_indices[pos:new_pos] to the left child.
 
@@ -204,6 +299,8 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         self.pos = new_pos
         return 0
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef float64_t node_impurity(self) noexcept nogil:
         """Evaluate the impurity of the current node.
 
@@ -237,6 +334,8 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         # Negation happens here to make impurity positive.
         return -max_neg_err_sum / self.weighted_n_node_samples
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef void children_impurity(self, float64_t* impurity_left,
                                 float64_t* impurity_right) noexcept nogil:
         """Evaluate the impurity in children nodes.
