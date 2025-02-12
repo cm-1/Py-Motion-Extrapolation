@@ -84,8 +84,8 @@ class BCOT_Data_Calculator:
     def _setupPosePaths():
         if BCOT_Data_Calculator._dir_paths_initialized:
             return
-        settingsDir = pathlib.Path(__file__).parent.parent.resolve()
-        jsonPath = settingsDir / "local.config.json"
+        settingsDir = pathlib.Path(__file__).parent.resolve()
+        jsonPath = settingsDir / "config" / "local.config.json"
         with open(jsonPath) as f:
             d = json.load(f)
             BCOT_Data_Calculator._DATASET_DIR = pathlib.Path(
