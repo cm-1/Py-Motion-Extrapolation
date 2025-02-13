@@ -18,6 +18,9 @@ The most important notes are:
   to override and adapt the code in `init_missing()` where `self.sum_missing` was 
   updated; for this criterion to correctly handle missing values, that must
   be added to this file.
+- I chose to override `__deepcopy__` in a way where a true deepcopy is not made!
+  If, for some reason, you need true deep copies where the per-sample-per-class
+  y errors are copied, you will have to change the `__deepcopy__`!
 - If you write other Cython code that needs to reference my Cython code,
 you will need to create a `weighted_impurity.pxd` file in the current directory
 with the following content:

@@ -78,16 +78,31 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         # we're done.
         self._y_errs_supplied = False
 
-    
+    def __copy__(self):
+        """
+        Override __copy__ to ensure subclass attributes are present in the copy,
+        as the default copy and deepcopy do not copy these attributes.
 
-    def __deepcopy__(self, memo):
+        Due to the way sklearn defined the ClassificationCriterion class and the
+        way its __cinit__ function is written, no copy of a 
+        ClassificationCriterion or a subclass of it can be a "true" shallow
+        copy unless one explicitly replaces the copy of n_classes made by the
+        ClassificationCriterion __cinit__ (which means said copy is "wasted"). 
+        This is because there is no way to create an object without its 
+        __cinit__ being called. I have decided to *not* "undo" the n_classes
+        copy, as it would "waste" extra operations and it is probably better
+        that a subclass's behaviour matches the base class's.
+
+        This means that this __copy__ function does not return a true shallow
+        copy! However, all attributes other than n_classes will not have copies
+        made, as "expected".
         """
-        Override deepcopy to ensure subclass attributes are present in the copy,
-        as the default copy and deepcopy do not copy these attributes in the
-        same way as they would in a Python class.
-        """
+
+        # Create a new WeightedCriterion object. As mentioned above, there is
+        # no real point trying to avoid the constructor via something like 
+        # __new__ that one might typically use to create shallow copies.
         new_obj = WeightedErrorCriterion(
-            self.n_outputs, np.array(self.n_classes, dtype=np.intp)
+            self.n_outputs, np.asarray(self.n_classes, dtype=np.intp)
         )
         
         # Explicitly copy the subclass attributes.
@@ -102,6 +117,20 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
             print(warn_str, file=sys.stderr)
         return new_obj
 
+    def __deepcopy__(self, memo):
+        """
+        Override __deepcopy__ to ensure subclass attributes are present in the
+        copy, as the default copy and deepcopy do not copy these attributes.
+
+        NOTE: I decided against doing a full deepcopy at this time! The base 
+        class attributes are essentially "deepcopied" anyway and I do not see
+        a reason at the moment for my subclass attributes to require it when
+        the sklearn decision tree code makes its criterion deepcopies. So to
+        make the code *slightly* simpler and more efficient for now, I'll just
+        return the result of __copy__ here too!
+        """
+
+        return self.__copy__()
 
     def set_y_errs(self, cnp.ndarray[float64_t, ndim=3] y_errs):
         """Set the errors for each class for each training sample.
