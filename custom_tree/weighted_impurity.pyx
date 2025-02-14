@@ -21,8 +21,6 @@
 #   all sklearn code that calls these functions give "good" indices, this could
 #   possibly change in future sklearn code, particularly wraparound.
 
-# - Still need to investigate some stuff re: copy and deepcopy.
-
 from libc.stdio cimport printf
 from libc.string cimport memset
 import sys # For printing warning string.
