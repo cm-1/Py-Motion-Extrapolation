@@ -1,90 +1,163 @@
-from collections import namedtuple
+import typing
 
 import numpy as np
 
 import posemath as pm
+# A good max for forearm length is 30cm, and 20cm for hand length.
+# So a decent circle radius max is 50cm = 500mm.
+DEFAULT_MAX_CIRC_SQ_RADIUS = 250000 
+DEFAULT_MAX_CIRC_ANGLE = np.pi/2.0
+
+class CircularMotionAnalysis:
+    def __init__(self, translations: np.ndarray,
+                 translation_diffs: np.ndarray = None,
+                 backup_preds: np.ndarray = None,
+                 max_circ_angle: float = DEFAULT_MAX_CIRC_ANGLE,
+                 max_sq_radii: float = DEFAULT_MAX_CIRC_SQ_RADIUS):
+        rough_circ_axes_0 = translation_diffs[1:-1]
+        rough_circ_axes_1 = -translation_diffs[:-2]
+        self.circle_plane_info = pm.getPlaneInfo(
+            rough_circ_axes_0, rough_circ_axes_1, translations[:-3]
+        )
+
+        circle_axes = self.circle_plane_info.plane_axes
+
+        circle_pts_2D = []
+        for j in range(3):
+            circle_pts_2D.append(pm.vecsTo2D(
+                translations[j:(-3 + j)], *circle_axes
+            ))
+            
+        self.c_centres_2D = pm.circleCentres2D(*circle_pts_2D)
+
+        diffs_from_centres = []
+        for j in range(3):
+            diffs_from_centres.append(circle_pts_2D[j] - self.c_centres_2D)
+    
+        self._sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
+        radii_too_long = self._sq_radii > max_sq_radii 
+
+        self._angle_arr_pair: typing.List[np.ndarray] = []
+        c_cosines = []
+        for j in range(2):
+            c_diff_dot = pm.einsumDot(
+                diffs_from_centres[j], diffs_from_centres[j + 1]
+            )
+            c_cosines.append(
+                c_diff_dot/self._sq_radii
+            )
+            curr_angs = np.arccos(c_cosines[-1])
+
+            # Numpy cross products of 2D vecs treat them like 3D vecs and return 
+            # only the z-coordinate of the result (since the rest are 0). We'll look
+            # at the sign to determine rotation direction about the circle axis.
+            # TODO: Because np.cross of 2D vecs is deprecated, do the cross
+            # product myself.
+            c_crosses = np.cross(diffs_from_centres[j], diffs_from_centres[j + 1])
+            flips = (c_crosses < 0.0)
+            curr_angs[flips] = -curr_angs[flips]
+            self._angle_arr_pair.append(curr_angs)
+
+        self.first_angles = self._angle_arr_pair[0]
+        self.second_angles = self._angle_arr_pair[1]
+
+        prev_angle_sum = self.first_angles + self.second_angles
+        prev_angles_too_big = np.abs(prev_angle_sum) > max_circ_angle
+
+        self.invalid_circ_indices = np.logical_or(
+            radii_too_long, prev_angles_too_big
+        )
+
+        c_pred_angles_base = 1.5 * self.second_angles - 0.5 * self.first_angles
+
+        self.c_pred_angles = np.clip(
+            c_pred_angles_base, a_min=-max_circ_angle, a_max=max_circ_angle
+        )
+
+        c_cosines_pred = np.cos(self.c_pred_angles)
+        c_sines_pred = np.sin(self.c_pred_angles)
+
+        c_trans_preds_2D = pm.rotateBySinCos2D(
+            diffs_from_centres[2], c_cosines_pred, c_sines_pred
+        )
+
+        c_only_preds = pm.vecsTo3DUsingPlaneInfo(
+            self.c_centres_2D + c_trans_preds_2D, self.circle_plane_info
+        )
+        self.c_trans_preds: np.ndarray = c_only_preds
+
+        if backup_preds is not None:
+            pred_len_diff = len(backup_preds) - len(c_only_preds)
+            if pred_len_diff < 0:
+                raise NotImplementedError(
+                    "Handling shorter backup preds not yet supported!"
+                )
+            c_only_preds[self.invalid_circ_indices] = \
+                backup_preds[pred_len_diff:][self.invalid_circ_indices]
+            self.c_trans_preds = pm.replaceAtEnd(
+                backup_preds, c_only_preds, pred_len_diff
+            )
+
+        # Only create if need-be later.
+        self._c_centres_3D: np.ndarray = None 
+        self._radii: np.ndarray = None 
+    
+    def getRadii(self):
+        if self._radii is None:
+            self._radii = np.sqrt(self._sq_radii)
+        return self._radii
+
+    def getCentres3D(self):
+        if self._c_centres_3D is None:
+            self._c_centres_3D = pm.vecsTo3DUsingPlaneInfo(
+                self.c_centres_2D, self.circle_plane_info
+            )
+        return self._c_centres_3D
+
+    # TODO: I still need to make sure this doesn't have any bugs in it.
+    def isMotionStillCircular(self, next_translations: np.ndarray,
+                              err_radius_ratio_thresh: float):
+
+        self.getCentres3D() # Makes sure they are created and not None.
+
+        vecs_from_c_centres = next_translations - self._c_centres_3D[:-1]
+        _, inplane_vecs_from_c_centres = pm.parallelAndOrthoParts(
+            vecs_from_c_centres, self.circle_plane_info.normals[:-1], True
+        )
+
+        prev_radii = self.getRadii()[:-1]
+        closest_circle_pts = self._c_centres_3D[:-1] + pm.scalarsVecsMul(
+            prev_radii, pm.normalizeAll(inplane_vecs_from_c_centres)
+        )
+        vecs_from_circ = next_translations - closest_circle_pts
+        dist_from_circ = np.linalg.norm(vecs_from_circ, axis=-1)
+
+        ratio_from_circ = dist_from_circ/prev_radii
+        print("TODO: prop circ params from prev when successful if new is too dissimilar?")
 
 
-CirclesInfo = namedtuple(
-    "CirclesInfo", ['predictions', 'angle_pairs', 'sq_radii', 'discarded_inds', 'circle_plane_info']
-)
+        c_over_thresh = ratio_from_circ > err_radius_ratio_thresh
+        c_invalid = self.invalid_circ_indices[1:]
+        last_c_invalid = self.invalid_circ_indices[:-1]
+        # centre_big_move = c_centre_diff/prev_radii > 0.1 # Arbitrary threshold
+        # radii_big_change = radii_diffs / prev_radii > 0.2 # Arbitrary threshold
 
-def circle_preds(translations: np.ndarray, translation_diffs: np.ndarray = None,
-                 backup_preds: np.ndarray = None, ):
-    rough_circ_axes_0 = translation_diffs[1:-1]
-    rough_circ_axes_1 = -translation_diffs[:-2]
-    circle_plane_info = pm.getPlaneInfo(
-        rough_circ_axes_0, rough_circ_axes_1, translations[:-3]
-    )
-
-    circle_axes = circle_plane_info.plane_axes
-
-    circle_pts_2D = []
-    for j in range(3):
-        circle_pts_2D.append(pm.vecsTo2D(
-            translations[j:(-3 + j)], *circle_axes
-        ))
+        c_bool_list = [c_over_thresh, c_invalid, last_c_invalid]
+        non_circ_bool_inds = c_bool_list[0]
+        for cbools in c_bool_list[1:]:
+            non_circ_bool_inds = np.logical_or(non_circ_bool_inds, cbools)
         
-    circle_centres = pm.circleCentres2D(*circle_pts_2D)
+        return non_circ_bool_inds
 
-    diffs_from_centres = []
-    for j in range(3):
-        diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
-   
-    sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
-    # A good max for forearm length is 30cm, and 20cm for hand length.
-    # So a decent circle radius max is 50cm = 500mm.
-    radii_too_long = sq_radii > 250000 
-
-    c_angles = []
-    c_cosines = []
-    for j in range(2):
-        c_diff_dot = pm.einsumDot(
-            diffs_from_centres[j], diffs_from_centres[j + 1]
+    def vec6CircleDists(self):
+        scaled_circle_normals = pm.scalarsVecsMul(
+            self.getRadii(), self.circle_plane_info.normals
         )
-        c_cosines.append(
-            c_diff_dot/sq_radii
-        )
-        c_angles.append(np.arccos(c_cosines[-1]))
-
-        # Numpy cross products of 2D vecs treat them like 3D vecs and return 
-        # only the z-coordinate of the result (since the rest are 0). We'll look
-        # at the sign to determine rotation direction about the circle axis.
-        c_crosses = np.cross(diffs_from_centres[j], diffs_from_centres[j + 1])
-        c_crosses_flip = (c_crosses < 0.0)
-        c_angles[-1][c_crosses_flip] = -c_angles[-1][c_crosses_flip]
-
-    MAX_CIRC_ANGLE = np.pi/2.0
-    prev_angle_sum = c_angles[0] + c_angles[1]
-    prev_angles_too_big = np.abs(prev_angle_sum) > MAX_CIRC_ANGLE
-
-    invalid_circ_indices = np.logical_or(radii_too_long, prev_angles_too_big)
-
-    c_pred_angles_base = 1.5 * c_angles[1] - 0.5 * c_angles[0]
-
-    c_pred_angles = np.clip(
-        c_pred_angles_base, a_min=-MAX_CIRC_ANGLE, a_max=MAX_CIRC_ANGLE
-    )
-
-    c_cosines_pred = np.cos(c_pred_angles)
-    c_sines_pred = np.sin(c_pred_angles)
-
-    c_trans_preds_2D = pm.rotateBySinCos2D(
-        diffs_from_centres[2], c_cosines_pred, c_sines_pred
-    )
-
-    c_trans_preds = None
-    c_only_preds = pm.vecsTo3DUsingPlaneInfo(
-        circle_centres + c_trans_preds_2D, circle_plane_info
-    )
-    if backup_preds is None:
-        c_trans_preds = c_only_preds
-    else:
-        pred_len_diff = len(backup_preds) - len(c_only_preds)
-        c_only_preds[invalid_circ_indices] = backup_preds[pred_len_diff:][invalid_circ_indices]
-        c_trans_preds = pm.replaceAtEnd(c_only_preds, backup_preds, pred_len_diff)
-
-    return CirclesInfo(c_trans_preds, c_angles, sq_radii, invalid_circ_indices, circle_plane_info)
+        circle_vec6_info = np.concatenate([
+            scaled_circle_normals, self.getCentres3D()
+        ], axis=1)
+        return np.linalg.norm(np.diff(circle_vec6_info, 1, axis=0), axis=-1)
+# End of class
 
 def camObjConstAngularVelPreds(known_rotations_qs: np.ndarray, backup_predictions = None):
 

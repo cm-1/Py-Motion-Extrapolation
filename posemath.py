@@ -2,6 +2,7 @@ import numpy as np
 
 from collections import namedtuple
 
+HALF_PI_NP = np.pi/2.0
 
 PlaneInfoType = namedtuple(
     "PlaneInfo", ['plane_axes', 'normals', 'offset_dists']
@@ -361,6 +362,15 @@ def rotateBySinCos2D(vecs, cosines, sines):
     ]), -1, 0)
 
     return einsumMatVecMul(rot_mats, vecs)
+
+def getAcuteAngles(angles):
+    obtuse_inds = (angles > HALF_PI_NP)
+    acute_inds = np.invert(obtuse_inds)
+    acute_angs = np.empty_like(angles)
+    acute_angs[obtuse_inds] = np.pi - angles[obtuse_inds]
+    acute_angs[acute_inds] = angles[acute_inds]
+    return acute_angs
+
 
 def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
     if normalization_needed:

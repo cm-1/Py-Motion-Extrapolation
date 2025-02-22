@@ -663,90 +663,13 @@ for i, combo in enumerate(combos):
     min_vel_rot_aas = pm.scalarsVecsMul(vel_angles, vel_crosses)
     min_vel_rot_qs = pm.quatsFromAxisAngleVec3s(min_vel_rot_aas)
 
-    rough_circ_axes_0 = translation_diffs[1:-1]
-    rough_circ_axes_1 = -translation_diffs[:-2]
-    circle_plane_info = pm.getPlaneInfo(
-        rough_circ_axes_0, rough_circ_axes_1, translations[:-3]
+    # Note: There are default arguments for max sq radii and max angle, which
+    # is used to decide whether to "accept" that the motion is in fact circular.
+    # Keep the existence of these default values in mind!
+    cma = pex.CircularMotionAnalysis(
+        translations, translation_diffs, t_quadratic_preds
     )
-
-    circle_axes = circle_plane_info.plane_axes
-
-    '''
-    plane_normals = pm.normalizeAll(np.cross(
-        rough_circ_axes_0, rough_circ_axes_1
-    ))
-    if not pm.areAxisArraysOrthonormal([
-        circle_axes[0], circle_axes[1], plane_normals
-    ], loud=True):
-        raise Exception("Orthonormality issue!")
-    if np.abs(pm.einsumDot(plane_normals, rough_circ_axes_1)).max() > 0.001:
-        raise Exception("Plane normal issue!")
-    '''
-    circle_pts_2D = []
-    for j in range(3):
-        circle_pts_2D.append(pm.vecsTo2D(
-            translations[j:(-3 + j)], *circle_axes
-        ))
-
-    # circ_pt_norms = np.linalg.norm(circle_pts_2D[0] - circle_pts_2D[1], axis=-1)
-    # orig_nroms = np.linalg.norm(translation_diffs[:-2], axis=-1)
-    # if np.abs(circ_pt_norms - orig_nroms).max() > 0.0001:
-    #     raise Exception("Norm issue!")
-        
-    circle_centres = pm.circleCentres2D(*circle_pts_2D)
-
-    diffs_from_centres = []
-    for j in range(3):
-        diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
-   
-    sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
-    # A good max for forearm length is 30cm, and 20cm for hand length.
-    # So a decent circle radius max is 50cm = 500mm.
-    radii_too_long = sq_radii > 250000 
-
-    c_angles = []
-    c_cosines = []
-    for j in range(2):
-        c_diff_dot = pm.einsumDot(
-            diffs_from_centres[j], diffs_from_centres[j + 1]
-        )
-        c_cosines.append(
-            c_diff_dot/sq_radii
-        )
-        c_angles.append(np.arccos(c_cosines[-1]))
-
-        # Numpy cross products of 2D vecs treat them like 3D vecs and return 
-        # only the z-coordinate of the result (since the rest are 0). We'll look
-        # at the sign to determine rotation direction about the circle axis.
-        c_crosses = np.cross(diffs_from_centres[j], diffs_from_centres[j + 1])
-        c_crosses_flip = (c_crosses < 0.0)
-        c_angles[-1][c_crosses_flip] = -c_angles[-1][c_crosses_flip]
-
-    MAX_CIRC_ANGLE = np.pi/2.0
-    prev_angle_sum = c_angles[0] + c_angles[1]
-    prev_angles_too_big = np.abs(prev_angle_sum) > MAX_CIRC_ANGLE
-
-    invalid_circ_indices = np.logical_or(radii_too_long, prev_angles_too_big)
-
-    c_pred_angles_base = 1.5 * c_angles[1] - 0.5 * c_angles[0]
-
-    c_pred_angles = np.clip(
-        c_pred_angles_base, a_min=-MAX_CIRC_ANGLE, a_max=MAX_CIRC_ANGLE
-    )
-
-    c_cosines_pred = np.cos(c_pred_angles)
-    c_sines_pred = np.sin(c_pred_angles)
-
-    c_trans_preds_2D = pm.rotateBySinCos2D(
-        diffs_from_centres[2], c_cosines_pred, c_sines_pred
-    )
-
-    c_trans_preds = np.empty(t_vel_preds.shape)
-    c_trans_preds[1:] = pm.vecsTo3DUsingPlaneInfo(
-        circle_centres + c_trans_preds_2D, circle_plane_info
-    )
-    c_trans_preds[0] = t_vel_preds[0]
-    c_trans_preds[1:][invalid_circ_indices] = t_quadratic_preds[1:][invalid_circ_indices]
+    c_trans_preds = cma.c_trans_preds
 
     # c_centres3D = pm.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
     # if not pm.areVecArraysInSamePlanes([
@@ -766,11 +689,11 @@ for i, combo in enumerate(combos):
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
 
-    circle_rot_quats = np.empty(circle_plane_info.normals.shape[:-1] + (4,))
-    half_c_pred_angles = c_pred_angles / 2.0
+    circle_rot_quats = np.empty(cma.circle_plane_info.normals.shape[:-1] + (4,))
+    half_c_pred_angles = cma.c_pred_angles / 2.0
     circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
     circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
-        np.sin(half_c_pred_angles), circle_plane_info.normals
+        np.sin(half_c_pred_angles), cma.circle_plane_info.normals
     )
 
 
@@ -795,7 +718,7 @@ for i, combo in enumerate(combos):
 
     r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
     r_c_arm_preds = getArmRotPreds(circle_rot_quats)
-    r_c_arm_preds[1:][invalid_circ_indices] = r_vel_preds[1:][invalid_circ_indices]
+    r_c_arm_preds[1:][cma.invalid_circ_indices] = r_vel_preds[1:][cma.invalid_circ_indices]
 
     # unit_vel_test = pm.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
