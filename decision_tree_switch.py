@@ -1,12 +1,20 @@
-#%%
+#%% Imports
 import typing
-from collections import namedtuple
 from enum import Enum
+import copy
+import time
 
 import numpy as np
+from numpy.typing import NDArray
+
+# Decision tree imports ========================================================
 from sklearn import tree as sk_tree
+from sklearn.tree._tree import TREE_LEAF
 from sklearn.model_selection import train_test_split
 
+from custom_tree.weighted_impurity import WeightedErrorCriterion
+
+# Local code imports ===========================================================
 import posemath as pm
 import poseextrapolation as pex
 from gtCommon import BCOT_Data_Calculator
@@ -684,11 +692,6 @@ def assessPredError(concat_errs, pred_labels, inds_dict = None):
         ret_dict[k] = taken_errs[inds].mean()
     return ret_dict
 #%%
-from custom_tree.weighted_impurity import WeightedErrorCriterion
-
-from time import time
-
-start_time = time()
 
 s_inds = []
 s_train_inds = []
@@ -710,22 +713,76 @@ mc.set_y_errs(y_errs_reshape)
 error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
 print("Error limit:", error_lim)
 
-# In tests up until now, best score was for depth 7, regardless of skip amt.
+# A tree depth of 8 is already way beyond "human-readable", and I think the
+# graphs don't show miraculous improvements past 8, so 8 seems like a good max.
 max_depth = 8
+
+
+#%% Training decision tree at max depth.
+# ---
+# We'll train a tree at max depth and then trim it to smaller depths to evaulate
+# the performance at lower depths. This yields the exact same trees as if we
+# were to train individual ones with lower max depths (confirmed via tests), but
+# eliminates duplicated training time. I might leave the old code for training
+# individual trees below as a comment, for reference.
+
+big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
+print("Starting decision tree training!")
+start_time = time.time()
+big_tree = big_tree.fit(concat_train_data.T, concat_train_labels)
+print("Done!")
+print("Time spent:", time.time() - start_time)
+#%%
+
+# A recursive function to help trim_to_depth(). The params should be a tree's
+# children_left and children_right, then a specified node's index and its
+# depth, and a target tree depth. 
+def _trim_to_depth_helper(left_children_inds: NDArray[np.signedinteger],
+                          right_children_inds: NDArray[np.signedinteger],
+                          current_node_index: int, current_node_depth: int,
+                          target_depth: int):
+    if current_node_depth >= target_depth:
+        left_children_inds[current_node_index] = TREE_LEAF
+        right_children_inds[current_node_index] = TREE_LEAF
+    else:
+        # Recurse left and right subtrees to set required nodes to leaves.
+        _trim_to_depth_helper(
+            left_children_inds, right_children_inds, 
+            left_children_inds[current_node_index], current_node_depth + 1,
+            target_depth
+        )
+        _trim_to_depth_helper(
+            left_children_inds, right_children_inds, 
+            right_children_inds[current_node_index], current_node_depth + 1,
+            target_depth
+        )
+    return
+        
+def trim_to_depth(tree: sk_tree._classes.DecisionTreeClassifier, depth):
+    assert depth >= 1, "Depth to trim tree to must be >= 1!"
+    depth = min(depth, tree.get_depth())
+    tree_copy = copy.deepcopy(tree)  # Make a copy to avoid modifying original.
+    lefts = tree_copy.tree_.children_left
+    rights = tree_copy.tree_.children_right
+
+    _trim_to_depth_helper(lefts, rights, 0, 0, depth)
+    return tree_copy
+
+#%%
 scores = {k: np.empty(max_depth) for k in s_ind_dict.keys()}
 depths = np.arange(1, max_depth + 1)
-print("Done depth:", end='', flush=True)
 for d in depths:
-    clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
-    clf = clf.fit(concat_train_data.T, concat_train_labels)
-    graph_pred = clf.predict(concat_test_data.T)
+    # Preiously, we trained new trees from scratch using the below code, but as
+    # described above, we'll instead trim the "main" tree to get new ones.
+    #         clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
+    #         clf = clf.fit(concat_train_data.T, concat_train_labels)
+    trimmed_tree = trim_to_depth(big_tree, d)
+    graph_pred = trimmed_tree.predict(concat_test_data.T)
     scores_for_depth = assessPredError(concat_test_errs, graph_pred, s_ind_dict)
     for k, score_for_depth in scores_for_depth.items():
         scores[k][d-1] = score_for_depth
-    print(d, end=",", flush=True)
-print("done!")
-print("Time spent:", time() - start_time)
-print("Scores:")
+
+print("Scores for trimmed trees:")
 print(scores)
 #%%
 import matplotlib.pyplot as plt
@@ -745,8 +802,10 @@ plt.show()
 print("TODO: Add single 'limit' legend entry!")
 
 #%%
-mclf = sk_tree.DecisionTreeClassifier(max_depth=4, criterion=mc)
-mclf = mclf.fit(concat_train_data.T, concat_train_labels)
+# Again, we'll replace old code with a trimming of our main tree.
+#         mclf = sk_tree.DecisionTreeClassifier(max_depth=4, criterion=mc)
+#         mclf = mclf.fit(concat_train_data.T, concat_train_labels)
+mclf = trim_to_depth(big_tree, 4)
 mclfps = mclf.predict(concat_test_data.T).copy()
 
 #%%
