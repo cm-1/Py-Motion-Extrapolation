@@ -653,7 +653,9 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     nonUnitAxes = np.empty(matrixDiags.shape) # Storage for resulting axes.
 
     # Get largest diagonal entries' locations. We'll reuse this later on too.
-    whereMaxDiag = np.argmax(matrixDiags, axis = -1, keepdims=True)
+    # Note: newaxis used instead of keepdims to support older numpy versions.
+    whereMaxDiag = np.argmax(matrixDiags, axis = -1)[..., np.newaxis]
+
     # Extract the value of the largest diagonal entry.
     # Earlier numpy versions don't have `take_along_axis`; in that case, you'd
     # use something like arr[np.arange(len(...)), colIndices].
