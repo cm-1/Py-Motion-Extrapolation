@@ -704,6 +704,9 @@ for i in range(1,4): # We have data for frame steps of 1, 2, and 3.
 s_ind_dict = {"skip" + str(i): s_inds[i] for i in range(3)}
 s_ind_dict["all"] = None
 
+s_train_ind_dict = {"skip" + str(i): s_train_inds[i] for i in range(3)}
+s_train_ind_dict["all"] = None
+
 mc = WeightedErrorCriterion(1, np.array([len(MOTION_MODEL)], dtype=np.intp))
 y_errs_reshape = concat_train_errs.reshape((
     concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
@@ -830,3 +833,52 @@ export_graphviz(
 )
 # Convert to .pdf with:
 # Graphviz\bin\dot.exe -Tpdf tree.dot -o tree.pdf
+
+#%%
+import tensorflow as tf
+import keras
+#%%
+def customPoseLoss(y_true, y_pred):
+    probs = tf.nn.softmax(y_pred, axis=1)
+    return tf.reduce_sum(y_true * probs, axis=1)
+# Example Usage
+tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
+tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
+
+input_dim = concat_train_data.shape[0]
+num_classes = len(MOTION_MODEL)
+
+onehot_train_labels = tf.one_hot(concat_train_labels, num_classes)
+
+tfmodel = keras.Sequential([
+    keras.layers.Input((input_dim,)),
+    keras.layers.BatchNormalization(),
+    keras.layers.Dense(64, activation='relu'),
+    # keras.layers.Dropout(0.2),
+    keras.layers.Dense(32, activation='relu'),
+    # keras.layers.Dropout(0.2),
+    # keras.layers.Dense(1, activation='sigmoid'),
+    keras.layers.Dense(num_classes, activation='sigmoid')])
+
+tfmodel.summary()
+
+tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
+tfmodel.compile(optimizer='adam', loss=tf_loss_fn)
+tfmodel.fit(concat_train_data.T, concat_train_errs, epochs=5, shuffle=True)
+#%%
+bgtrain = big_tree.predict(concat_train_data.T)
+bgtrain_score = assessPredError(concat_train_errs, bgtrain, s_train_ind_dict)
+print("Big tree train errs=", bgtrain_score)
+
+mclf_train = mclf.predict(concat_train_data.T)
+mclf_train_score = assessPredError(concat_train_errs, mclf_train, s_train_ind_dict)
+print("Smaller tree train errs=", mclf_train_score)
+
+tf_train_preds = np.argmax(tfmodel(concat_train_data.T).numpy(), axis=1)
+tf_train_errs = assessPredError(concat_train_errs, tf_train_preds, s_train_ind_dict)
+print("TF train errs=", tf_train_errs)
+print()
+
+tf_test_preds = np.argmax(tfmodel(concat_test_data.T).numpy(), axis=1)
+tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
+print("TF test errs=", tf_test_errs)
