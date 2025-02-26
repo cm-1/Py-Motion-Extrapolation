@@ -682,6 +682,43 @@ concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, -1)[1]
 concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, -1)[1]
 
 #%%
+best_seq_means = []
+test_best_seq_means = []
+for skip in range(3):
+    best_seq_scores = []
+    test_best_seq_scores = []
+    for seq in range(len(gtc.BCOT_SEQ_NAMES)):
+        seq_data = []
+        test_seq_data = []
+        for combo in combos:
+            if combo[1] == seq:
+                seq_combo_scores_stacked = np.stack(
+                    list(err_norm_lists[skip][combo[:2]].values()), axis=-1
+                )
+                seq_data.append(seq_combo_scores_stacked)
+                if combo[0] in test_bodies:
+                    test_seq_data.append(seq_combo_scores_stacked)
+        if len(seq_data) > 0:
+            concat_seq_data = np.concatenate(seq_data, axis=0)
+            concat_test_seq_data = np.concatenate(test_seq_data, axis=0)
+            seq_sums = np.sum(concat_seq_data, axis=0)
+            assert seq_sums.shape == (len(MOTION_MODEL), )
+            assert concat_seq_data.shape[1] == len(MOTION_MODEL)
+            
+            seq_best_mode = np.argmin(seq_sums)
+            best_seq_scores.append(concat_seq_data[:, seq_best_mode])
+            test_best_seq_scores.append(concat_test_seq_data[:, seq_best_mode])
+    seq_best_mean = np.mean(np.concatenate(best_seq_scores))
+    seq_best_test_mean = np.mean(np.concatenate(test_best_seq_scores))
+    
+    best_seq_means.append(seq_best_mean)
+    test_best_seq_means.append(seq_best_test_mean)
+print("Best case one-model-per sequence results for skips 0, 1, 2:")
+print("All data:", best_seq_means)
+print("Test data:", test_best_seq_means)
+
+
+#%%
 def assessPredError(concat_errs, pred_labels, inds_dict = None):
     if inds_dict is None:
         inds_dict = {"all:": None}
