@@ -372,6 +372,54 @@ class ConsolidatedResults:
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
 
+    def printLatexTable(results_for_names, col_names, row_names = None,
+                        num_to_highlight = 0, cmp_func = max, dec_round = 2):
+        print_str = "\\begin{table}{"
+        num_cs = len(col_names)
+        if row_names is not None:
+            num_cs += 1
+        cs = ' '.join(['c' for _ in range(num_cs)])
+        print_str += cs + "}\\\\\n\\hline\n"
+        if row_names is not None:
+            print_str += "& "
+        print_str += " & ".join(col_names) + "\\\\\n"
+        print_str += "\\hline\n"
+
+        best_wraps = ["\\textbf{{{}}}", "\\underline{{{}}}"]
+        num_wraps = len(best_wraps)
+        if num_to_highlight > len(best_wraps):
+            msg = "Only able to highlight " + str(num_wraps) + " best items!"
+            raise NotImplementedError(msg)
+
+        num_rows = len(results_for_names[0])
+        for r in range(num_rows):
+            if row_names is not None:
+                print_str += row_names[r] + " & "
+            row_data = [c[r] for c in results_for_names]
+            row_strings = [str(np.round(d, dec_round)) for d in row_data]
+            best_inds = []
+            best_results = []
+            for n in range(min(num_to_highlight, len(results_for_names))):
+                curr_best_ind = 0
+                while curr_best_ind in best_inds:
+                    curr_best_ind += 1
+                curr_best_res = row_data[curr_best_ind]
+                for c, rd in enumerate(row_data):
+                    if rd not in best_results:
+                        curr_best_res = cmp_func(curr_best_res, rd)
+                        if curr_best_res == rd:
+                            curr_best_ind = c
+                best_inds.append(curr_best_ind)
+                best_results.append(curr_best_res)
+                row_strings[curr_best_ind] = best_wraps[n].format(
+                    row_strings[curr_best_ind]
+                )
+                           
+            print_str += " & ".join(row_strings) + "\\\\\n"
+        print_str += "\\hline\n\\end{table}"
+        print(print_str)
+
+
     def printTable(results_for_names, col_names, row_names = None, annotations = None):
         name_lens = []
         row_name_col_width = 0
@@ -420,7 +468,7 @@ class ConsolidatedResults:
 
 
     def printResults(self, group_mode: DisplayGrouping, thresh_name_t: str = "",
-                     thresh_name_r: str = ""):
+                     thresh_name_r: str = "", print_latex: bool = False):
 
         mean_ax = None
         row_names = []
@@ -516,9 +564,14 @@ class ConsolidatedResults:
 
                
             print("{} Results:".format(title))
-            ConsolidatedResults.printTable(
-                score_means, col_names, row_names, annotations
-            )
+            if print_latex:
+                ConsolidatedResults.printLatexTable(
+                    score_means, col_names, row_names, 2
+                )
+            else:
+                ConsolidatedResults.printTable(
+                    score_means, col_names, row_names, annotations
+                )
             if len(thresh) > 0:
                 print("Column to compare against:", thresh)
                 excluded_str = "[]"
