@@ -4,6 +4,7 @@ from enum import Enum
 
 import numpy as np
 from numpy.polynomial import Polynomial
+from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
@@ -203,7 +204,20 @@ class PredictionResult:
         self.scores[bodSeqIDTuple] = score
         self.scores2D[bodSeqIDTuple[0], bodSeqIDTuple[1]] = score
 
+class POSE_COMPONENT(Enum):
+    TRANSLATION = 1
+    ROTATION = 2
+
 class ConsolidatedResults:
+
+    class TableInfo(typing.NamedTuple):
+        column_major_data: NDArray[np.float64]
+        col_names: NDArray[np.str_]
+        row_names: NDArray[np.str_]
+        argsort_result: NDArray[np.intp]
+        rankings: NDArray[np.intp]
+        under_thresh_names: NDArray[np.str_]
+
     def __init__(self): #, numScenarios: int):
 
          # Name -> PredictionResult
@@ -372,17 +386,18 @@ class ConsolidatedResults:
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
 
-    def printLatexTable(results_for_names, col_names, row_names = None,
-                        num_to_highlight = 0, cmp_func = max, dec_round = 2):
-        print_str = "\\begin{table}{"
-        num_cs = len(col_names)
-        if row_names is not None:
+    def printLatexTable(table_info: TableInfo, num_to_highlight = 0,
+                        max_is_better = True, dec_round = 2, data_func = None):
+        print_str = "\\begin{table}[h]\n\\centering\n\\caption{...}\n"
+        print_str += "\\begin{tabular}"
+        num_cs = len(table_info.col_names)
+        if table_info.row_names is not None:
             num_cs += 1
         cs = ' '.join(['c' for _ in range(num_cs)])
-        print_str += cs + "}\\\\\n\\hline\n"
-        if row_names is not None:
+        print_str += "{" + cs + "}\n\\hline\n"
+        if table_info.row_names is not None:
             print_str += "& "
-        print_str += " & ".join(col_names) + "\\\\\n"
+        print_str += " & ".join(table_info.col_names) + "\\\\\n"
         print_str += "\\hline\n"
 
         best_wraps = ["\\textbf{{{}}}", "\\underline{{{}}}"]
@@ -391,32 +406,49 @@ class ConsolidatedResults:
             msg = "Only able to highlight " + str(num_wraps) + " best items!"
             raise NotImplementedError(msg)
 
-        num_rows = len(results_for_names[0])
+        num_rows = len(table_info.column_major_data[0])
+        sort_inds = table_info.argsort_result
+        # If we're not highlighting anything, then we may as well allow for the
+        # possibility that the argsort reesult is None and skip the reversal.
+        if not max_is_better and num_to_highlight > 0:
+            sort_inds = sort_inds[::-1]
         for r in range(num_rows):
-            if row_names is not None:
-                print_str += row_names[r] + " & "
-            row_data = [c[r] for c in results_for_names]
-            row_strings = [str(np.round(d, dec_round)) for d in row_data]
-            best_inds = []
-            best_results = []
-            for n in range(min(num_to_highlight, len(results_for_names))):
-                curr_best_ind = 0
-                while curr_best_ind in best_inds:
-                    curr_best_ind += 1
-                curr_best_res = row_data[curr_best_ind]
-                for c, rd in enumerate(row_data):
-                    if rd not in best_results:
-                        curr_best_res = cmp_func(curr_best_res, rd)
-                        if curr_best_res == rd:
-                            curr_best_ind = c
-                best_inds.append(curr_best_ind)
-                best_results.append(curr_best_res)
+            if table_info.row_names is not None:
+                curr_row_name = table_info.row_names[r]
+                curr_row_name = curr_row_name.replace("_", "\\_")
+                print_str += curr_row_name + " & "
+            row_data = table_info.column_major_data[:, r]
+            # row_data = [c[r] for c in table_info.column_major_data]
+            if data_func is not None:
+                row_data = data_func(row_data)
+            
+            row_strings = [
+                "{val:.{prec}f}".format(val=d, prec=dec_round)
+                for d in row_data
+            ]
+
+            hl_lim = min(num_to_highlight, len(table_info.column_major_data))
+            for n in range(hl_lim):
+                # Below is code from before the argsort result was available.
+                # Keeping it around in case the design changes again.
+                # curr_best_ind = 0
+                # while curr_best_ind in best_inds:
+                #     curr_best_ind += 1
+                # curr_best_res = row_data[curr_best_ind]
+                # for c, rd in enumerate(row_data):
+                #     if rd not in best_results:
+                #         curr_best_res = cmp_func(curr_best_res, rd)
+                #         if curr_best_res == rd:
+                #             curr_best_ind = c
+                # best_inds.append(curr_best_ind)
+                # best_results.append(curr_best_res)
+                curr_best_ind = sort_inds[n, r]
                 row_strings[curr_best_ind] = best_wraps[n].format(
                     row_strings[curr_best_ind]
                 )
                            
             print_str += " & ".join(row_strings) + "\\\\\n"
-        print_str += "\\hline\n\\end{table}"
+        print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table}"
         print(print_str)
 
 
@@ -467,11 +499,13 @@ class ConsolidatedResults:
             print() # Newline after row.
 
 
-    def printResults(self, group_mode: DisplayGrouping, thresh_name_t: str = "",
-                     thresh_name_r: str = "", print_latex: bool = False):
-
+    def prepareDataForPrint(self, group_mode: DisplayGrouping,
+                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
+                     cols_to_exclude: typing.List[str] = None):
         mean_ax = None
         row_names = []
+        # If we split up by rows, we need a different axis for the mean calc
+        # and we need row labels.
         if group_mode != DisplayGrouping.TOTAL_ONLY:
             if group_mode == DisplayGrouping.BY_OBJECT:
                 mean_ax = 1
@@ -486,99 +520,163 @@ class ConsolidatedResults:
                 ]
             row_names.append("Avg")
 
-        table_titles = ["Translation", "\nRotation"]
-        ordered_names_lists = [
-            self._ordered_translation_result_names,
-            self._ordered_rotation_result_names
+        ordered_names = self._ordered_translation_result_names
+        results = self.translation_results
+        if pose_component == POSE_COMPONENT.ROTATION:
+            ordered_names = self._ordered_rotation_result_names
+            results = self.rotation_results
+
+        # Calculate the averages along the chosen axis.
+        ordered_score_means = [
+            np.nanmean(results[n].scores2D, axis=mean_ax)
+            for n in ordered_names
         ]
-        threshes = [thresh_name_t, thresh_name_r]
-        results_dicts = [self.translation_results, self.rotation_results]
+        # Filter out nan values, because the easiest temporary way to skip the 
+        # "duplicate" 2nd camera sequences was to leave their values as nan 
+        # rather than work with skipped indices.
+        ordered_score_means = [
+            ms[np.invert(np.isnan(ms))] for ms in ordered_score_means
+        ]
 
-        tr_zip = zip(table_titles, ordered_names_lists, threshes, results_dicts)
-        for title, ordered_names, thresh, results in tr_zip:
-            ordered_score_means = [
-                np.nanmean(results[n].scores2D, axis=mean_ax)
-                for n in ordered_names
-            ]
-            ordered_score_means = [
-                ms[np.invert(np.isnan(ms))] for ms in ordered_score_means
-            ]
+        # We will exclude columns for up to two conditions:
+        #   1. The params explicitly say to exclude them.
+        #   2. The params specify a category to threshold against.
+        exclude_inds = []
+        if cols_to_exclude is not None:
+            exclude_inds = [ordered_names.index(c) for c in cols_to_exclude]
+        under_thresh_inds = []
 
-            score_means = ordered_score_means
-            col_names = ordered_names
-            excluded_cols = []
-            annotations = None
-            if len(thresh) > 0:
-                thresh_ind = ordered_names.index(thresh)
-                thresh_means = ordered_score_means[thresh_ind]
-                selected_score_means = []
-                col_names = []
-                for means, name in zip(ordered_score_means, ordered_names):
-                    if np.any(means >= thresh_means):
-                        if group_mode != DisplayGrouping.TOTAL_ONLY:
-                            overall_avg = np.fromiter(
-                                results[name].scores.values(), dtype=float
-                            ).mean()
-                            means = np.append(means, overall_avg)
-                        selected_score_means.append(means)
-                        col_names.append(name)
-                    else:
-                        excluded_cols.append(name)
-                score_means = np.stack(selected_score_means, axis=0)
+        # Bool-style indices of which columns to include.
+        include_bools = np.full(len(ordered_names), False)
 
-                # The code below for creating annotations relies on the fact
-                # that "Perfect" results are in the first column in order to
-                # ignore them in the result sorting in a convenient way.
-                if ordered_names[0] != "Perfect":
-                    raise Exception("Code written under now-false assumption \
-                                    that \"Perfect\" is the first column!")
-                sort_inds = np.argsort(score_means[1:], axis=0)[::-1]
-                
-                # The general method for converting the argsort indices into
-                # ordinal rankings comes from the code for scipy's rankdata().
-
-                arrange_1d = np.arange(len(col_names) - 1)
-                arrange = np.broadcast_to(
-                    arrange_1d, sort_inds.shape[::-1]
-                ).transpose()
-                orderings = np.empty_like(sort_inds)
-                np.put_along_axis(orderings, sort_inds, arrange, axis=0)
-                # np.take_along_axis(arrange, sort_inds, axis= 
-
-                # Annotations will start out as "", but we'll specify "<U3" as
-                # the dtype to indicate that the lens can be up to 3 chars.
-                annotations = np.full(score_means.shape, "", dtype="<U3")
-                place_limits = orderings[col_names.index(thresh) - 1]
-                meets_thresh = orderings <= place_limits
-                annot_num_strs = orderings[meets_thresh].astype("<U2")
-                annots_to_replace = None
-                # Get major (i.e., leftmost) version number.
-                np_vers = int(np.version.short_version.split(".")[0])
-                # Numpy version < 2 doesn't have np.strings, but np.char is 
-                # deprecated in versions 2+.
-                if np_vers >= 2:
-                    annots_to_replace = np.strings.add(annot_num_strs, "|")
+        # If a threshold is specified, we remove further indices.
+        thresh_means = None
+        if len(thresh_name) > 0:
+            thresh_ind = ordered_names.index(thresh_name)
+            thresh_means = ordered_score_means[thresh_ind]
+            for c, means in enumerate(ordered_score_means):
+                if c not in exclude_inds and np.any(means >= thresh_means):
+                    include_bools[c] = True
                 else:
-                    annots_to_replace = np.char.add(annot_num_strs, "|")
-                annotations[1:][meets_thresh] = annots_to_replace
+                    under_thresh_inds.append(c)
+        else:
+            include_bools[:] = True
 
-               
-            print("{} Results:".format(title))
-            if print_latex:
-                ConsolidatedResults.printLatexTable(
-                    score_means, col_names, row_names, 2
-                )
+        include_bools[exclude_inds] = False # Exclude ones expicitly specified.
+        selected_means = []
+        if group_mode != DisplayGrouping.TOTAL_ONLY:
+            # For most group modes, we calculate an average result for all the
+            # columns we're including in our displayed output.
+            means_names_zip = zip(ordered_score_means, ordered_names)
+            for c, (means, name) in enumerate(means_names_zip):
+                if include_bools[c]:
+                    overall_avg = np.fromiter(
+                        results[name].scores.values(), dtype=float
+                    ).mean()
+                    means = np.append(means, overall_avg)
+                    selected_means.append(means)
+        else:
+            # If we're displaying totals only, then there are no additional
+            # averages to calculate and we just need to filter the columns.
+            selected_means = [
+                ordered_score_means[c] for c in range(len(ordered_score_means))
+                if include_bools[c]
+            ]
+        score_means = np.stack(selected_means, axis=0)
+
+
+        
+        sort_inds = np.argsort(score_means, axis=0)[::-1]
+                
+        # The general method for converting the argsort indices into
+        # ordinal rankings comes from the code for scipy's rankdata().
+        arrange_1d = np.arange(score_means.shape[0])
+        arrange = np.broadcast_to(
+            arrange_1d, sort_inds.shape[::-1]
+        ).transpose()
+        rankings = np.empty_like(sort_inds)
+        np.put_along_axis(rankings, sort_inds, arrange, axis=0)
+        # np.take_along_axis(arrange, sort_inds, axis= 
+
+        # For filtering column names, we can use a np array of the string names.
+        ordered_names_np = np.asarray(ordered_names)
+        col_names = ordered_names_np[include_bools]
+        under_thresh_names = ordered_names_np[under_thresh_inds]
+
+        return ConsolidatedResults.TableInfo(
+            score_means, col_names, np.asarray(row_names), sort_inds, rankings,
+            under_thresh_names
+        )
+    
+    def printResults(self, group_mode: DisplayGrouping,
+                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
+                     cols_to_exclude: typing.List[str] = None):
+        
+        ti = self.prepareDataForPrint(
+            group_mode, pose_component, thresh_name, cols_to_exclude
+        )
+
+        annotations = None
+        if len(thresh_name) > 0:
+            # Annotations will start out as "", but we'll specify "<U3" as
+            # the dtype to indicate that the lens can be up to 3 chars.
+            annotations = np.full(ti.column_major_data.shape, "", dtype="<U3")
+
+            # Find all cells that are better than the threshold column.
+            thresh_ind = np.where(ti.col_names == thresh_name)[0][0]
+            place_limits = ti.rankings[thresh_ind]
+            meets_thresh = ti.rankings <= place_limits
+
+            # Ignore any columns for "perfect" results, since they'll redundantly
+            # be the best.
+            perfect_ind, = np.where(ti.col_names == "Perfect")
+            rankings = ti.rankings
+            if len(perfect_ind) > 0:
+                meets_thresh[perfect_ind[0]] = False
+                rankings = ti.rankings - 1 # Shift all rankings to accommodate.
+
+            annot_num_strs = rankings[meets_thresh].astype("<U2")
+            whole_annots = None # Will hold the "final" annotations.
+
+            # Get major (i.e., leftmost) version number.
+            np_vers = int(np.version.short_version.split(".")[0])
+            # Numpy version < 2 doesn't have np.strings, but np.char is 
+            # deprecated in versions 2+.
+            if np_vers >= 2:
+                whole_annots = np.strings.add(annot_num_strs, "|")
             else:
-                ConsolidatedResults.printTable(
-                    score_means, col_names, row_names, annotations
-                )
-            if len(thresh) > 0:
-                print("Column to compare against:", thresh)
-                excluded_str = "[]"
-                if len(excluded_cols) > 0:
-                    excluded_str = ", ".join(excluded_cols)
-                print("Excluded columns:", excluded_str)
+                whole_annots = np.char.add(annot_num_strs, "|")
+
+            annotations[meets_thresh] = whole_annots
+
+        title = "Translation"
+        if pose_component == POSE_COMPONENT.ROTATION:
+            title = "Rotation"
+
+        print("{} Results:".format(title))
+        ConsolidatedResults.printTable(
+            ti.column_major_data, ti.col_names, ti.row_names, annotations
+        )
+        if len(ti.under_thresh_names) > 0:
+            print("Column to compare against:", thresh_name)
+            excluded_str = "[]"
+            if len(ti.under_thresh_names) > 0:
+                excluded_str = ", ".join(ti.under_thresh_names)
+            print("Excluded columns:", excluded_str)
         return
+    
+    def latexResults(self, group_mode: DisplayGrouping, 
+                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
+                     cols_to_exclude: typing.List[str] = None,
+                     num_to_highlight = 0, max_is_better = True, dec_round = 2,
+                     data_func = None):
+        ti = self.prepareDataForPrint(
+            group_mode, pose_component, thresh_name, cols_to_exclude
+        )
+        ConsolidatedResults.printLatexTable(
+            ti, num_to_highlight, max_is_better, dec_round, data_func
+        )
+
 #%%
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
@@ -1106,11 +1204,22 @@ allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk", 
 print("Max angle:", max_angle)
 print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
 
-allResultsObj.printResults(DisplayGrouping.BY_SEQUENCE, "Quadratic", "QuatVel")
-allResultsObj.printResults(DisplayGrouping.BY_OBJECT, "Quadratic", "QuatVel")
-allResultsObj.printResults(DisplayGrouping.TOTAL_ONLY)
+pose_comps = (POSE_COMPONENT.TRANSLATION, POSE_COMPONENT.ROTATION)
+thresh_cols = ("Quadratic", "QuatVel")
+disp_groupings = (
+    DisplayGrouping.BY_SEQUENCE, DisplayGrouping.BY_OBJECT,
+    DisplayGrouping.TOTAL_ONLY
+)
+
+for disp_grouping in disp_groupings:
+    for pose_comp, thresh_col in zip(pose_comps, thresh_cols):
+        if disp_grouping == DisplayGrouping.TOTAL_ONLY:
+            allResultsObj.printResults(disp_grouping, pose_comp)
+        else:
+            allResultsObj.printResults(disp_grouping, pose_comp, thresh_col)
+        print()
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
-def stat_results(vals):
+def stat_results(vals: np.ndarray):
     return [ vals.mean(), vals.min(), vals.max(), np.median(vals), np.std(vals)]
 
 vel_stat_results = stat_results(all_vel_ratios)
@@ -1314,11 +1423,6 @@ slider.on_changed(move_plane)
 
 plt.show()
 #%%
-
-
-
-allResultsObj.printResults(DisplayGrouping.BY_OBJECT, "Quadratic", "QuatVel")
-
 
 numTimestamps = len(translations_gt)
 timestamps = np.arange(numTimestamps)
