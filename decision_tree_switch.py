@@ -122,6 +122,23 @@ class MOTION_DATA(Enum):
 
     ORTHO_ACC_MAG = 41
 
+    VEL_DOT = 42 # Units match work per kg (J/kg)
+
+    SPEED_JERK_RATIO = 43
+    ACC_JERK_RATIO = 44
+    SPEED_ORTHO_ACC_RATIO = 45
+    CIRC_SPEED_CIRC_ACC_RATIO = 46
+    CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO = 47
+    CIRC_ANG_RATIO = 48
+
+    BOUNCE_ANGLE_2_SUM = 49
+
+    ACC_VEL_DEG2_ERR_RATIO = 50
+
+    PLANE_NORMAL_DOT = 51
+
+    DIST_FROM_CIRCLE = 52
+    RATIO_FROM_CIRCLE = 53
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
     VEL_DEG2 = 2
@@ -374,7 +391,13 @@ for skip_amt in range(3):
         motion_data[MOTION_DATA.CIRC_ACC] = circ_accs
         motion_data[MOTION_DATA.CIRC_ANG_ACC] = circ_ang_accs[-n_jerk_preds:]
 
+        motion_data[MOTION_DATA.CIRC_SPEED_CIRC_ACC_RATIO] = circ_speeds / circ_accs
+        motion_data[MOTION_DATA.CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO] = \
+            circ_ang_speeds_subset / circ_ang_accs[-n_jerk_preds:]
+        c_ang_ratio = cma.second_angles / cma.first_angles
+        motion_data[MOTION_DATA.CIRC_ANG_RATIO] = c_ang_ratio[-n_jerk_preds:]
         
+
         motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
 
         radii_diffs = np.diff(radii, 1, axis=0)[-n_jerk_preds:]
@@ -396,10 +419,14 @@ for skip_amt in range(3):
         motion_data[MOTION_DATA.NEXT_FA_ANG_ACC] = next_fa_ang_accs[-n_jerk_preds:]
 
         xyz_axes = prev_translations.reshape(-1,3,1) + rotation_mats[:-1]
+        n_xyz_axes = prev_translations.reshape(-1,3,1) + rotation_mats[:-1]
 
         mat_diffs = xyz_axes[1:] - xyz_axes[:-1]
+        n_mat_diffs = n_xyz_axes[1:] - n_xyz_axes[:-1]
         vec9s = mat_diffs.reshape(-1,9)[-n_jerk_preds:]
-        motion_data[MOTION_DATA.AX3_SQ_DIFF] = pm.einsumDot(vec9s, vec9s)
+        n_vec9s = mat_diffs.reshape(-1,9)[-n_jerk_preds:]
+        vec18s = np.concatenate((vec9s, n_vec9s), axis=1)
+        motion_data[MOTION_DATA.AX3_SQ_DIFF] = pm.einsumDot(vec18s, vec18s)
 
         c_centre_diff_vecs = np.diff(cma.getCentres3D(), axis=0)
         c_centre_diff_norms = np.linalg.norm(c_centre_diff_vecs, axis=-1)
@@ -409,9 +436,12 @@ for skip_amt in range(3):
         t_diff_angs = pm.anglesBetweenVecs(
             unit_vels_deg1[:-1], unit_vels_deg1[1:], False
         )
+        t_diff_dots = pm.einsumDot(deg1_speeds_full[:-1], deg1_speeds_full[1:])
         motion_data[MOTION_DATA.BOUNCE_ANGLE] = t_diff_angs[-n_jerk_preds:]
-
-        
+        bounce_ang_pair_sums = t_diff_angs[1:] + t_diff_angs[:-1]
+        motion_data[MOTION_DATA.BOUNCE_ANGLE_2_SUM] = \
+            bounce_ang_pair_sums[-n_jerk_preds:]
+        motion_data[MOTION_DATA.VEL_DOT] = t_diff_dots[-n_jerk_preds:]
 
         d_under_thresh = deg1_speeds_full < OBJ_IS_STATIC_THRESH_MM
         a_over_thresh = t_diff_angs > STRAIGHT_LINE_ANG_THRESH
@@ -451,6 +481,11 @@ for skip_amt in range(3):
         frame_nums = np.arange(n_input_frames - n_jerk_preds, n_input_frames)
         motion_data[MOTION_DATA.FRAME_NUM] = frame_nums
         motion_data[MOTION_DATA.TIMESTAMP] = frame_nums * step
+
+
+        motion_data[MOTION_DATA.DIST_FROM_CIRCLE] = is_circ_res.dists
+        motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios
+
 
         # ======================================================================
         # Calculating prediction errors starts here!
@@ -540,6 +575,12 @@ for skip_amt in range(3):
 
         ortho_dirs = pm.safelyNormalizeArray(vel_deg2_acc_cross, sin_vel_deg2_acc_angs)
 
+        plane_dots = pm.einsumDot(
+            ortho_dirs[-n_jerk_preds:], ortho_dirs[-(n_jerk_preds + 1):-1]
+        )
+        motion_data[MOTION_DATA.PLANE_NORMAL_DOT] = plane_dots
+        
+
         rot_v3d = V3D(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
         vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
             MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags),
@@ -617,6 +658,15 @@ for skip_amt in range(3):
                         curr_angs[0] = 0.0
                     motion_data[k_a] = curr_angs
                     motion_data[k_a_bidir] = pm.getAcuteAngles(curr_angs)
+
+        jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
+        acc_jerk_ratio = acc_mags / jerk_mags
+        motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds / jerk_mags
+        motion_data[MOTION_DATA.ACC_JERK_RATIO] = acc_jerk_ratio
+        motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = \
+            timescaled_speeds / acc_ortho_deg2_mags.flatten()[-n_jerk_preds:]
+
+        motion_data[MOTION_DATA.ACC_VEL_DEG2_ERR_RATIO] = acc_jerk_ratio / step
 
         all_motion_data[skip_amt][c2] = motion_data
         err_norm_lists[skip_amt][c2] = curr_err_norms_dict
