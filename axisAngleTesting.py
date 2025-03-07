@@ -103,47 +103,49 @@ print("Max diff for quat thing:", np.abs(matRes - quatRes).max())
 
 #%% Testing circle code:
 circ_angles = np.linspace(0, 2*np.pi, 100)
-circ_translations = np.stack([
+circ_radius = np.random.uniform(0.35, 3.35, 1)[0]
+circ_translations = circ_radius * np.stack([
     np.cos(circ_angles), np.sin(circ_angles), np.zeros(len(circ_angles))
 ], axis = -1)
 circ_diffs = np.diff(circ_translations, 1, axis=0)
-circle_plane_info = pm.getPlaneInfo(
-    circ_diffs[1:-1], -circ_diffs[:-2], circ_translations[:-3]
-)
-circle_axes = circle_plane_info.plane_axes
-circle_pts_2D = []
-for j in range(3):
-    circle_pts_2D.append(pm.vecsTo2D(
-        circ_translations[j:(-3 + j)], *circle_axes
-    ))
-circle_centres = pm.circleCentres2D(*circle_pts_2D)
 
-diffs_from_centres = []
-for j in range(3):
-    diffs_from_centres.append(circle_pts_2D[j] - circle_centres)
 
-sq_radii = pm.einsumDot(diffs_from_centres[0], diffs_from_centres[0])
-c_cosines_0 = pm.einsumDot(diffs_from_centres[1], diffs_from_centres[0])/sq_radii
-c_cosines_1 = pm.einsumDot(diffs_from_centres[2], diffs_from_centres[1])/sq_radii
+cma = pex.CircularMotionAnalysis(circ_translations, circ_diffs)
 
-c_angles_1 = np.arccos(c_cosines_1)
-c_sines_1 = np.sin(c_angles_1)
-
-c_trans_preds_2D = pm.rotateBySinCos2D(
-    diffs_from_centres[2], c_cosines_1, c_sines_1
+circ_2d_pred_dot_self = pm.einsumDot(
+    cma.vel_deg1_preds_2D, cma.vel_deg1_preds_2D
 )
 
-c_trans_preds = pm.vecsTo3DUsingPlaneInfo(
-    circle_centres + c_trans_preds_2D, circle_plane_info
+circ_centre_diff_dot = pm.einsumDot(
+    cma.diffs_from_centres[1], cma.diffs_from_centres[1]
 )
 
-if np.abs(sq_radii - pm.einsumDot(c_trans_preds_2D, c_trans_preds_2D)).max() > 0.0001:
+if np.abs(cma._sq_radii - circ_2d_pred_dot_self).max() > 0.0001:
     raise Exception("Prediction radii are mismatched!")
-if np.abs(sq_radii - pm.einsumDot(diffs_from_centres[1], diffs_from_centres[1])).max() > 0.0001:
+if np.abs(cma._sq_radii - circ_centre_diff_dot).max() > 0.0001:
     raise Exception("Circle centres yield mismatched radii!")
 
+circ_pred_errs_d1 = circ_translations[3:] - cma.vel_deg1_preds_3D
+circ_pred_err_dists_d1 = np.linalg.norm(circ_pred_errs_d1, axis=-1)
+print("Max circ vel pred err:", np.max(circ_pred_err_dists_d1))
 
-c_cosines_2 = pm.einsumDot(c_trans_preds_2D, diffs_from_centres[2])
+circ_noise_shape = (circ_translations[3:-1].shape[0], 1)
+circ_noise = np.random.uniform(-0.1, 0.1, circ_noise_shape)
+circ_noise_mags = np.linalg.norm(circ_noise, axis=-1, keepdims=True)
+
+circ_noise_added = circ_translations[3:-1].copy()
+circ_noise_added[:, 2:] += circ_noise
+circ_noise_mag_mean = circ_noise_mags.mean()
+circ_noise_thresh = circ_noise_mag_mean / circ_radius
+circ_dist_res = cma.isMotionStillCircular(circ_noise_added, circ_noise_thresh)
+circ_noise_over = circ_noise_mags.flatten() > circ_noise_mag_mean
+c_gatekeep_agree = (circ_noise_over == circ_dist_res.non_circ_bool_inds)
+print("circ gatekeeping works:", np.all(c_gatekeep_agree))
+dists_close = np.allclose(circ_dist_res.dists, circ_noise_mags.flatten())
+print("circ dists match:", dists_close)
+print("circ ratios match:", np.allclose(
+    circ_dist_res.dist_radius_ratios, circ_noise_mags.flatten() / circ_radius
+))
 
 #%%
 

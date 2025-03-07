@@ -23,6 +23,7 @@ import gtCommon as gtc
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 20 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH = np.deg2rad(5)
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10
+FLOAT_32_MAX = np.finfo(np.float32).max
 
 motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",
@@ -57,7 +58,9 @@ class MOTION_MODEL(Enum):
     VEL_DEG2 = 3
     ACC_DEG2 = 4
     JERK = 5
-    CIRC = 6
+    CIRC_VEL_DEG1 = 6
+    CIRC_VEL_DEG2 = 7
+    CIRC_ACC = 8
 
 
 # Minimum Jerk params? E.g., time/dist to motion start/end?
@@ -74,48 +77,50 @@ class MOTION_DATA(Enum):
     CIRC_RAD = 7
     CIRC_SPEED = 8
     CIRC_ACC = 9
-    CIRC_ERR_VEC3 = 10
-    JERK_ERR_VEC3 = 11
-    AX3_SQ_DIFF = 12
-    ROTATION_VEC3 = 13
-    CIRC_ANG_SPEED = 14
-    CIRC_ANG_ACC = 15
+    CIRC_VEL_DEG1_ERR_VEC3 = 10
+    CIRC_VEL_DEG2_ERR_VEC3 = 11
+    CIRC_ACC_ERR_VEC3 = 12
+    JERK_ERR_VEC3 = 13
+    AX3_SQ_DIFF = 14
+    ROTATION_VEC3 = 15
+    CIRC_ANG_SPEED = 16
+    CIRC_ANG_ACC = 17
 
-    DISP_MAG_DIFF = 16
-    DISP_MAG_DIFF_TIMESCALED = 17
-    DISP_MAG_RATIO = 18
-    BOUNCE_ANGLE = 19
+    DISP_MAG_DIFF = 18
+    DISP_MAG_DIFF_TIMESCALED = 19
+    DISP_MAG_RATIO = 20
+    BOUNCE_ANGLE = 21
 
-    UNIT_ROT_AX_DIFF = 20
-    UNIT_ROT_AX_DIFF_TIMESCALED = 21
+    UNIT_ROT_AX_DIFF = 22
+    UNIT_ROT_AX_DIFF_TIMESCALED = 23
 
-    RAD_DIFF = 22
-    TIMESCALED_RAD_DIFF = 23
+    RAD_DIFF = 24
+    TIMESCALED_RAD_DIFF = 25
 
     # Norms of vec6s composed of circle centres and radii-scaled normals.
-    CIRC_VEC6_DIFF = 24
+    CIRC_VEC6_DIFF = 26
 
-    TIME_SINCE_STATIONARY = 25
-    TIME_SINCE_DIR_CHANGE = 26
-    DIST_SINCE_DIR_CHANGE = 27
+    TIME_SINCE_STATIONARY = 27
+    TIME_SINCE_DIR_CHANGE = 28
+    DIST_SINCE_DIR_CHANGE = 29
 
-    TIME_CIRC_MOTION = 28
-    ANG_SUM_CIRC_MOTION = 29
-    DIST_SUM_CIRC_MOTION = 30
+    TIME_CIRC_MOTION = 30
+    ANG_SUM_CIRC_MOTION = 31
+    DIST_SUM_CIRC_MOTION = 32
 
-    CIRC_CENTRE_DIFF = 31
+    CIRC_CENTRE_DIFF = 33
 
-    ROT_ACC_VEC3 = 32
-    FRAME_NUM = 33
-    TIMESTAMP = 34
+    ROT_ACC_VEC3 = 34
+    FRAME_NUM = 35
+    TIMESTAMP = 36
 
-    PREV_FA_ANG_ACC = 35
-    NEXT_FA_ANG_ACC = 36
+    PREV_FA_ANG_ACC = 37
+    NEXT_FA_ANG_ACC = 38
 
-    SPEED_ACC_RATIO = 37
-    VEL_BCS_RATIOS = 38
+    SPEED_ACC_RATIO = 39
+    VEL_BCS_RATIOS = 40
 
-    ORTHO_ACC_MAG = 39
+    ORTHO_ACC_MAG = 41
 
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
@@ -242,7 +247,7 @@ def since_calc(bool_inds: np.ndarray, num_total_input_frames: int,
         ret_features.append(feature_since)
         
     
-    return (time_since, ret_features)
+    return (last_inds, time_since, ret_features)
 
 #%%
 
@@ -304,7 +309,9 @@ for skip_amt in range(3):
         temp_preds[MOTION_MODEL.ACC_DEG2] = \
             temp_preds[MOTION_MODEL.VEL_DEG2] + half_deg1_vel_diffs
         temp_preds[MOTION_MODEL.JERK] = t_jerk_preds
-        temp_preds[MOTION_MODEL.CIRC] = cma.c_trans_preds
+        temp_preds[MOTION_MODEL.CIRC_VEL_DEG1] = cma.vel_deg1_preds_3D
+        temp_preds[MOTION_MODEL.CIRC_VEL_DEG2] = cma.vel_deg2_preds_3D
+        temp_preds[MOTION_MODEL.CIRC_ACC] = cma.acc_preds_3D
 
         n_jerk_preds = len(t_jerk_preds)
 
@@ -411,11 +418,13 @@ for skip_amt in range(3):
      
 
 
-        time_since_static, _ = since_calc(d_under_thresh, n_input_frames, [], 0)
-        # We want the total distance traveled since there was last a big angle. 
-        time_since_big_ang, (dist_since_big_ang,) = since_calc(
-            a_over_thresh, n_input_frames, [deg1_speeds_full], 1
+        last_static_inds, time_since_static, _ = since_calc(
+            d_under_thresh, n_input_frames, [], 0
         )
+        # We want the total distance traveled since there was last a big angle. 
+        last_big_ang_inds, time_since_big_ang, (dist_since_big_ang,) = \
+            since_calc(a_over_thresh, n_input_frames, [deg1_speeds_full], 1)
+
 
 
         motion_data[MOTION_DATA.TIME_SINCE_STATIONARY] = time_since_static[-n_jerk_preds:] * step
@@ -424,12 +433,12 @@ for skip_amt in range(3):
 
         
         
-        non_circ_bool_inds = cma.isMotionStillCircular(
-            prev_translations[3:], CIRC_ERR_RADIUS_RATIO_THRESH
+        is_circ_res = cma.isMotionStillCircular(
+            prev_translations[3:], CIRC_ERR_RADIUS_RATIO_THRESH, FLOAT_32_MAX
         )
 
-        time_circ, (ang_sum_circ, dist_sum_circ) = since_calc(
-            non_circ_bool_inds, n_input_frames, 
+        _, time_circ, (ang_sum_circ, dist_sum_circ) = since_calc(
+            is_circ_res.non_circ_bool_inds, n_input_frames, 
             [cma.second_angles, radii * cma.second_angles], 3
         )
 
@@ -472,10 +481,16 @@ for skip_amt in range(3):
         motion_data[MOTION_DATA.LAST_BEST_LABEL] = curr_min_norm_labels[:-1]
 
         
-        circ_ind = MOTION_MODEL.CIRC.value - 1
+        circ_vd1_ind = MOTION_MODEL.CIRC_VEL_DEG1.value - 1
+        circ_vd2_ind = MOTION_MODEL.CIRC_VEL_DEG2.value - 1
+        circ_acc_ind = MOTION_MODEL.CIRC_ACC.value - 1
         jerk_ind = MOTION_MODEL.JERK.value - 1
-        prev_circ_errs = curr_errs_3D[MOTION_MODEL.CIRC][:-1]
-        prev_circ_err_mags = curr_err_norms[circ_ind][:-1]
+        prev_circ_errs_vd1 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG1][:-1]
+        prev_circ_errs_vd2 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG2][:-1]
+        prev_circ_errs_acc = curr_errs_3D[MOTION_MODEL.CIRC_ACC][:-1]
+        prev_circ_err_mags_vd1 = curr_err_norms[circ_vd1_ind][:-1]
+        prev_circ_err_mags_vd2 = curr_err_norms[circ_vd2_ind][:-1]
+        prev_circ_err_mags_acc = curr_err_norms[circ_acc_ind][:-1]
     
 
         step_4_pow = step**4
@@ -529,7 +544,15 @@ for skip_amt in range(3):
         vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
             MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags),
             MD.JERK_VEC3: V3D(t_jerk_amt / step**3), MD.ROTATION_VEC3: rot_v3d,
-            MD.CIRC_ERR_VEC3: V3D(prev_circ_errs, None, prev_circ_err_mags),
+            MD.CIRC_VEL_DEG1_ERR_VEC3: V3D(
+                prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
+            ),
+            MD.CIRC_VEL_DEG2_ERR_VEC3: V3D(
+                prev_circ_errs_vd2, None, prev_circ_err_mags_vd2
+            ),
+            MD.CIRC_ACC_ERR_VEC3: V3D(
+                prev_circ_errs_acc, None, prev_circ_err_mags_acc
+            ),
             MD.JERK_ERR_VEC3: V3D(prev_jerk_errs, None, prev_jerk_err_mags),
             MD.ROT_ACC_VEC3: V3D(rot_accs[-n_jerk_preds:], None, None)
         }

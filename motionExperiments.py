@@ -820,7 +820,9 @@ for i, combo in enumerate(combos):
     cma = pex.CircularMotionAnalysis(
         translations, translation_diffs, t_quadratic_preds
     )
-    c_trans_preds = cma.c_trans_preds
+    t_c_vel_deg1_preds = cma.vel_deg1_preds_3D
+    t_c_vel_deg2_preds = cma.vel_deg2_preds_3D
+    t_c_acc_preds = cma.acc_preds_3D
 
     # c_centres3D = pm.vecsTo3DUsingPlaneInfo(circle_centres, circle_plane_info)
     # if not pm.areVecArraysInSamePlanes([
@@ -840,8 +842,9 @@ for i, combo in enumerate(combos):
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
 
+    print("TODO: Try veld1 and acc ang preds here too!")
     circle_rot_quats = np.empty(cma.circle_plane_info.normals.shape[:-1] + (4,))
-    half_c_pred_angles = cma.c_pred_angles / 2.0
+    half_c_pred_angles = cma.disp_angles_vel_deg2 / 2.0
     circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
     circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
         np.sin(half_c_pred_angles), cma.circle_plane_info.normals
@@ -1164,7 +1167,9 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Jerk", t_jerk_preds)
     allResultsObj.addTranslationResult("Spline", t_spline_preds)
     allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
-    allResultsObj.addTranslationResult("Circ", c_trans_preds)
+    allResultsObj.addTranslationResult("Circ vd1", t_c_vel_deg1_preds)
+    allResultsObj.addTranslationResult("Circ vd2", t_c_vel_deg2_preds)
+    allResultsObj.addTranslationResult("Circ acc", t_c_acc_preds)
     allResultsObj.addTranslationResult("Screw", t_screw_preds)
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
@@ -1197,8 +1202,8 @@ allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "
 allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
-allResultsObj.applyBestTranslationResult(["Spline2", "Circ"], "cagg", True)
-allResultsObj.applyBestTranslationResult(["Acc", "Jerk", "Circ", "Quadratic"], "sagg", True)
+allResultsObj.applyBestTranslationResult(["Spline2", "Circ vd2"], "cagg", True)
+allResultsObj.applyBestTranslationResult(["Acc", "Jerk", "Circ vd2", "Quadratic"], "sagg", True)
 allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk", "B-Acc4", "B-Acc5"], "opt-switch", False)
 
 print("Max angle:", max_angle)
@@ -1490,7 +1495,7 @@ ax = fig.subplots()
 from matplotlib.colors import to_rgba
 
 vid_key = list(allResultsObj._allBodSeqKeys)[9]
-keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
+keys = ["Vel", "Acc", "Quadratic", "Jerk", "Circ vd2"]# ,"deg4"]#, "VelLERP", "Acc", "AccLERP"]
 key_colours = ["blue", "orange", "green", "red", "grey", "brown"]
 key_rgbas = [to_rgba(kc) for kc in key_colours]
 
