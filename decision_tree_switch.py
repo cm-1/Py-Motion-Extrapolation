@@ -19,11 +19,13 @@ import posemath as pm
 import poseextrapolation as pex
 from gtCommon import BCOT_Data_Calculator
 import gtCommon as gtc
+import minjerk as mj
 
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 20 millimeters; semi-arbitrary
-STRAIGHT_LINE_ANG_THRESH = np.deg2rad(5)
+STRAIGHT_LINE_ANG_THRESH = np.deg2rad(30)
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10
 FLOAT_32_MAX = np.finfo(np.float32).max
+MAX_MIN_JERK_OPT_ITERS = 0
 
 motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",
@@ -61,6 +63,7 @@ class MOTION_MODEL(Enum):
     CIRC_VEL_DEG1 = 6
     CIRC_VEL_DEG2 = 7
     CIRC_ACC = 8
+    MIN_JERK = 9
 
 
 # Minimum Jerk params? E.g., time/dist to motion start/end?
@@ -446,6 +449,19 @@ for skip_amt in range(3):
         d_under_thresh = deg1_speeds_full < OBJ_IS_STATIC_THRESH_MM
         a_over_thresh = t_diff_angs > STRAIGHT_LINE_ANG_THRESH
      
+        min_jerk_preds = None
+        if MAX_MIN_JERK_OPT_ITERS > 0:
+            min_jerk_preds = mj.min_jerk_lsq(
+                prev_translations, d_under_thresh.flatten(), 
+                a_over_thresh.flatten(), max_opt_iters=MAX_MIN_JERK_OPT_ITERS
+            )
+            acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
+            min_jerk_preds = min_jerk_preds[-len(acc_preds):]
+            min_jerk_na = np.isnan(min_jerk_preds)[:, 0]
+            min_jerk_preds[min_jerk_na] = acc_preds[min_jerk_na]
+        
+
+        temp_preds[MOTION_MODEL.MIN_JERK] = min_jerk_preds
 
 
         last_static_inds, time_since_static, _ = since_calc(
@@ -499,7 +515,13 @@ for skip_amt in range(3):
         for i, motion_mod in enumerate(motion_mod_keys):
             pred_subset = None
             if motion_mod != MOTION_MODEL.JERK:
-                pred_subset = temp_preds[motion_mod][-(n_jerk_preds + 1):]
+                if temp_preds[motion_mod] is None:
+                    tdim = translations.shape[1]
+                    pred_subset = np.full(
+                        (n_jerk_preds + 1, tdim), FLOAT_32_MAX
+                    )
+                else:
+                    pred_subset = temp_preds[motion_mod][-(n_jerk_preds + 1):]
             else:
                 pred_subset = np.empty((n_jerk_preds + 1, 3))
                 pred_subset[1:] = temp_preds[motion_mod]

@@ -1,6 +1,7 @@
-import numpy as np
-
+import typing
 from collections import namedtuple
+
+import numpy as np
 
 HALF_PI_NP = np.pi/2.0
 
@@ -126,7 +127,7 @@ def quatsFromAxisAngleVec3s(axisAngleVals):
 
     return quatsFromAxisAngles(normed, angles)
 
-def einsumDot(vecs0, vecs1):
+def einsumDot(vecs0: np.ndarray, vecs1: np.ndarray) -> np.ndarray:
     # Einsum is used to perform a dot product between consecutive axes.
     # Dot products occur along 'j' axis; preserves existence of the 'i' axis.
     # For understanding einsum, this ref might be handy:
@@ -902,4 +903,74 @@ def flipObtuseAxes(unflipped_axes: np.ndarray):
     ret_axes[1:][needs_flip] = -unflipped_axes[1:][needs_flip]
     ret_axes[1:][needs_no_flip] = unflipped_axes[1:][needs_no_flip]
     return ret_axes
+
+def quadraticFormulaScalar(a: float, b: float, c: float) -> typing.List[float]:
+    a2 = a + a
+    discrim = b*b - (a2 + a2)*c
+
+    if discrim > 0.0:
+        sqrt_discrim = np.sqrt(discrim)
+        ret_val_0 = (-b - sqrt_discrim)/a2
+        ret_val_1 = (-b + sqrt_discrim)/a2
+        return [ret_val_0, ret_val_1]
+    elif discrim == 0.0:
+        return [-b/a2]
+    return []
+
+def quadraticFormulaNP(a: np.ndarray, b: np.ndarray, c: np.ndarray):
+    a2 = a + a
+    discrim = b*b - (a2 + a2)*c
+
+    root_inds = discrim >= 0.0
+    roots = np.empty(a.shape + (2,))
+
+    sqrts = np.sqrt(discrim[root_inds])
+    a2_r = a2[root_inds]
+    neg_b_r = -b[root_inds] 
+    roots[root_inds, 0] = (neg_b_r - sqrts)/a2_r
+    roots[root_inds, 1] = (neg_b_r + sqrts)/a2_r
+    roots[~root_inds] = np.nan
+    return roots
+
+def since_calc(bool_inds: np.ndarray, num_total_input_frames: int, 
+               features_to_sum: typing.List[np.ndarray],
+               prev_inds_included_in_sum: int):
+    # If we have n+1 total frames and n "input" frames, then we have n-1
+    # velocities, n-2 accelerations, etc. so the number of bools for our events
+    # is n-k for some k. But to make things a bit easier to USE (even if 
+    # CREATION is harder), I think all arrays should be length n. 
+    # We'll also init using 0s, not empty, in order to propagate last indices.
+    last_inds = np.zeros(num_total_input_frames, dtype=np.int32)
+    k = num_total_input_frames - len(bool_inds)
+    # We need to shift all bool-to-int inds by k to compensate.
+    int_inds = np.where(bool_inds)[0] + k
+    # We'll assume the event happened for the first k frames, because otherwise
+    # we must make an arbitrary nonzero choice of time-since-event for them. 
+    for i in range(1, k): # last_inds[0] == 0 already.
+        last_inds[i] = i
+    last_inds[int_inds] = int_inds
+    
+    # As described better (e.g., efficiency) in other comments in my xode where
+    # I do ths,we'll use the technique proposed in a 2015-05-27 StackOverflow 
+    # answer by user "jme" (1231929/jme) to a 2015-05-27 question, "Fill zero 
+    # values of 1d numpy array with last non-zero values" 
+    # (https://stackoverflow.com/q/30488961) by user "mgab" (3406913/mgab). 
+    last_inds = np.maximum.accumulate(last_inds)
+    
+    time_since = np.arange(num_total_input_frames) - last_inds
+    
+    ret_features: typing.List[np.ndarray] = []
+    for feature in features_to_sum:
+        feature_len_diff = num_total_input_frames - len(feature)
+        # We want to take the sum since frame 0 to the "present" and subtract 
+        # the sum from frame 0 until the last event.
+        feature_sums = np.empty(num_total_input_frames)
+        feature_sums[:feature_len_diff] = 0.0
+        feature_sums[feature_len_diff:] = np.cumsum(feature)
+        start_inds = last_inds - prev_inds_included_in_sum
+        inds_to_subtract = np.maximum(start_inds, 0)
+        feature_since = feature_sums - feature_sums[inds_to_subtract]
+        ret_features.append(feature_since)
+    
+    return (last_inds, time_since, ret_features)
 
