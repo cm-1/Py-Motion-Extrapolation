@@ -25,7 +25,7 @@ OBJ_IS_STATIC_THRESH_MM = 10.0 # 20 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH = np.deg2rad(30)
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10
 FLOAT_32_MAX = np.finfo(np.float32).max
-MAX_MIN_JERK_OPT_ITERS = 0
+MAX_MIN_JERK_OPT_ITERS = 33
 
 motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",

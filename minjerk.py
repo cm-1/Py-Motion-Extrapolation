@@ -15,12 +15,8 @@ def min_jerk(t_f: typing.Union[float, NDArray],
 
 
 
-def min_jerk_sq_sum_to_opt(t_f: float, x_vals: np.ndarray, x_f: np.ndarray,
-                           forget_fac: float):
-    n = x_vals.shape[0]
-    t_vals = np.arange(n).reshape(-1, 1)
-    forget_exps = n - t_vals
-    forget_denoms = forget_fac**forget_exps
+def min_jerk_sq_sum_to_opt(t_f: float, x_f: np.ndarray, t_vals: np.ndarray, 
+                           x_vals: np.ndarray, forget_denoms: np.ndarray):
     min_jerk_vals = min_jerk(t_f, t_vals, x_vals[0], x_f)
     min_jerk_err_vecs = x_vals - min_jerk_vals
     ret_div = min_jerk_err_vecs / forget_denoms
@@ -178,6 +174,15 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
     
     x0s = np.repeat(x0_ig, x0_repeat_lens, axis=0)
 
+    
+    # TODO: The below does get repeated each call... is there a good Pythonic
+    # way to remove the redundancy? Probably put this in a class and store this
+    # as a variable upon init I guess.
+    max_t_vals_len = np.max(x0_repeat_lens) + 2
+    t_vals_super = np.arange(max_t_vals_len).reshape(-1, 1)
+    forget_denoms_rev = forget_fac**(t_vals_super[::-1])
+
+
 
     t_fs = np.empty(min_jerk_times.shape)
     x_fs = np.empty_like(x0s)
@@ -189,9 +194,13 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
         main_ind = use_min_jerk_int_inds[i]
         arm_translations = prev_translations[(main_ind - curr_time_arm):(main_ind + 1)]
 
+        num_curr_poses = curr_time_arm + 1
+        t_val_subset = t_vals_super[:num_curr_poses]
+        forget_denom_subset = forget_denoms_rev[-num_curr_poses:]
         # inputs here are [tf, xf]
         to_opt = lambda inputs: min_jerk_sq_sum_to_opt(
-            inputs[0], arm_translations, inputs[1:guess_len], forget_fac
+            inputs[0], inputs[1:guess_len], t_val_subset, arm_translations,
+            forget_denom_subset
         )
 
         if curr_time_arm == 2:
