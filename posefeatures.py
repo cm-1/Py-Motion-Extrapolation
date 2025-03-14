@@ -1,9 +1,13 @@
 from enum import Enum
 import typing
 from dataclasses import dataclass
+from math import ceil, floor
 
 import numpy as np
 from numpy.typing import NDArray
+
+from joblib import Parallel, delayed, parallel_config
+import joblib
 
 import posemath as pm
 import poseextrapolation as pex
@@ -211,11 +215,39 @@ class CalcsForCombo:
         ]
         # End of constructor.
         
-    def getAll(self):
+    def getAll(self, num_procs: int = -1, max_threads_per_proc = 2):
         results = None
         
-        # Parallelism "with" statement will come here soon.
-        results = dict(map(self.getInputFeatures, self.combos))
+        if num_procs == 1:
+            results = dict(map(self.getInputFeatures, self.combos))
+        else: 
+            cpu_count = joblib.cpu_count()
+            # If caller did not specify how many children processes...
+            if num_procs <= 0:
+                num_procs = 1
+                # Excepting the (rare!) case where our device only has 1 CPU...
+                if cpu_count > 1:
+                    # ... we want at least 2 children, and ideally we'd have
+                    # as many children as possible to fill up our cores while
+                    # still letting each child use multiple CPUs, as the joblib
+                    # docs specify that the "inner_max_num_threads" specifies
+                    # the number of threads that calls to numpy/BLAS or other
+                    # similar libraries can use within each child process.
+                    num_procs = max(2, cpu_count // max_threads_per_proc)
+            # Ensure we do not exceed our CPU count in total.
+            max_available_per = int(floor(cpu_count / num_procs))
+            per = min(max_threads_per_proc, max_available_per)
+            print("Running {} processes each with {} threads".format(
+                num_procs, per
+            ))
+            # We want the loky backend to get true parallelism without worrying
+            # about the headaches the multiparallelism backend creates on
+            # Windows, where we need __name__ == "__main__" checks and whatnot.
+            with parallel_config(backend="loky", inner_max_num_threads=per):
+                results_list = Parallel(n_jobs=num_procs)(
+                    delayed(self.getInputFeatures)(c) for c in self.combos
+                )
+                results = dict(results_list)
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
