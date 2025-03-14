@@ -18,17 +18,25 @@ y_subintervals = [ys]
 
 last_t = ts[-1][0]
 last_y = x_f
+switch_ind = 2
+switch_time = 17
 for i in range(5):
     wait_time = random.randint(1, 33)
+    if i == (switch_ind + 1):
+        wait_time = 0
     y_subintervals.append(np.repeat(last_y, wait_time).reshape(-1, 1))
     last_t += wait_time
     next_x_f = last_y + 45 * (2.0 * random.random() - 1.0)
-    jerk_time = random.randint(4, 33)
+    min_min_jerk_time = 33 if i == switch_ind else 4
+    jerk_time = random.randint(min_min_jerk_time, 35)
     jerk_ts = np.arange(jerk_time).reshape(-1, 1)
+    if i == switch_ind:
+        jerk_ts = jerk_ts[:switch_time]
     next_ys = mj.min_jerk(jerk_time, jerk_ts, last_y, next_x_f)
     y_subintervals.append(next_ys)
-    last_y = next_x_f
-    last_t += jerk_time
+    last_y = next_ys[-1] if i == switch_ind else next_x_f
+    t_inc = jerk_time if i != switch_ind else switch_time
+    last_t += t_inc
     print("wait time, jerk time, next x_f", wait_time, jerk_time, next_x_f)
 all_ts = np.arange(last_t + 1)
 
