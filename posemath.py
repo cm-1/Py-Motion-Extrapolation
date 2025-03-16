@@ -379,7 +379,7 @@ def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
         vecs1 = normalizeAll(vecs1)
 
     vals_preds_dot = einsumDot(vecs0, vecs1)
-    return np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
+    return np.arccos(np.clip(vals_preds_dot, -1, 1))
 
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
@@ -390,8 +390,8 @@ def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
 # see why. Then 2acos is either abs(angle) or abs(2pi - angle); either way, it
 # will be the correct angle between 0 and pi.
 def anglesBetweenQuats(quats0, quats1):
-    # Start by finding the angle between quats when they're interpreted as vec4s
-    half_angle = anglesBetweenVecs(quats0, quats1, False)
+    vals_preds_dot = einsumDot(quats0, quats1)
+    half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
     return half_angle + half_angle
 
 def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
