@@ -19,6 +19,7 @@ import gtCommon as gtc
 DEFAULT_OBJ_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
 DEFAULT_STRAIGHT_ANG_THRESH_DEG = 30.0
 DEFAULT_MIN_JERK_OPT_ITER_LIM = 33
+DEFAULT_SPLIT_MIN_JERK_OPT_ITER_LIM = 33
 DEFAULT_ERR_RADIUS_RATIO_THRESH = 0.10
 FLOAT_32_MAX = np.finfo(np.float32).max
 
@@ -33,6 +34,7 @@ class MOTION_MODEL(Enum):
     CIRC_VEL_DEG2 = 7
     CIRC_ACC = 8
     MIN_JERK = 9
+    MIN_JERK_SPLIT = 10
 
 
 class MOTION_DATA(Enum):
@@ -200,11 +202,13 @@ class CalcsForCombo:
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: float = FLOAT_32_MAX,
                  min_jerk_opt_iter_lim: int = DEFAULT_MIN_JERK_OPT_ITER_LIM,
+                 split_min_jerk_opt_iter_lim: int = DEFAULT_SPLIT_MIN_JERK_OPT_ITER_LIM,
                  err_radius_ratio_thresh: float = DEFAULT_ERR_RADIUS_RATIO_THRESH
                  ):
         self.obj_static_thresh_mm = obj_static_thresh_mm
         self.straight_angle_thresh_rad = np.deg2rad(straight_angle_thresh_deg)
         self.min_jerk_opt_iter_lim = min_jerk_opt_iter_lim
+        self.split_min_jerk_opt_iter_lim = split_min_jerk_opt_iter_lim
         self.err_radius_ratio_thresh = err_radius_ratio_thresh
         self.err_na_val = err_na_val
 
@@ -435,21 +439,43 @@ class CalcsForCombo:
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
         
-            min_jerk_preds = None
+            mj_preds = None
+            acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
             if self.min_jerk_opt_iter_lim > 0:
-                min_jerk_preds = mj.min_jerk_lsq(
+                mj_preds = mj.min_jerk_lsq(
                     prev_translations, d_under_thresh.flatten(), 
                     a_over_thresh.flatten(),
                     max_opt_iters=self.min_jerk_opt_iter_lim
                 )
-                acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
-                min_jerk_preds = min_jerk_preds[-len(acc_preds):]
-                min_jerk_na = np.isnan(min_jerk_preds)[:, 0]
-                min_jerk_preds[min_jerk_na] = acc_preds[min_jerk_na]
-            
+                mj_preds = mj_preds[-len(acc_preds):]
+                mj_na = np.isnan(mj_preds)[:, 0]
+                mj_preds[mj_na] = acc_preds[mj_na]
 
-            temp_preds[MOTION_MODEL.MIN_JERK] = min_jerk_preds
+            temp_preds[MOTION_MODEL.MIN_JERK] = mj_preds
 
+
+            mj_split_preds = None
+            if self.split_min_jerk_opt_iter_lim > 0:
+                _ds_under_thresh = deg1_vels < self.obj_static_thresh_mm
+                _vel_deg1_signs = np.sign(deg1_vels)
+                _as_over_thresh = _vel_deg1_signs[1:] != _vel_deg1_signs[:-1]
+
+                split_mj_pred_list = []
+                for mjsi in range(3):
+                    split_mj_preds_i = mj.min_jerk_lsq(
+                        prev_translations[:, mjsi:(mjsi + 1)], 
+                        _ds_under_thresh[:, mjsi], _as_over_thresh[:, mjsi],
+                        max_opt_iters = self.split_min_jerk_opt_iter_lim
+                    )
+                    split_mj_pred_list.append(split_mj_preds_i)
+                mj_split_preds = np.concatenate(split_mj_pred_list, axis=-1)
+                mj_split_preds = mj_split_preds[-len(acc_preds):]
+
+                for mjsi in range(3):
+                    mj_split_na = np.isnan(mj_split_preds[:, mjsi])
+                    mj_split_preds[mj_split_na, mjsi] = acc_preds[mj_split_na, mjsi]
+
+            temp_preds[MOTION_MODEL.MIN_JERK_SPLIT] = mj_split_preds
 
             _, time_since_static, _ = pm.since_calc(
                 d_under_thresh, n_input_frames, [], 0

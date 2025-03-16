@@ -27,6 +27,7 @@ OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH_DEG = 30.0
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10
 MAX_MIN_JERK_OPT_ITERS = 33
+MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
 ERR_NA_VAL = np.finfo(np.float32).max
 
 
@@ -73,6 +74,7 @@ cfc = CalcsForCombo(
     nt_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
+    split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
     )
 results = cfc.getAll()
