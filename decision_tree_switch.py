@@ -3,8 +3,6 @@ import typing
 import copy
 import time
 
-import concurrent.futures
-
 import numpy as np
 from numpy.typing import NDArray
 
@@ -35,6 +33,7 @@ motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",
     "static_suspension", "static_trans"
 ]
+# motion_kinds_plus = motion_kinds + ["all"]
 
 combos = []
 for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
@@ -54,58 +53,20 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
 
 #%%
 
-motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
-
-# MOTION_DATA_DICT_TYPE = typing.List[typing.Dict[
-#     typing.Tuple[int, int], typing.Dict[MOTION_DATA_KEY_TYPE, np.ndarray]
-# ]]
-# def get_per_combo_datastruct() -> MOTION_DATA_DICT_TYPE:
-#     return [{ck[:2]: None for ck in combos} for _ in range(3)]
-
-# err3D_lists = get_per_combo_datastruct()
-
-all_motion_data = [dict() for _ in range(3)]
-min_norm_labels = [dict() for _ in range(3)]
-err_norm_lists = [dict() for _ in range(3)]
-
 # NamedTuple combos.
-nt_combos = [gtc.Combo(*c[:2]) for c in combos]
+nametup_combos = [gtc.Combo(*c[:2]) for c in combos]
 cfc = CalcsForCombo(
-    nt_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
+    nametup_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
-    )
+)
 results = cfc.getAll()
 all_motion_data = cfc.all_motion_data
 min_norm_labels = cfc.min_norm_labels
 err_norm_lists = cfc.err_norm_lists
 
-
-
-# Make sure all keys present.
-missing_keys: typing.List[MOTION_DATA] = []
-for motion_data_kind in MOTION_DATA:
-    md_kind_present = False
-    for k in all_motion_data[0][combos[0][:2]].keys():
-        if isinstance(k, MOTION_DATA):
-            md_kind_present = md_kind_present or k == motion_data_kind
-        elif isinstance(k, SpecifiedMotionData):
-            md_kind_present = md_kind_present or k.base_cat == motion_data_kind
-        else:
-            raise ValueError("Bad key type! {}".format(k))
-        
-        if md_kind_present:
-            break
-
-    if not md_kind_present:
-        missing_keys.append(motion_data_kind)
-
-if len(missing_keys) > 0:
-    raise Exception("Keys {} missing!".format([mk.name for mk in missing_keys]))
-
-motion_kinds_plus = motion_kinds + ["all"]
 #%%
 
 def concatForComboSubset(data, combo_subset, front_trim: int = 0):
@@ -163,6 +124,7 @@ concat_test_labels = np.concatenate(test_labels)
 motion_data_keys, concat_train_data = get2DArrayFromDataStruct(train_data)
 concat_test_data = get2DArrayFromDataStruct(test_data, motion_data_keys)[1]
 
+motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
 concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, -1)[1]
 concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, -1)[1]
 

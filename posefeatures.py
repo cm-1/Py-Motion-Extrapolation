@@ -189,6 +189,27 @@ class Vec3Data:
 
 MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
 
+def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
+        missing_keys: typing.List[MOTION_DATA] = []
+        for motion_data_kind in MOTION_DATA:
+            md_kind_present = False
+            for k in keys:
+                if isinstance(k, MOTION_DATA):
+                    md_kind_present = md_kind_present or k == motion_data_kind
+                elif isinstance(k, SpecifiedMotionData):
+                    base_cat_eq = k.base_cat == motion_data_kind
+                    md_kind_present = md_kind_present or base_cat_eq
+                else:
+                    raise ValueError("Bad key type! {}".format(k))
+                
+                if md_kind_present:
+                    break
+
+            if not md_kind_present:
+                missing_keys.append(motion_data_kind)
+
+        return missing_keys
+
 @dataclass
 class FeaturesAndResultsForCombo:
     motion_data: typing.List[typing.Dict[MOTION_DATA_KEY_TYPE, NDArray]]
@@ -221,9 +242,14 @@ class CalcsForCombo:
         
     def getAll(self, num_procs: int = -1, max_threads_per_proc = 2):
         results = None
-        
+
+        # For the 1st combo, check to make sure all keys are there.
+        # This way we can stop a lot sooner if we are missing a key.
+        result_for_1st_combo = self.getInputFeatures(self.combos[0], True)[1]
+        remaining_combos = self.combos[1:]
+
         if num_procs == 1:
-            results = dict(map(self.getInputFeatures, self.combos))
+            results = dict(map(self.getInputFeatures, remaining_combos))
         else: 
             cpu_count = joblib.cpu_count()
             # If caller did not specify how many children processes...
@@ -249,9 +275,11 @@ class CalcsForCombo:
             # Windows, where we need __name__ == "__main__" checks and whatnot.
             with parallel_config(backend="loky", inner_max_num_threads=per):
                 results_list = Parallel(n_jobs=num_procs)(
-                    delayed(self.getInputFeatures)(c) for c in self.combos
+                    delayed(self.getInputFeatures)(c) for c in remaining_combos
                 )
                 results = dict(results_list)
+        results[self.combos[0]] = result_for_1st_combo
+
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
@@ -263,7 +291,8 @@ class CalcsForCombo:
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
 
 
-    def getInputFeatures(self, combo: gtc.Combo):
+    def getInputFeatures(self, combo: gtc.Combo,
+                         check_key_completeness: bool = False):
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
         # shorter aliases might be helpful.
         MD = MOTION_DATA
