@@ -731,6 +731,15 @@ class CalcsForCombo:
 
             motion_data[MOTION_DATA.ACC_VEL_DEG2_ERR_RATIO] = acc_jerk_ratio / step
 
+            keys_to_check_for_completeness = motion_data.keys()
+            if check_key_completeness:
+                missing_keys = getMissingMotionDataKeys(
+                    keys_to_check_for_completeness
+                )
+                if len(missing_keys) > 0:
+                    raise Exception("Keys {} missing!".format([
+                        mk.name for mk in missing_keys
+                    ]))
             motion_datas.append(motion_data)
             min_err_labels.append(curr_min_norm_labels[1:])
             all_err_norms.append(curr_err_norms_dict)
