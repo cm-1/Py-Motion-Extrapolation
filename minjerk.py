@@ -89,7 +89,8 @@ def min_jerk_init_guess(x0: np.ndarray, x1: np.ndarray, x2: np.ndarray):
 
 def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
                  is_ang_big_bools: np.ndarray, forget_fac: float = 0.91,
-                 guess_xtol = 0.001, max_opt_iters: int = 33):
+                 guess_xtol = 0.001, max_opt_iters: int = 33, 
+                 max_pos_mag: float = 10000.0, max_jerk_duration: int = 3600):
     
     n_input_frames = prev_translations.shape[0]
 
@@ -181,8 +182,15 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
     max_t_vals_len = np.max(x0_repeat_lens) + 2
     t_vals_super = np.arange(max_t_vals_len).reshape(-1, 1)
     forget_denoms_rev = forget_fac**(t_vals_super[::-1])
-
-
+    
+    # Bounds on the values of [t_f, x_f] for the optimization.
+    # We'll start by filling out the bounds for x_f.
+    bounds_0 = np.full(dim + 1, -max_pos_mag)
+    bounds_1 = np.full(dim + 1, max_pos_mag)
+    # The bounds for t_f are at index[0].
+    bounds_0[0] = 2 # All min jerk calculations require this t_f lower bound.
+    bounds_1[0] = max_jerk_duration
+    bounds = (bounds_0, bounds_1)
 
     t_fs = np.empty(min_jerk_times.shape)
     x_fs = np.empty_like(x0s)
@@ -207,9 +215,14 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
             guess = init_guesses[ig_ind]
             ig_ind += 1
 
+        # Obviously, t_f must be at least the current time.
+        bounds[0][0] = curr_time_arm
+        if guess[0] < curr_time_arm:
+            guess[0] = curr_time_arm # Guess must be within bounds!
         # This part is the real bottleneck.
         ls_res = least_squares(
-            to_opt, guess, max_nfev=max_opt_iters, xtol=guess_xtol
+            to_opt, guess, max_nfev=max_opt_iters, xtol=guess_xtol,
+            bounds=bounds
         )
         guess = ls_res.x
         t_fs[i] = guess[0]
