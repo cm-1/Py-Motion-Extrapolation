@@ -6,7 +6,7 @@ from math import ceil, floor
 import numpy as np
 from numpy.typing import NDArray
 
-from joblib import Parallel, delayed, parallel_config
+from joblib import Parallel, delayed
 import joblib
 
 import posemath as pm
@@ -238,6 +238,21 @@ class CalcsForCombo:
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
         ]
+
+        # I had to accomodate a venv where I have Python 3.7 for running
+        # tensorflow-gpu on Windows. Unfortunately, newer joblib versions 
+        # require Python 3.8. So that meant downgrading joblib to an older 
+        # version (1.2), but said version did not have `parallel_config`, which
+        # I think is probably a good idea to use when possible. So I wrote some 
+        # code to use it if the joblib version is new enough, but still allow 
+        # the old joblib for that one venv.
+        joblib_vers = tuple((int(v) for v in joblib.__version__.split(".")))
+        joblib_1_3_supported = False
+        joblib_between_1_3__2_0 = joblib_vers[0] == 1 and joblib_vers[1] >= 3
+        # Test if joblib version >= 1.3
+        if joblib_vers[0] > 1 or joblib_between_1_3__2_0:
+            joblib_1_3_supported = True
+        self._joblib_1_3_supported = joblib_1_3_supported
         # End of constructor.
         
     def getAll(self, num_procs: int = -1, max_threads_per_proc = 2):
@@ -267,13 +282,21 @@ class CalcsForCombo:
             # Ensure we do not exceed our CPU count in total.
             max_available_per = int(floor(cpu_count / num_procs))
             per = min(max_threads_per_proc, max_available_per)
-            print("Running {} processes each with {} threads".format(
-                num_procs, per
-            ))
             # We want the loky backend to get true parallelism without worrying
             # about the headaches the multiparallelism backend creates on
             # Windows, where we need __name__ == "__main__" checks and whatnot.
-            with parallel_config(backend="loky", inner_max_num_threads=per):
+            if self._joblib_1_3_supported:
+                print("Running {} processes each with {} threads.".format(
+                    num_procs, per
+                ))
+                with joblib.parallel_config(backend="loky", inner_max_num_threads=per):
+                    results_list = Parallel(n_jobs=num_procs)(
+                        delayed(self.getInputFeatures)(c)
+                        for c in remaining_combos
+                    )
+                    results = dict(results_list)
+            else:
+                print("Running {} processes.".format(num_procs))
                 results_list = Parallel(n_jobs=num_procs)(
                     delayed(self.getInputFeatures)(c) for c in remaining_combos
                 )
