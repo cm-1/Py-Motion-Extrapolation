@@ -2,6 +2,7 @@ import numpy as np
 
 import pathlib
 import json
+import typing
 
 import posemath as pm
 
@@ -53,8 +54,9 @@ def shortSeqNameBCOT(longName):
     return retVal[:-1]
 
 
-
-
+class Combo(typing.NamedTuple):
+    body_ind: int
+    seq_ind: int
 
 class BCOT_Data_Calculator:
 

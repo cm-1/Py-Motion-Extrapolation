@@ -1,5 +1,5 @@
 #%%
-import random
+import typing
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,32 +7,15 @@ import matplotlib.pyplot as plt
 import posemath as pm
 import minjerk as mj
 
-x_0 = np.array([1.35])
-x_f = np.array([7.5])
+x_0 = np.array([1.35, 3.35])
+x_f = np.array([7.5, 8.5])
+dim = len(x_0)
 
 t_f = 37.5
 
 ts = np.arange(t_f).reshape(-1, 1)
 ys = mj.min_jerk(t_f, ts, x_0, x_f)
-y_subintervals = [ys]
 
-last_t = ts[-1][0]
-last_y = x_f
-for i in range(5):
-    wait_time = random.randint(1, 33)
-    y_subintervals.append(np.repeat(last_y, wait_time).reshape(-1, 1))
-    last_t += wait_time
-    next_x_f = last_y + 45 * (2.0 * random.random() - 1.0)
-    jerk_time = random.randint(4, 33)
-    jerk_ts = np.arange(jerk_time).reshape(-1, 1)
-    next_ys = mj.min_jerk(jerk_time, jerk_ts, last_y, next_x_f)
-    y_subintervals.append(next_ys)
-    last_y = next_x_f
-    last_t += jerk_time
-    print("wait time, jerk time, next x_f", wait_time, jerk_time, next_x_f)
-all_ts = np.arange(last_t + 1)
-
-y_concat = np.concatenate(y_subintervals, axis=0)
 
 
 #%%
@@ -59,25 +42,86 @@ print("max first preds diff:", np.max(np.abs(pred_diff)))
 # plt.plot(ts[-len(non_nan_first_preds):], non_nan_first_preds)
 # plt.show()
 #%%
-prev_translations = y_concat[:-1]
-translation_diffs = np.diff(y_concat, 1, axis=0)
 
-deg1_vels = translation_diffs[:-1]
+def scenario(max_noise = 0.0, main_seed = None, noise_seed = None):
+    rng = np.random.default_rng(main_seed)
+    noise_rng = np.random.default_rng(noise_seed)
+    
+    y_subintervals = [ys]
 
-deg1_speeds_full = np.linalg.norm(deg1_vels, axis=-1, keepdims=True)
-unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
+    last_t = ts[-1][0]
+    last_y = x_f
+    switch_ind = 2
+    switch_time = 17
+    for i in range(5):
+        wait_time = rng.integers(1, 33, 1)[0]
+        if i == (switch_ind + 1):
+            wait_time = 0
+        y_subintervals.append(np.repeat([last_y], wait_time, axis=0))
+        last_t += wait_time
+        next_x_f = last_y + 45 * (2.0 * rng.random(dim) - 1.0)
+        min_min_jerk_time = 33 if i == switch_ind else 4
+        jerk_time = rng.integers(min_min_jerk_time, 35, 1)[0]
+        jerk_ts = np.arange(jerk_time).reshape(-1, 1)
+        if i == switch_ind:
+            jerk_ts = jerk_ts[:switch_time]
+        next_ys = mj.min_jerk(jerk_time, jerk_ts, last_y, next_x_f)
+        rand_vals = noise_rng.random(next_ys.shape)
+        noise = 1.0 - (rand_vals + rand_vals)
+        next_ys += max_noise * noise
+        y_subintervals.append(next_ys)
+        last_y = next_ys[-1] if i == switch_ind else next_x_f
+        t_inc = jerk_time if i != switch_ind else switch_time
+        last_t += t_inc
+        print("wait time, jerk time, next x_f", wait_time, jerk_time, next_x_f)
+    all_ts = np.arange(last_t + 1)
 
-t_diff_angs = pm.anglesBetweenVecs(
-    unit_vels_deg1[:-1], unit_vels_deg1[1:], False
-)
-d_under_thresh = deg1_speeds_full < 0.00001
-a_over_thresh = t_diff_angs > np.pi / 2
+    y_concat = np.concatenate(y_subintervals, axis=0)
+    
+    # y_concat = y_concat[:, :1]
+    prev_translations = y_concat[:-1]
+    translation_diffs = np.diff(y_concat, 1, axis=0)
+
+    deg1_vels = translation_diffs[:-1]
+
+    deg1_speeds_full = np.linalg.norm(deg1_vels, axis=-1, keepdims=True)
+    unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
+
+    t_diff_angs = pm.anglesBetweenVecs(
+        unit_vels_deg1[:-1], unit_vels_deg1[1:], False
+    )
+    d_under_thresh = deg1_speeds_full < 0.00001
+    a_over_thresh = t_diff_angs > np.pi / 2
 
 
-preds = mj.min_jerk_lsq(
-    prev_translations, d_under_thresh.flatten(), a_over_thresh.flatten()
-)#, forget_fac: float = 0.91):
+    preds = mj.min_jerk_lsq(
+        prev_translations, d_under_thresh.flatten(), a_over_thresh.flatten()
+    )#, forget_fac: float = 0.91):
+
+    return all_ts, y_concat, preds
+
+seed_generator = np.random.default_rng()
+
 #%%
-plt.plot(all_ts, y_concat)
-plt.plot(all_ts[-len(preds):], preds)
+seed = seed_generator.integers(0, 10000, 1)[0]
+noise_seed = seed_generator.integers(0, 10000, 1)[0]
+
+all_ts, y_concat, preds = scenario(0.000001)#,                  379, 33)
+
+crop_plot = True
+
+draw_ind = 0
+
+y_draw_ind_vals = y_concat[:, draw_ind]
+plt.plot(all_ts, y_draw_ind_vals, label = "ground truth")
+plt.plot(all_ts[-len(preds):], preds[:, draw_ind], label="prediction")
+if crop_plot:
+    plt.ylim(y_draw_ind_vals.min() - 1, y_draw_ind_vals.max() + 100)
+plt.legend()
+plt.show()
+
+# %%
+plt.plot(*(y_concat.T), label="gt")
+plt.plot(*(preds.T), label="predictions")
+plt.legend()
 plt.show()
