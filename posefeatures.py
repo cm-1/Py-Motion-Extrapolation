@@ -497,7 +497,8 @@ class CalcsForCombo:
                 mj_preds = mj.min_jerk_lsq(
                     prev_translations, d_under_thresh.flatten(), 
                     a_over_thresh.flatten(),
-                    max_opt_iters=self.min_jerk_opt_iter_lim
+                    max_opt_iters=self.min_jerk_opt_iter_lim,
+                    vels = deg1_vels, accs = deg2_accs, jerks = t_jerk_amt
                 )
                 mj_preds = mj_preds[-len(acc_preds):]
                 mj_na = np.isnan(mj_preds)[:, 0]

@@ -15,8 +15,8 @@ def min_jerk(t_f: typing.Union[float, NDArray],
 
 
 
-def min_jerk_sq_sum_to_opt(t_f: float, x_f: np.ndarray, t_vals: np.ndarray, 
-                           x_vals: np.ndarray, forget_denoms: np.ndarray):
+def min_jerk_sq_sum_to_opt(t_f: float, x_f: NDArray, t_vals: NDArray, 
+                           x_vals: NDArray, forget_denoms: NDArray):
     min_jerk_vals = min_jerk(t_f, t_vals, x_vals[0], x_f)
     min_jerk_err_vecs = x_vals - min_jerk_vals
     ret_div = min_jerk_err_vecs / forget_denoms
@@ -24,7 +24,7 @@ def min_jerk_sq_sum_to_opt(t_f: float, x_f: np.ndarray, t_vals: np.ndarray,
     return ret_div.flatten()
 
 
-def min_jerk_init_guess(x0: np.ndarray, x1: np.ndarray, x2: np.ndarray):
+def min_jerk_init_guess(x0: NDArray, x1: NDArray, x2: NDArray):
     ndim = x0.ndim
     if ndim == 1:
         x0 = x0.reshape(1,-1)
@@ -87,12 +87,15 @@ def min_jerk_init_guess(x0: np.ndarray, x1: np.ndarray, x2: np.ndarray):
         return guesses[0]
     return guesses
 
-def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
-                 is_ang_big_bools: np.ndarray, forget_fac: float = 0.91,
+def min_jerk_lsq(prev_translations: NDArray, is_static_bools: NDArray,
+                 is_ang_big_bools: NDArray, forget_fac: float = 0.91,
                  guess_xtol = 0.001, max_opt_iters: int = 33, 
-                 max_pos_mag: float = 10000.0, max_jerk_duration: int = 3600):
+                 max_pos_mag: float = 10000.0, max_jerk_duration: int = 3600,
+                 vels: NDArray = None, accs: NDArray = None,
+                 jerks: NDArray = None):
     
     n_input_frames = prev_translations.shape[0]
+    all_ts = np.arange(n_input_frames)
 
     assert is_static_bools.shape[0] == (n_input_frames - 1), \
     "The number of \"is static\" bools must be 1 less than previous translations!"
@@ -106,9 +109,47 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
     # Finally, there's no arm motion if the object is currently static.
     non_arm_motion_bools[1:] |= is_static_bools
 
+    pops: NDArray = None
+    if vels is None:
+        vels = np.diff(prev_translations, axis=0)
+    if accs is None:
+        accs = np.diff(vels, axis=0)
+    if jerks is None:
+        pops = np.diff(accs, n=4, axis=0)
+    else:
+        pops = np.diff(jerks, n=3, axis=0)
+
+    
+
+    pop_mags = np.linalg.norm(pops, axis=-1)
+    lc = -len(pops)
+    if lc < 0:
+        acc_mags = np.linalg.norm(accs[lc:], axis=-1)
+        non_arm_motion_bools[lc:] |= (
+            (pop_mags > 0.1) & (pop_mags > (1.25 * acc_mags))
+        )
+
     _, time_arm, _ = pm.since_calc(
         non_arm_motion_bools, n_input_frames, [], 0
     )
+
+    # va_dots = pm.einsumDot(vels[1:], accs)
+    # va_dot_signs = np.signbit(va_dots)
+    # va_dot_sign_change = (va_dot_signs[1:] != va_dot_signs[:-1])
+    # va_ind_diff = len(time_arm) - len(va_dot_sign_change)
+    # sign_change_count = 0
+    # ta_sub = 0
+    # for i, ta in enumerate(time_arm):
+    #     if ta == 1:
+    #         ta_sub = 0
+    #         sign_change_count = 0
+    #     elif ta >= 2:
+    #         if va_dot_sign_change[i - va_ind_diff]:
+    #             sign_change_count += 1
+    #         if sign_change_count > 1:
+    #             ta_sub = ta
+    #             sign_change_count = 0
+    #         time_arm[i] -= ta_sub
 
     # The below is a small example that shows that trying to accomplish this
     # index "combination" is a lot harder with int inds than with bool inds;
@@ -180,7 +221,7 @@ def min_jerk_lsq(prev_translations: np.ndarray, is_static_bools: np.ndarray,
     # way to remove the redundancy? Probably put this in a class and store this
     # as a variable upon init I guess.
     max_t_vals_len = np.max(x0_repeat_lens) + 2
-    t_vals_super = np.arange(max_t_vals_len).reshape(-1, 1)
+    t_vals_super = all_ts[:max_t_vals_len].reshape(-1, 1)
     forget_denoms_rev = forget_fac**(t_vals_super[::-1])
     
     # Bounds on the values of [t_f, x_f] for the optimization.
