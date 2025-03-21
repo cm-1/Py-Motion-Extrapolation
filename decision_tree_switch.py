@@ -321,7 +321,47 @@ export_graphviz(
 #%%
 import tensorflow as tf
 import keras
-#%%
+import posemath as pm
+from sklearn.preprocessing import StandardScaler
+
+colin_thresh = 0.7
+nonco_cols, co_mat = pm.non_collinear_features(concat_train_data.T, colin_thresh)
+
+vel_bcs_ind = motion_data_keys.index(MOTION_DATA.VEL_BCS_RATIOS)
+
+last_best_ind = motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
+timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+
+max_bcs_co = max(np.max(co_mat[vel_bcs_ind]), np.max(co_mat[:, vel_bcs_ind]))
+
+if not nonco_cols[vel_bcs_ind] or max_bcs_co > colin_thresh:
+    raise Exception("Need to decide how to handle this case!")
+
+nonco_cols[vel_bcs_ind] = False # It's the variable we want to predict.
+nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
+nonco_cols[timestamp_ind] = False
+
+nonco_train_data = concat_train_data[nonco_cols]
+
+
+# %%
+bcs_model = keras.Sequential([
+    keras.layers.Input((nonco_train_data.shape[0],)),
+    keras.layers.Dense(128, activation='relu'),
+    keras.layers.Dropout(0.2),
+    keras.layers.Dense(128, activation='relu'),
+    keras.layers.Dropout(0.2),
+    keras.layers.Dense(128, activation='relu'),
+    keras.layers.Dense(1)
+])
+
+bcs_model.summary()
+bcs_model.compile(loss='mse', optimizer='adam')
+# %%
+bcs_scalar = StandardScaler()
+z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data.T)
+bcs_model.fit(z_nonco_train_data, concat_train_data[vel_bcs_ind], epochs=32, shuffle=True)
+
 def customPoseLoss(y_true, y_pred):
     probs = tf.nn.softmax(y_pred, axis=1)
     return tf.reduce_sum(y_true * probs, axis=1)
