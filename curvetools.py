@@ -15,6 +15,8 @@ def convolveFilter(filter, data: np.ndarray):
     Returns:
         np.ndarray: The convolution result.
     """
+    # Note: Function was originally generated with ChatGPT but was verified
+    # (and heavily modified/documented) manually.
     # TODO: Uncomment this once slight efficiency difference is known to no
     # longer be worth it!
     # assert len(data) >= len(filter) and len(filter) > 0, \
