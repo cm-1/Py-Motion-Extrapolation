@@ -459,7 +459,34 @@ z_nonco_test_data = bcs_scalar.transform(nonco_test_data.T)
 bcs_pred = bcs_model.predict(z_nonco_test_data)
 bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
 #%%
-print(np.mean(bcs_test_errs[s_ind_dict['skip2']]))
+bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
+print(bcs_test_scores)
+#%%
+nonco_featnames = [
+    k.name for i, k in enumerate(motion_data_keys) if nonco_cols[i]
+]
+
+def errsForColScramble(model, data, col_ind, y_true):
+    data_scramble = data.copy()
+    data_scramble[:, col_ind] = np.random.default_rng().choice(
+        data_scramble[:, col_ind], len(data_scramble), False
+    )
+    preds = model.predict(data_scramble)
+    errs = model.loss(y_true, preds)
+    return errs
+
+keys_s_ind = s_ind_dict.keys()
+scramble_scores = np.empty((z_nonco_test_data.shape[1], len(s_ind_dict.keys())))
+for col_ind in range(z_nonco_test_data.shape[1]):
+    errs = errsForColScramble(bcs_model, z_nonco_test_data, col_ind, bcs_test)
+    for i, k in enumerate(keys_s_ind):
+        scramble_scores[col_ind, i] = np.mean(errs[s_ind_dict[k]])
+#%%
+scramble_rank = np.argsort(scramble_scores, axis=0)[::-1]
+print("Most important feature inds:", scramble_rank[:10], sep='\n')
+    
+
+#%%
 def customPoseLoss(y_true, y_pred):
     probs = tf.nn.softmax(y_pred, axis=1)
     return tf.reduce_sum(y_true * probs, axis=1)
