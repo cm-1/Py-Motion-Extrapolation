@@ -11,7 +11,7 @@ from sklearn import tree as sk_tree
 from sklearn.tree._tree import TREE_LEAF
 from sklearn.model_selection import train_test_split
 
-from posefeatures import MOTION_DATA, MOTION_MODEL, SpecifiedMotionData
+from posefeatures import MOTION_DATA, MOTION_MODEL
 from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
 
 
@@ -324,6 +324,91 @@ import keras
 import posemath as pm
 from sklearn.preprocessing import StandardScaler
 
+ComboList = typing.List[gtc.Combo]
+def localPosForCombo(combos: ComboList, train_combos: ComboList, test_combos: ComboList):
+    all_data = [dict() for _ in range(3)]
+
+    for c in combos:
+        calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
+        all_translations = calc_obj.getTranslationsGTNP(False)
+        for skip in range(3):
+            step = skip + 1
+            translations = all_translations[::step]
+            vels = np.diff(translations, axis=0)
+            accs = np.diff(vels[:-1], axis=0)
+            jerks = np.diff(accs, axis=0)
+
+            # We only calculate what we need, so we clip the arrays' fronts off.
+            speeds = np.linalg.norm(vels[2:-1], axis=-1)
+            unit_vels = pm.safelyNormalizeArray(vels[2:-1], speeds[:, np.newaxis])
+            acc_p = pm.einsumDot(accs[1:], unit_vels)
+            acc_p_vecs = pm.scalarsVecsMul(acc_p, unit_vels)
+            acc_o_vecs = accs[1:] - acc_p_vecs
+            acc_o = np.linalg.norm(acc_o_vecs, axis=-1)
+
+            unit_acc_o = pm.safelyNormalizeArray(acc_o_vecs, acc_o[:, np.newaxis])
+
+            plane_orthos = np.cross(unit_vels, unit_acc_o)
+            mats = np.stack([unit_vels, unit_acc_o, plane_orthos], axis=1)
+
+            local_jerks = pm.einsumMatVecMul(mats, jerks)
+
+            local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+
+            c_res = {
+                'v': speeds, 'a_p': acc_p, 'a_o': acc_o, 
+                'j_v': local_jerks[:, 0], 'j_a': local_jerks[:, 1],
+                'j_cross': local_jerks[:, 2], 'd_v': local_diffs[:, 0],
+                'd_a': local_diffs[:, 1], 'd_cross': local_diffs[:, 2]
+            }
+
+            all_data[skip][c] = c_res
+    
+    key_ord = [
+        'v', 'a_p', 'a_o', 'j_v', 'j_a', 'j_cross', 'd_v', 'd_a', 'd_cross'
+    ]
+    _, train_res = get2DArrayFromDataStruct(
+        concatForComboSubset(all_data, train_combos), key_ord, -1
+    )
+    _, test_res = get2DArrayFromDataStruct(
+        concatForComboSubset(all_data, test_combos), key_ord, -1
+    )
+    return train_res, test_res
+
+def poseLossJAV(y_true, y_pred):
+    '''
+    Assumes y_true contains the following columns, in order:
+     - speed
+     - accel parallel to velocity
+     - accel ortho to velocity
+     - jerk parallel to speed, ortho to speed but in acc plane, ortho to plane
+     - correct pose displacement in the same "coordinate frame" as the jerk.
+
+    In other words, we are working in an orthonormal coordinate frame where one 
+    axis is aligned with velocity, another with acceleration, and then a third
+    orthogonal to both.
+    
+    Then, we assume y_pred contains the multipliers for velocity, acceleration,
+    and jerk. The predicted "local" displacement is thus:
+    [[speed, acc_p, jerk_v],       [vel_multiplier,
+     [0,     acc_o, jerk_a],     x  acc_multiplier,
+     [0,     0,     jerk_cross]]    jerk_multiplier]
+
+    Then after this matrix multiplication, we find the distance between it and
+    the correct pose displacement, both vec3s.
+    '''
+    pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 2]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 2]
+
+    pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
+
+    true_disp = y_true[:, 6:]
+
+    err_vec3 = true_disp - pred_disp
+    return tf.norm(err_vec3, axis=-1)
+
 colin_thresh = 0.7
 nonco_cols, co_mat = pm.non_collinear_features(concat_train_data.T, colin_thresh)
 
@@ -342,7 +427,7 @@ nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False
 
 nonco_train_data = concat_train_data[nonco_cols]
-
+nonco_test_data = concat_test_data[nonco_cols]
 
 # %%
 bcs_model = keras.Sequential([
@@ -352,16 +437,29 @@ bcs_model = keras.Sequential([
     keras.layers.Dense(128, activation='relu'),
     keras.layers.Dropout(0.2),
     keras.layers.Dense(128, activation='relu'),
-    keras.layers.Dense(1)
+    keras.layers.Dense(3)
 ])
 
 bcs_model.summary()
-bcs_model.compile(loss='mse', optimizer='adam')
+bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
+bcs_train, bcs_test = localPosForCombo(
+    nametup_combos, train_combos, test_combos
+)
+
+bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
+bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
+#%%
 bcs_scalar = StandardScaler()
 z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data.T)
-bcs_model.fit(z_nonco_train_data, concat_train_data[vel_bcs_ind], epochs=32, shuffle=True)
+bcs_model.fit(z_nonco_train_data, bcs_train, epochs=32, shuffle=True)
 
+#%%
+z_nonco_test_data = bcs_scalar.transform(nonco_test_data.T)
+bcs_pred = bcs_model.predict(z_nonco_test_data)
+bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
+#%%
+print(np.mean(bcs_test_errs[s_ind_dict['skip2']]))
 def customPoseLoss(y_true, y_pred):
     probs = tf.nn.softmax(y_pred, axis=1)
     return tf.reduce_sum(y_true * probs, axis=1)
