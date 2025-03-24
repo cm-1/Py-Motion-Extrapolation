@@ -487,6 +487,26 @@ print("Most important feature inds:", scramble_rank[:10], sep='\n')
     
 
 #%%
+nonco_col_nums = np.where(nonco_cols)[0]
+
+
+#%%
+import shap
+default_rng = np.random.default_rng()
+rng_choice = default_rng.choice(z_nonco_test_data, 100, False, axis=0)
+shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
+
+#%%
+rng_single = default_rng.choice(rng_choice, 1, axis=0)
+shap_values = shap_ex.shap_values(rng_single)#, samples=500)
+# shap.initjs()
+
+# shap.summary_plot(shap_values=shap_values, features=rng_choice[35:36])
+
+shap.force_plot(
+    shap_ex.expected_value[1].numpy(), shap_values[:, :, 1] #, feature_names=X_train.columns
+)
+#%%
 def customPoseLoss(y_true, y_pred):
     probs = tf.nn.softmax(y_pred, axis=1)
     return tf.reduce_sum(y_true * probs, axis=1)
