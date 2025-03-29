@@ -166,15 +166,18 @@ print("Test data:", test_best_seq_means)
 
 
 #%%
+def getErrorPerSkip(concat_errs, pred_labels, inds_dict):
+    pred_labels_rs = pred_labels.reshape(-1,1)
+    taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
+    ret_dict = {k: taken_errs[inds] for k, inds in inds_dict.items()}
+    return ret_dict
+
 def assessPredError(concat_errs, pred_labels, inds_dict = None):
     if inds_dict is None:
         inds_dict = {"all:": None}
-    ret_dict = dict()
-    pred_labels_rs = pred_labels.reshape(-1,1)
-    taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
-    for k, inds in inds_dict.items():
-        ret_dict[k] = taken_errs[inds].mean()
-    return ret_dict
+    all_errs_dict = getErrorPerSkip(concat_errs, pred_labels, inds_dict)
+    mean_dict = {k: v.mean() for k, v in all_errs_dict.items()}
+    return mean_dict
 #%%
 
 s_inds = []
@@ -325,13 +328,14 @@ import posemath as pm
 from sklearn.preprocessing import StandardScaler
 
 ComboList = typing.List[gtc.Combo]
-def localPosForCombo(combos: ComboList, train_combos: ComboList, test_combos: ComboList):
+def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
     all_data = [dict() for _ in range(3)]
 
+    skip_end = 1 if onlySkip0 else 3
     for c in combos:
         calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
         all_translations = calc_obj.getTranslationsGTNP(False)
-        for skip in range(3):
+        for skip in range(skip_end):
             step = skip + 1
             translations = all_translations[::step]
             vels = np.diff(translations, axis=0)
@@ -363,6 +367,10 @@ def localPosForCombo(combos: ComboList, train_combos: ComboList, test_combos: Co
             }
 
             all_data[skip][c] = c_res
+    return all_data
+
+def dataForComboSplitJAV(combos: ComboList, train_combos: ComboList, test_combos: ComboList):    
+    all_data = dataForCombosJAV(combos)
     
     key_ord = [
         'v', 'a_p', 'a_o', 'j_v', 'j_a', 'j_cross', 'd_v', 'd_a', 'd_cross'
@@ -408,7 +416,7 @@ def poseLossJAV(y_true, y_pred):
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
-
+#%%
 colin_thresh = 0.7
 nonco_cols, co_mat = pm.non_collinear_features(concat_train_data.T, colin_thresh)
 
@@ -443,13 +451,13 @@ bcs_model = keras.Sequential([
 bcs_model.summary()
 bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
-bcs_train, bcs_test = localPosForCombo(
+bcs_train, bcs_test = dataForComboSplitJAV(
     nametup_combos, train_combos, test_combos
 )
 
 bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
 bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
-#%%
+
 bcs_scalar = StandardScaler()
 z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data.T)
 bcs_model.fit(z_nonco_train_data, bcs_train, epochs=32, shuffle=True)
@@ -551,3 +559,43 @@ print()
 tf_test_preds = np.argmax(tfmodel(concat_test_data.T).numpy(), axis=1)
 tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
 print("TF test errs=", tf_test_errs)
+
+
+#%%
+import matplotlib.pyplot as plt
+
+big_tree_preds = big_tree.predict(concat_test_data.T)
+tree_errs_for_plt = getErrorPerSkip(
+    concat_test_errs, big_tree_preds, s_ind_dict
+)
+acc_only_preds = np.full_like(
+    big_tree_preds, motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
+)
+acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
+
+
+bar_skip_key = 'skip2'
+bar_data = [
+    tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
+    bcs_test_errs[s_ind_dict[bar_skip_key]]
+]
+bar_labels = ['Tree', 'Acc Only', 'JAV NN']
+for i, arr in enumerate(bar_data):
+    if arr.ndim > 1 and arr.shape[1] == 1:
+        bar_data[i] = arr.flatten()
+    elif arr.ndim > 1:
+        raise Exception("Unexpected shape!")
+
+bar_percentiles = [np.percentile(b, 90) for b in bar_data]
+bar_pmax = np.max(bar_percentiles)
+
+fig, ax = plt.subplots()
+ax.hist(
+    bar_data, histtype='step', stacked=False, fill=False, label=bar_labels,
+    bins=35, density=True, range=(0, bar_pmax)
+)
+ax.legend()
+ax.set_ylabel("Proportion")
+ax.set_xlabel("Translation Error (mm)")
+plt.show()
+
