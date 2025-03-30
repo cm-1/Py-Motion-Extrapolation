@@ -11,38 +11,58 @@ from sklearn import tree as sk_tree
 from sklearn.tree._tree import TREE_LEAF
 from sklearn.model_selection import train_test_split
 
-from posefeatures import MOTION_DATA, MOTION_MODEL
-from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
-
-
 from custom_tree.weighted_impurity import WeightedErrorCriterion
 
 # Local code imports ===========================================================
+# For reading the dataset into numpy arrays:
 from gtCommon import BCOT_Data_Calculator
 import gtCommon as gtc
 
+# Stuff needed for calculating the input features for the non-RNN models.
+# MOTION_DATA is an enum representing input feature column "names", while
+# MOTION_MODEL is an enum that represents some physical non-ML motion prediction
+# schemes like constant-velocity, constant-acceleration, etc.
+from posefeatures import MOTION_DATA, MOTION_MODEL # Enums
+from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
+
+# Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
-STRAIGHT_LINE_ANG_THRESH_DEG = 30.0
-CIRC_ERR_RADIUS_RATIO_THRESH = 0.10
-MAX_MIN_JERK_OPT_ITERS = 33
+STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
+CIRC_ERR_RADIUS_RATIO_THRESH = 0.10 # Threshold for if motion's circular.
+MAX_MIN_JERK_OPT_ITERS = 33 # Max iters for min jerk optimization calcs.
 MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
-ERR_NA_VAL = np.finfo(np.float32).max
+ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
-
+# Video categories; currently not *really* used in this file, but that might 
+# change in the near future if I want to analyze the categories separately.
 motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",
     "static_suspension", "static_trans"
 ]
 # motion_kinds_plus = motion_kinds + ["all"]
 
+# Generate the following tuples that represent each video:
+#     (sequence_name, body_name, motion_kind)
+# The first two tuple elements uniquely identify a video, while the third is
+# redundant (it's part of each sequence name) but might be used for more
+# convenient filtering of videos.
+# ---
+# In the BCOT dataset, videos are categorized first by the "sequence" type 
+# (which is motion/lighting/background), and then by the object ("body") 
+# featured in the video. Each "combo" of a sequence and body thus represents
+# a distinct video.
 combos = []
 for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
     k = ""
+    # For now, using a for loop, not regex, to get motion kind from seq name.
     for k_opt in motion_kinds:
         if k_opt in s_val:
             k = k_opt
             break
     for b in range(len(gtc.BCOT_BODY_NAMES)):
+        # Some sequence-body pairs do not have videos, and some have two videos
+        # with identical motion but a different camera. So we first check that 
+        # a video exists and has unique motion.
         if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
             combos.append((b, s, k))
 
@@ -53,8 +73,10 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
 
 #%%
 
-# NamedTuple combos.
+# From the combo 3-tuples, construct nametuple versions containing only the
+# uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
 nametup_combos = [gtc.Combo(*c[:2]) for c in combos]
+
 cfc = CalcsForCombo(
     nametup_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
@@ -63,17 +85,43 @@ cfc = CalcsForCombo(
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
 )
 results = cfc.getAll()
+
+# Input features like velocity, acceleration, jerk, rotation speed, etc.
 all_motion_data = cfc.all_motion_data
+
+# Errors for non-ML predictions using simple physics models like 
+# constant-velocity, constant-acceleration, etc.
 min_norm_labels = cfc.min_norm_labels
+
+# Labels for which of these physical models performed best for each vid frame.
 err_norm_lists = cfc.err_norm_lists
 
-#%%
 
-def concatForComboSubset(data, combo_subset, front_trim: int = 0):
+# The above three data sequences have the following type: 
+#     List[Dict[Combo, (Dict|NDArray)]]
+# That is, we have a list of dictionaries which store the results per combo,
+# where said "result" might be an NDArray (in the case of min_norm_labels) or
+# another dict with "column" names.
+# 
+# The combo-keyed dict's index in the top-level list corresponds to the number 
+# of frames we are skipping when we read the dataset. So the [0] dict is when
+# not skipping any  frames, the [1] dict for when reading every 2nd frame only, 
+# etc.
+
+#%%
+# The below are functions that convert the above lists of dicts into single
+# train/test sets that we can pass into our model training.
+
+# First, we concatenate together the data for a subset of combos and get
+# a list of 3 items, where each list index again corresponds to the frame 
+# skip amount but results are no longer separated by combo.
+# Motivation: We may want to quickly filter out a skip amount for training.
+def concatForComboSubset(data, combo_subset): #, front_trim: int = 0):
     ret_val = []
     for els_for_skip in data:
         subset_via_combos = [els_for_skip[ck[:2]] for ck in combo_subset]
         concated = None
+        front_trim = 0 # May set this via param in future code.
         if isinstance(subset_via_combos[0], dict):
             concated = dict()
             for k in subset_via_combos[0].keys():
@@ -87,9 +135,10 @@ def concatForComboSubset(data, combo_subset, front_trim: int = 0):
         ret_val.append(concated)
     return ret_val
 
-def combosByBod(bods):
-    return [c for c in combos if c[0] in bods]
-
+# This converts List[Dict[Any, NDArray]] items, which are lists of result 
+# dicts of NDarrays indexed by frame skip, into a single 2D NDArray.
+# It also returns the dictionary keys in the order that the columns appear in
+# the 2D array so that we know which column is which.
 def get2DArrayFromDataStruct(data: typing.List[typing.Dict[typing.Any, NDArray]], 
                             ks: typing.List[MOTION_DATA_KEY_TYPE] = None,
                             stack_axis: int = 0):
@@ -99,18 +148,28 @@ def get2DArrayFromDataStruct(data: typing.List[typing.Dict[typing.Any, NDArray]]
     stacked = np.stack([concated[k] for k in ks], stack_axis)
     return ks, stacked
 
+# Filter out combos based on the 3D object ("body") subset chosen. 
+def combosByBod(bods):
+    return [c for c in combos if c[0] in bods]
+            
 # def concatForKeys(data, keys):
 #     return np.stack((data[k] for k in keys))
 
 #%%
 
+# We'll split our data into train/test sets where the vids for a single body
+# will either all be train vids or all be test vids. This way (a) we are
+# guaranteed to have every motion "class" in our train and test sets, and (b)
+# we'll know how well the models generalize to new 3D objects not trained on.
 bod_arange = np.arange(len(gtc.BCOT_BODY_NAMES), dtype=int)
 train_bodies, test_bodies = train_test_split(bod_arange, test_size = 0.2, random_state=0)
 
 train_combos = combosByBod(train_bodies)
 test_combos = combosByBod(test_bodies)
 
-
+# The below gets the training and test data, but leaves them currently still
+# separated by skip amount. Here, one can quickly slap a "[0]" at the end of
+# each line to just look at data for one skip amount, for example.
 train_data = concatForComboSubset(all_motion_data, train_combos)
 train_labels = concatForComboSubset(min_norm_labels, train_combos)
 train_errs = concatForComboSubset(err_norm_lists, train_combos)
@@ -118,15 +177,17 @@ test_labels = concatForComboSubset(min_norm_labels, test_combos)
 test_data = concatForComboSubset(all_motion_data, test_combos)
 test_errs = concatForComboSubset(err_norm_lists, test_combos)
 
-
+# Get 2D NDArrays from the above.
 concat_train_labels = np.concatenate(train_labels)
 concat_test_labels = np.concatenate(test_labels)
-motion_data_keys, concat_train_data = get2DArrayFromDataStruct(train_data)
-concat_test_data = get2DArrayFromDataStruct(test_data, motion_data_keys)[1]
+# Get the "keys" as another return value so that we know the column names/order.
+motion_data_keys, concat_train_data = get2DArrayFromDataStruct(train_data, stack_axis=-1)
+_, concat_test_data = get2DArrayFromDataStruct(test_data, motion_data_keys, stack_axis=-1)
 
+# We'll specify the column names/order manually for this one.
 motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
-concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, -1)[1]
-concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, -1)[1]
+_, concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, stack_axis=-1)
+_, concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, stack_axis=-1)
 
 #%%
 best_seq_means = []
@@ -166,12 +227,32 @@ print("Test data:", test_best_seq_means)
 
 
 #%%
-def getErrorPerSkip(concat_errs, pred_labels, inds_dict):
+
+# Type hint for a dict with string keys and items that are either (int, int)
+# intervals or a bool numpy array of indices.
+IndDict = typing.Dict[
+    str, typing.Union[typing.Tuple[int,int], NDArray[np.bool]]
+]
+
+# Gets the per-frame pose error in millimeters for a set of "labels" which 
+# represent which physics-based motion model (non-regression-ML) chosen each 
+# frame.
+# Returns a dict that separates these MAEs based on frame category, e.g., skip
+# amount.
+def getErrorPerSkip(concat_errs: NDArray, pred_labels: NDArray, inds_dict: IndDict):
     pred_labels_rs = pred_labels.reshape(-1,1)
     taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
-    ret_dict = {k: taken_errs[inds] for k, inds in inds_dict.items()}
+    ret_dict: typing.Dict[str, NDArray] = dict()
+    for k, inds in inds_dict.items():
+        if inds is not None and isinstance(inds, tuple):
+            ret_dict[k] = taken_errs[inds[0]:inds[1]]
+        else:
+            ret_dict[k] = taken_errs[inds]
+        {k: taken_errs[inds] for k, inds in inds_dict.items()}
     return ret_dict
 
+# Same as the above, but returns MAE per inds_dict category rather than a whole
+# list of per-frame errors.
 def assessPredError(concat_errs, pred_labels, inds_dict = None):
     if inds_dict is None:
         inds_dict = {"all:": None}
@@ -180,16 +261,20 @@ def assessPredError(concat_errs, pred_labels, inds_dict = None):
     return mean_dict
 #%%
 
-s_inds = []
-s_train_inds = []
+# Get the indices of each skip amount inside the concatenated 2D array we
+# created above. There might be a "smarter" way to do this given how things were
+# previously split into lists by skip amount, but whatever.
+s_inds = []       # For test data
+s_train_inds = [] # For trian data
 ts_ind = motion_data_keys.index(MOTION_DATA.TIMESTEP)
 for i in range(1,4): # We have data for frame steps of 1, 2, and 3.
-    curr_s_inds = concat_test_data[ts_ind] == i
+    curr_s_inds = concat_test_data[:, ts_ind] == i
     s_inds.append(curr_s_inds)
-    s_train_inds.append(concat_train_data[0] == i)
+    s_train_inds.append(concat_train_data[:, ts_ind] == i)
 
+# Convert the above 3-item lists into dicts.
 s_ind_dict = {"skip" + str(i): s_inds[i] for i in range(3)}
-s_ind_dict["all"] = None
+s_ind_dict["all"] = None # Because my_np_array[None] returns all elements.
 
 s_train_ind_dict = {"skip" + str(i): s_train_inds[i] for i in range(3)}
 s_train_ind_dict["all"] = None
@@ -200,8 +285,10 @@ y_errs_reshape = concat_train_errs.reshape((
 ))
 mc.set_y_errs(y_errs_reshape)
 
+# Find the "lower bound" for error when we train a classifier to use the physics
+# models for prediction, by finding pose MAE for perfect classification.
 error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
-print("Error limit:", error_lim)
+print("Classification MAE limit:", error_lim)
 
 # A tree depth of 8 is already way beyond "human-readable", and I think the
 # graphs don't show miraculous improvements past 8, so 8 seems like a good max.
@@ -219,7 +306,7 @@ max_depth = 8
 big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
 print("Starting decision tree training!")
 start_time = time.time()
-big_tree = big_tree.fit(concat_train_data.T, concat_train_labels)
+big_tree = big_tree.fit(concat_train_data, concat_train_labels)
 print("Done!")
 print("Time spent:", time.time() - start_time)
 #%%
@@ -265,9 +352,9 @@ for d in depths:
     # Preiously, we trained new trees from scratch using the below code, but as
     # described above, we'll instead trim the "main" tree to get new ones.
     #         clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
-    #         clf = clf.fit(concat_train_data.T, concat_train_labels)
+    #         clf = clf.fit(concat_train_data, concat_train_labels)
     trimmed_tree = trim_to_depth(big_tree, d)
-    graph_pred = trimmed_tree.predict(concat_test_data.T)
+    graph_pred = trimmed_tree.predict(concat_test_data)
     scores_for_depth = assessPredError(concat_test_errs, graph_pred, s_ind_dict)
     for k, score_for_depth in scores_for_depth.items():
         scores[k][d-1] = score_for_depth
@@ -277,6 +364,7 @@ print(scores)
 #%%
 import matplotlib.pyplot as plt
 
+# Plot decision tree test score errors for the different depths.
 for k, score_sub in scores.items():
     #score_normed = (score_sub - score_sub.min()) / np.ptp(score_sub)
     curr_plt_ln, = plt.plot(depths, score_sub, label=k)
@@ -294,9 +382,10 @@ print("TODO: Add single 'limit' legend entry!")
 #%%
 # Again, we'll replace old code with a trimming of our main tree.
 #         mclf = sk_tree.DecisionTreeClassifier(max_depth=4, criterion=mc)
-#         mclf = mclf.fit(concat_train_data.T, concat_train_labels)
+#         mclf = mclf.fit(concat_train_data, concat_train_labels)
 mclf = trim_to_depth(big_tree, 4)
-mclfps = mclf.predict(concat_test_data.T).copy()
+
+mclfps = mclf.predict(concat_test_data).copy()
 
 #%%
 
@@ -322,14 +411,32 @@ export_graphviz(
 # Graphviz\bin\dot.exe -Tpdf tree.dot -o tree.pdf
 
 #%%
+
+################################################################################
+# Vanilla Regression Network Code!
+################################################################################
+
 import tensorflow as tf
 import keras
-import posemath as pm
+import posemath as pm # Small "library" I wrote for vector operations.
 from sklearn.preprocessing import StandardScaler
 
+# We will start off the neural net code by constructing a regression network
+# that predicts multipliers for velocity, acceleration, and jerk that we will
+# use to construct the displacement from the current position to the position
+# we predict for the next timestamp.
+
 ComboList = typing.List[gtc.Combo]
+
+# For each frame of video, we consider a coordinate frame where one axis is
+# aligned with the object's velocity and another is aligned with the
+# acceleration (or, at least, the part of it orthogonal to velocity).
+# We then calculate and return the speed, acceleration, and jerk for the current
+# time and the position at the next time in this frame.
+# Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
+# by frame skip amount and by combo.
 def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
-    all_data = [dict() for _ in range(3)]
+    all_data = [dict() for _ in range(3)] # Empty dict for each skip amount.
 
     skip_end = 1 if onlySkip0 else 3
     for c in combos:
@@ -339,26 +446,45 @@ def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
             step = skip + 1
             translations = all_translations[::step]
             vels = np.diff(translations, axis=0)
+            # We need a velocity for the last timestep, but not an acceleration,
+            # because we need the vectors that take each current position to
+            # the next when calculating the "ground truth" for displacement
+            # predictions. This is the velocity vector; acceleration vectors
+            # are not needed for this; we only need "current" acceleration.
             accs = np.diff(vels[:-1], axis=0)
             jerks = np.diff(accs, axis=0)
 
-            # We only calculate what we need, so we clip the arrays' fronts off.
+            # To only calculate as much as we need, we clip the arrays' fronts
+            # off when we can.
             speeds = np.linalg.norm(vels[2:-1], axis=-1)
             unit_vels = pm.safelyNormalizeArray(vels[2:-1], speeds[:, np.newaxis])
-            acc_p = pm.einsumDot(accs[1:], unit_vels)
-            acc_p_vecs = pm.scalarsVecsMul(acc_p, unit_vels)
-            acc_o_vecs = accs[1:] - acc_p_vecs
-            acc_o = np.linalg.norm(acc_o_vecs, axis=-1)
+            # Find the magnitude of the velocity that is parallel to and
+            # orthogonal to velocity.
+            acc_p = pm.einsumDot(accs[1:], unit_vels) # Parallel magnitude
+            acc_p_vecs = pm.scalarsVecsMul(acc_p, unit_vels) # Parallel vec3
+            acc_o_vecs = accs[1:] - acc_p_vecs # Orthogonal vec3
+            acc_o = np.linalg.norm(acc_o_vecs, axis=-1) # Orthogonal magnitude
 
             unit_acc_o = pm.safelyNormalizeArray(acc_o_vecs, acc_o[:, np.newaxis])
 
+            # If velocity and the orthogonal acceleration form two axes of our
+            # coordinate frame, their cross product forms the third.
             plane_orthos = np.cross(unit_vels, unit_acc_o)
+            # We now have matrices to convert vectors in world space into
+            # these local velocity-aligned frames.
             mats = np.stack([unit_vels, unit_acc_o, plane_orthos], axis=1)
 
+            # Transform each jerk and to-next-frame into this frame via matmul.
             local_jerks = pm.einsumMatVecMul(mats, jerks)
-
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
 
+            # We'll now return all of the data needed to convert velocity,
+            # acceleration, and jerk multipliers into local vectors in these
+            # new frames. To do this, we don't need to return the coordinate
+            # frames themselves: we just need to know the velocity in this
+            # frame (a vector [speed, 0, 0]), the acceleration in this frame
+            # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
+            # we can just return the following:
             c_res = {
                 'v': speeds, 'a_p': acc_p, 'a_o': acc_o, 
                 'j_v': local_jerks[:, 0], 'j_a': local_jerks[:, 1],
@@ -369,6 +495,8 @@ def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
             all_data[skip][c] = c_res
     return all_data
 
+# Function that combines the results of the previous one into a 2D numpy
+# array.
 def dataForComboSplitJAV(combos: ComboList, train_combos: ComboList, test_combos: ComboList):    
     all_data = dataForCombosJAV(combos)
     
@@ -383,6 +511,7 @@ def dataForComboSplitJAV(combos: ComboList, train_combos: ComboList, test_combos
     )
     return train_res, test_res
 
+# Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
 def poseLossJAV(y_true, y_pred):
     '''
     Assumes y_true contains the following columns, in order:
@@ -417,8 +546,12 @@ def poseLossJAV(y_true, y_pred):
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
 #%%
-colin_thresh = 0.7
-nonco_cols, co_mat = pm.non_collinear_features(concat_train_data.T, colin_thresh)
+# A lot of the features we calculated might be collinear (especially since a lot 
+# of very similar features were tried for the decision tree) we'll remove the
+# collinear ones before training.
+colin_thresh = 0.7 # Threshold for collinearity.
+
+nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
 
 vel_bcs_ind = motion_data_keys.index(MOTION_DATA.VEL_BCS_RATIOS)
 
@@ -432,14 +565,19 @@ if not nonco_cols[vel_bcs_ind] or max_bcs_co > colin_thresh:
 
 nonco_cols[vel_bcs_ind] = False # It's the variable we want to predict.
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
-nonco_cols[timestamp_ind] = False
+nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 
-nonco_train_data = concat_train_data[nonco_cols]
-nonco_test_data = concat_test_data[nonco_cols]
+# select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
+# nonco_cols[:] = False
+# nonco_cols[list(select_cols)] = True
+
+# Get the data subset for the selected non-collinear columns.
+nonco_train_data = concat_train_data[:, nonco_cols]
+nonco_test_data = concat_test_data[:, nonco_cols]
 
 # %%
 bcs_model = keras.Sequential([
-    keras.layers.Input((nonco_train_data.shape[0],)),
+    keras.layers.Input((nonco_train_data.shape[1],)),
     keras.layers.Dense(128, activation='relu'),
     keras.layers.Dropout(0.2),
     keras.layers.Dense(128, activation='relu'),
@@ -451,38 +589,59 @@ bcs_model = keras.Sequential([
 bcs_model.summary()
 bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
+# Get local-frame data.
 bcs_train, bcs_test = dataForComboSplitJAV(
     nametup_combos, train_combos, test_combos
 )
 
+# Convert from numpy array to tf tensor.
 bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
 bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
+# Z-scale each column to standard normal distribution.
 bcs_scalar = StandardScaler()
-z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data.T)
-bcs_model.fit(z_nonco_train_data, bcs_train, epochs=32, shuffle=True)
+z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data)
+#%% Train the network.
+bcs_hist = bcs_model.fit(z_nonco_train_data, bcs_train, epochs=32, shuffle=True)
 
-#%%
-z_nonco_test_data = bcs_scalar.transform(nonco_test_data.T)
+#%% Evaluate network on test data.
+z_nonco_test_data = bcs_scalar.transform(nonco_test_data)
 bcs_pred = bcs_model.predict(z_nonco_test_data)
 bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
-#%%
+#%% Print scores on test data.
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
 print(bcs_test_scores)
 #%%
+
+#%% 
+
+################################################################################
+# Column Scrambling to Assess Feature Importance
+################################################################################
+
+# Get the column names for each of the kept columns.
 nonco_featnames = [
     k.name for i, k in enumerate(motion_data_keys) if nonco_cols[i]
 ]
 
-def errsForColScramble(model, data, col_ind, y_true):
-    data_scramble = data.copy()
+# Finds the errors for the model when one of the test data columns has its
+# data scrambled, as per the advice of a StackOverflow post on how to figure out
+# which columns are more important for the prediction.
+def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: NDArray):
+    data_scramble = data.copy() # So that original's not affected.
+
+    # Column scramble:
     data_scramble[:, col_ind] = np.random.default_rng().choice(
         data_scramble[:, col_ind], len(data_scramble), False
     )
+
+    # Getting new errors:
     preds = model.predict(data_scramble)
     errs = model.loss(y_true, preds)
     return errs
 
+# For each column and for each skip amount, scramble the column and find the new
+# score.
 keys_s_ind = s_ind_dict.keys()
 scramble_scores = np.empty((z_nonco_test_data.shape[1], len(s_ind_dict.keys())))
 for col_ind in range(z_nonco_test_data.shape[1]):
@@ -515,14 +674,19 @@ shap.force_plot(
     shap_ex.expected_value[1].numpy(), shap_values[:, :, 1] #, feature_names=X_train.columns
 )
 #%%
+
+################################################################################
+# Vanilla Classification Network
+################################################################################
+
 def customPoseLoss(y_true, y_pred):
     probs = tf.nn.softmax(y_pred, axis=1)
     return tf.reduce_sum(y_true * probs, axis=1)
 # Example Usage
-tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
+# tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
 tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
 
-input_dim = concat_train_data.shape[0]
+input_dim = concat_train_data.shape[1]
 num_classes = len(MOTION_MODEL)
 
 onehot_train_labels = tf.one_hot(concat_train_labels, num_classes)
@@ -540,23 +704,25 @@ tfmodel = keras.Sequential([
 tfmodel.summary()
 
 tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
-tfmodel.compile(optimizer='adam', loss=tf_loss_fn)
-tfmodel.fit(concat_train_data.T, concat_train_errs, epochs=5, shuffle=True)
+adam = keras.optimizers.Adam(0.01)
+
+tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
+tfmodel.fit(concat_train_data, concat_train_errs, epochs=5, shuffle=True)
 #%%
-bgtrain = big_tree.predict(concat_train_data.T)
+bgtrain = big_tree.predict(concat_train_data)
 bgtrain_score = assessPredError(concat_train_errs, bgtrain, s_train_ind_dict)
 print("Big tree train errs=", bgtrain_score)
 
-mclf_train = mclf.predict(concat_train_data.T)
+mclf_train = mclf.predict(concat_train_data)
 mclf_train_score = assessPredError(concat_train_errs, mclf_train, s_train_ind_dict)
 print("Smaller tree train errs=", mclf_train_score)
 
-tf_train_preds = np.argmax(tfmodel(concat_train_data.T).numpy(), axis=1)
+tf_train_preds = np.argmax(tfmodel(concat_train_data).numpy(), axis=1)
 tf_train_errs = assessPredError(concat_train_errs, tf_train_preds, s_train_ind_dict)
 print("TF train errs=", tf_train_errs)
 print()
 
-tf_test_preds = np.argmax(tfmodel(concat_test_data.T).numpy(), axis=1)
+tf_test_preds = np.argmax(tfmodel(concat_test_data).numpy(), axis=1)
 tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
 print("TF test errs=", tf_test_errs)
 
