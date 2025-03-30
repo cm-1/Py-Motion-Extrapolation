@@ -576,13 +576,40 @@ nonco_train_data = concat_train_data[:, nonco_cols]
 nonco_test_data = concat_test_data[:, nonco_cols]
 
 # %%
+
+
+# Custom importance weighting layer
+# Class written by ChatGPT and then manually verified.
+# (But I'm not a big tensorflow expert, so maybe my verification was faulty...)
+class ImportanceLayer(tf.keras.layers.Layer):
+    def __init__(self, input_dim, weight_decay=1e-4, **kwargs):
+        super().__init__(**kwargs)
+        self.input_dim = input_dim
+        self.weight_decay = weight_decay
+
+    def build(self, input_shape):
+        # Define per-feature weights with L2 regularization (weight decay)
+        self.importance_weights = self.add_weight(
+            shape=(self.input_dim,), 
+            initializer="ones",  # Start with all weights = 1
+            regularizer=tf.keras.regularizers.l2(self.weight_decay),
+            trainable=True
+        )
+
+    def call(self, inputs):
+        return inputs * self.importance_weights  # Element-wise multiplication
+
+
+dropout_rate = 0.2
+nodes_per_layer = 128
 bcs_model = keras.Sequential([
     keras.layers.Input((nonco_train_data.shape[1],)),
-    keras.layers.Dense(128, activation='relu'),
-    keras.layers.Dropout(0.2),
-    keras.layers.Dense(128, activation='relu'),
-    keras.layers.Dropout(0.2),
-    keras.layers.Dense(128, activation='relu'),
+    # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
+    keras.layers.Dense(nodes_per_layer, activation='relu'),
+    keras.layers.Dropout(dropout_rate),
+    keras.layers.Dense(nodes_per_layer, activation='relu'),
+    keras.layers.Dropout(dropout_rate),
+    keras.layers.Dense(nodes_per_layer, activation='relu'),
     keras.layers.Dense(3)
 ])
 
