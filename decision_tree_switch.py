@@ -553,17 +553,9 @@ colin_thresh = 0.7 # Threshold for collinearity.
 
 nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
 
-vel_bcs_ind = motion_data_keys.index(MOTION_DATA.VEL_BCS_RATIOS)
-
 last_best_ind = motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 
-max_bcs_co = max(np.max(co_mat[vel_bcs_ind]), np.max(co_mat[:, vel_bcs_ind]))
-
-if not nonco_cols[vel_bcs_ind] or max_bcs_co > colin_thresh:
-    raise Exception("Need to decide how to handle this case!")
-
-nonco_cols[vel_bcs_ind] = False # It's the variable we want to predict.
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 
@@ -666,7 +658,7 @@ shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
 #%%
 rng_single = default_rng.choice(rng_choice, 1, axis=0)
 shap_values = shap_ex.shap_values(rng_single)#, samples=500)
-# shap.initjs()
+shap.initjs()
 
 # shap.summary_plot(shap_values=shap_values, features=rng_choice[35:36])
 
@@ -693,10 +685,11 @@ onehot_train_labels = tf.one_hot(concat_train_labels, num_classes)
 
 tfmodel = keras.Sequential([
     keras.layers.Input((input_dim,)),
-    keras.layers.BatchNormalization(),
-    keras.layers.Dense(64, activation='relu'),
+    keras.layers.Dense(512, activation='sigmoid'),
     # keras.layers.Dropout(0.2),
-    keras.layers.Dense(32, activation='relu'),
+    keras.layers.Dense(512, activation='sigmoid'),
+    keras.layers.Dense(512, activation='sigmoid'),
+    # keras.layers.Dense(1024, activation='sigmoid'),
     # keras.layers.Dropout(0.2),
     # keras.layers.Dense(1, activation='sigmoid'),
     keras.layers.Dense(num_classes, activation='sigmoid')])
