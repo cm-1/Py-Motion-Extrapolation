@@ -726,11 +726,216 @@ tf_test_preds = np.argmax(tfmodel(concat_test_data).numpy(), axis=1)
 tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
 print("TF test errs=", tf_test_errs)
 
+#%%
+
+################################################################################
+# World-Frame LSTM
+################################################################################
+
+# We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
+import sklearn.preprocessing
+from sklearn.preprocessing import MinMaxScaler
+#%%
+win_size = 4
+num_classes = len(MOTION_MODEL)
+
+# For type hint. Seems that sklearn's "Scalers" don't have a single superclass
+# that has a transform() method, unless I'm missing something. So I'm doing a
+# type union instead.
+ScalerType = typing.Union[
+    MinMaxScaler, sklearn.preprocessing.StandardScaler, 
+    sklearn.preprocessing.RobustScaler, sklearn.preprocessing.MaxAbsScaler,
+    sklearn.preprocessing.PowerTransformer, sklearn.preprocessing.Normalizer,
+    sklearn.preprocessing.QuantileTransformer
+]
+
+# Function that gets the "windows" of consecutive poses from the data for a 
+# subset of combos. 
+def rnnDataWindows(data: NDArray, combo_subset: typing.List[typing.Tuple], 
+                   window_size: int, scaler: ScalerType, skip: int):
+    step = skip + 1
+    data_in = []
+    data_out = []
+    for combo in combo_subset:
+        combo_data = scaler.transform(data[combo[:2]][::step])
+        for i in range(len(combo_data) - window_size):
+            data_in.append(combo_data[i:(i + window_size)])
+            data_out.append(combo_data[i + window_size])
+    data_in_np = np.array(data_in)
+    data_out_np = np.array(data_out)
+    return (data_in_np, data_out_np)
+
+# def rnnErrsForCombos(combo_subset, window_size, skip):
+#     skip_subset = err_norm_lists[skip]
+#     errs_all = []
+#     for combo in combo_subset:
+#         errs_dict = skip_subset[combo[:2]]
+#         cut_amt = window_size - 4 # jerk preds already cut
+#         assert cut_amt >= 0
+#         errs_stack = np.stack([
+#             errs_dict[k][cut_amt:] for k in motion_mod_keys
+#         ], axis=-1)
+#         errs_all.append(errs_stack)
+#     return np.concatenate(errs_all, axis=0)
+
+# lstm_train_errs = rnnErrsForCombos(train_combos, win_size, 2)
+
+
+#%% Read all the translation data in and get the scaler for normalization.
+all_translations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+# all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+# all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+for combo in combos:
+    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
+    all_translations[combo[:2]] = calculator.getTranslationsGTNP(False)
+    # aa_rotations = calculator.getRotationsGTNP(False)
+    # quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
+    # all_rotations[combo[:2]] = quats
+    # all_rotation_mats[combo[:2]] = calculator.getRotationMatsGTNP(False)
+
+all_translations_concat = np.concatenate(
+    [all_translations[c[:2]] for c in combos], axis=0
+)
+translation_scaler = MinMaxScaler(feature_range=(0,1))
+translation_scaler.fit(all_translations_concat)
+
+#%% Get the data windows for the RNN training.
+lstm_skip = 2
+
+train_translations_in, train_translations_out = rnnDataWindows(
+    all_translations, train_combos, win_size, translation_scaler, lstm_skip
+)
 
 #%%
-import matplotlib.pyplot as plt
+lstm_model = keras.Sequential([
+    keras.layers.LSTM(50, return_sequences=True),
+    keras.layers.LSTM(50),
+    keras.layers.Dense(3)#num_classes, activation='sigmoid')
+])
 
-big_tree_preds = big_tree.predict(concat_test_data.T)
+lstm_model.summary()
+
+lstm_model.compile(optimizer='adam', loss='mse')#tf_loss_fn)
+#%%
+lstm_model.fit(train_translations_in, train_translations_out, epochs=33)
+
+
+#%%
+test_translations_in, test_translations_out = rnnDataWindows(
+    all_translations, test_combos, win_size, translation_scaler, lstm_skip
+)
+
+lstm_test_pred = lstm_model.predict(test_translations_in)
+
+# lstm_test_pred_labs = np.argmax(lstm_test_pred, axis=1)
+# lstm_test_errs = rnnErrsForCombos(test_combos, win_size, 2)
+# lstm_test_err_dists = assessPredError(lstm_test_errs, lstm_test_pred_labs)
+# print(lstm_test_err_dists)
+
+# Transform the coordinates back into non-normalized form to get the errors
+# in millimeters.
+unscaled_lstm_test_pred = translation_scaler.inverse_transform(lstm_test_pred)
+unscaled_lstm_test_gt = translation_scaler.inverse_transform(test_translations_out)
+
+lstm_test_errs = np.linalg.norm(
+    unscaled_lstm_test_pred - unscaled_lstm_test_gt, axis=-1
+)
+print("LSTM score (mm):", lstm_test_errs.mean())
+
+#%% 
+
+# To show a weakness of trying to use an LSTM to predict coordinates in 
+# "world space", we will imagine all input coordinates were shifted by a 
+# constant vec3 and see that accuracy degrades.
+shift_in = 1.0 - test_translations_in #+ 0.015 * np.arange(1,4)
+shift_out = 1.0 - test_translations_out #+ 0.015 * np.arange(1,4)
+shift_pred = lstm_model.predict(shift_in)
+
+scaled_shift_pred = translation_scaler.inverse_transform(shift_pred)
+scaled_shift_gt = translation_scaler.inverse_transform(shift_out)
+shift_lstm_errs = np.linalg.norm(scaled_shift_pred - scaled_shift_gt, axis=-1)
+print("LSTM err when all points translated by same amount:", shift_lstm_errs.mean())
+
+#%%
+
+################################################################################
+# Velocity-Aligned-Frame LSTM
+################################################################################
+
+# As with the "vanilla" regression network, we'll get our data in a velocity
+# -aligned frame. But this time, we'll start by keeping things separated by 
+# combo so that we know the starting and ending points for a video's data and,
+# thus, can create our data windows without having a window erroneously overlap
+# two separate videos.
+all_jav = dataForCombosJAV(nametup_combos, True)[0]
+
+# While we'll keep data separated by combo, we'll combine our per-combo columns,
+# currently split up as separate dict entries, into single numpy arrays.
+all_jav = {
+    _combo: np.stack([col_data for _, col_data in _combo_data.items()], axis=-1) 
+    for _combo, _combo_data in all_jav.items()
+}
+
+# We'll *temporarily* combine the data for all combos into a single numpy array,
+# but that will just be to fit the Scaler used to normalize the data.
+all_jav_concat = np.concatenate(
+    [all_jav[c[:2]] for c in combos], axis=0
+)
+# Scaler for all data columns.
+jav_scaler = MinMaxScaler(feature_range=(0,1))
+jav_scaler.fit(all_jav_concat)
+# Scaler for just the last three columns, the "displacement" ones.
+jav_scaler_3 = MinMaxScaler(feature_range=(0,1))
+jav_scaler_3.fit(all_jav_concat[..., -3:])
+# We no longer need all_jav_concat, and it might take up a fair bit of RAM.
+del all_jav_concat
+
+#%% Get data windows
+
+jav_lstm_skip = 2
+
+train_jav_in, train_jav_out = rnnDataWindows(
+    all_jav, train_combos, win_size, jav_scaler, jav_lstm_skip
+)
+
+#%%
+jav_lstm_model = keras.Sequential([
+    # keras.layers.LSTM(128, return_sequences=True),
+    keras.layers.LSTM(7),
+    keras.layers.Dense(3) #num_classes, activation='sigmoid')
+])
+
+jav_lstm_model.summary()
+
+jav_lstm_model.compile(optimizer='adam', loss='mse')#tf_loss_fn)
+#%%
+jav_lstm_model.fit(train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=15)
+
+#%% Test on test data.
+test_jav_in, test_jav_out = rnnDataWindows(
+    all_jav, test_combos, win_size, jav_scaler, jav_lstm_skip
+)
+
+jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
+
+
+
+# Transform the coordinates back into non-normalized form to get the errors
+# in millimeters.
+scaled_lstm_jav_test_pred = jav_scaler_3.inverse_transform(jav_lstm_test_pred)
+jav_scaled_lstm_gt = jav_scaler_3.inverse_transform(test_jav_out[:, -3:])
+jav_lstm_test_errs = np.linalg.norm(
+    scaled_lstm_jav_test_pred - jav_scaled_lstm_gt, axis=-1
+)
+print("JAV LSTM score:", jav_lstm_test_errs.mean())
+
+#%%
+
+################################################################################
+# Comparing Error Histograms
+################################################################################
+
+big_tree_preds = big_tree.predict(concat_test_data)
 tree_errs_for_plt = getErrorPerSkip(
     concat_test_errs, big_tree_preds, s_ind_dict
 )
@@ -743,9 +948,9 @@ acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
 bar_skip_key = 'skip2'
 bar_data = [
     tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[s_ind_dict[bar_skip_key]]
+    bcs_test_errs[s_ind_dict[bar_skip_key]], jav_lstm_test_errs
 ]
-bar_labels = ['Tree', 'Acc Only', 'JAV NN']
+bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM']
 for i, arr in enumerate(bar_data):
     if arr.ndim > 1 and arr.shape[1] == 1:
         bar_data[i] = arr.flatten()
@@ -764,4 +969,3 @@ ax.legend()
 ax.set_ylabel("Proportion")
 ax.set_xlabel("Translation Error (mm)")
 plt.show()
-
