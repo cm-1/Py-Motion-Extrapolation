@@ -1,17 +1,10 @@
 #%% Imports
 import typing
-import copy
-import time
 
 import numpy as np
 from numpy.typing import NDArray
 
-# Decision tree imports ========================================================
-from sklearn import tree as sk_tree
-from sklearn.tree._tree import TREE_LEAF
 from sklearn.model_selection import train_test_split
-
-from custom_tree.weighted_impurity import WeightedErrorCriterion
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
@@ -19,18 +12,16 @@ from gtCommon import BCOT_Data_Calculator
 import gtCommon as gtc
 
 # Stuff needed for calculating the input features for the non-RNN models.
-# MOTION_DATA is an enum representing input feature column "names", while
-# MOTION_MODEL is an enum that represents some physical non-ML motion prediction
-# schemes like constant-velocity, constant-acceleration, etc.
-from posefeatures import MOTION_DATA, MOTION_MODEL # Enums
-from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
+# MOTION_DATA_KEY_TYPE is a class representing input feature column "names",
+# while the MOTION_DATA enum is a "subset" of these.
+from posefeatures import MOTION_DATA, MOTION_DATA_KEY_TYPE, CalcsForCombo
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10 # Threshold for if motion's circular.
-MAX_MIN_JERK_OPT_ITERS = 33 # Max iters for min jerk optimization calcs.
-MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
+MAX_MIN_JERK_OPT_ITERS = 0 # Max iters for min jerk optimization calcs.
+MAX_SPLIT_MIN_JERK_OPT_ITERS = 0
 ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 # Video categories; currently not *really* used in this file, but that might 
@@ -88,20 +79,10 @@ results = cfc.getAll()
 
 # Input features like velocity, acceleration, jerk, rotation speed, etc.
 all_motion_data = cfc.all_motion_data
-
-# Errors for non-ML predictions using simple physics models like 
-# constant-velocity, constant-acceleration, etc.
-min_norm_labels = cfc.min_norm_labels
-
-# Labels for which of these physical models performed best for each vid frame.
-err_norm_lists = cfc.err_norm_lists
-
-
-# The above three data sequences have the following type: 
-#     List[Dict[Combo, (Dict|NDArray)]]
+# The above data has the following type: 
+#     List[Dict[Combo, Dict[MOTION_DATA, NDArray]]]
 # That is, we have a list of dictionaries which store the results per combo,
-# where said "result" might be an NDArray (in the case of min_norm_labels) or
-# another dict with "column" names.
+# where said "result" is another dict with "column" name enums as keys.
 # 
 # The combo-keyed dict's index in the top-level list corresponds to the number 
 # of frames we are skipping when we read the dataset. So the [0] dict is when
@@ -116,6 +97,9 @@ err_norm_lists = cfc.err_norm_lists
 # a list of 3 items, where each list index again corresponds to the frame 
 # skip amount but results are no longer separated by combo.
 # Motivation: We may want to quickly filter out a skip amount for training.
+# ---
+# I have other non-regression code that sometimes passes in a list of NDArrays
+# instead of a list of dicts, hence the isinstabce() check.
 def concatForComboSubset(data, combo_subset): #, front_trim: int = 0):
     ret_val = []
     for els_for_skip in data:
@@ -171,94 +155,14 @@ test_combos = combosByBod(test_bodies)
 # separated by skip amount. Here, one can quickly slap a "[0]" at the end of
 # each line to just look at data for one skip amount, for example.
 train_data = concatForComboSubset(all_motion_data, train_combos)
-train_labels = concatForComboSubset(min_norm_labels, train_combos)
-train_errs = concatForComboSubset(err_norm_lists, train_combos)
-test_labels = concatForComboSubset(min_norm_labels, test_combos)
 test_data = concatForComboSubset(all_motion_data, test_combos)
-test_errs = concatForComboSubset(err_norm_lists, test_combos)
 
 # Get 2D NDArrays from the above.
-concat_train_labels = np.concatenate(train_labels)
-concat_test_labels = np.concatenate(test_labels)
+
 # Get the "keys" as another return value so that we know the column names/order.
 motion_data_keys, concat_train_data = get2DArrayFromDataStruct(train_data, stack_axis=-1)
 _, concat_test_data = get2DArrayFromDataStruct(test_data, motion_data_keys, stack_axis=-1)
 
-# We'll specify the column names/order manually for this one.
-motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
-_, concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, stack_axis=-1)
-_, concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, stack_axis=-1)
-
-#%%
-best_seq_means = []
-test_best_seq_means = []
-for skip in range(3):
-    best_seq_scores = []
-    test_best_seq_scores = []
-    for seq in range(len(gtc.BCOT_SEQ_NAMES)):
-        seq_data = []
-        test_seq_data = []
-        for combo in combos:
-            if combo[1] == seq:
-                seq_combo_scores_stacked = np.stack(
-                    list(err_norm_lists[skip][combo[:2]].values()), axis=-1
-                )
-                seq_data.append(seq_combo_scores_stacked)
-                if combo[0] in test_bodies:
-                    test_seq_data.append(seq_combo_scores_stacked)
-        if len(seq_data) > 0:
-            concat_seq_data = np.concatenate(seq_data, axis=0)
-            concat_test_seq_data = np.concatenate(test_seq_data, axis=0)
-            seq_sums = np.sum(concat_seq_data, axis=0)
-            assert seq_sums.shape == (len(MOTION_MODEL), )
-            assert concat_seq_data.shape[1] == len(MOTION_MODEL)
-            
-            seq_best_mode = np.argmin(seq_sums)
-            best_seq_scores.append(concat_seq_data[:, seq_best_mode])
-            test_best_seq_scores.append(concat_test_seq_data[:, seq_best_mode])
-    seq_best_mean = np.mean(np.concatenate(best_seq_scores))
-    seq_best_test_mean = np.mean(np.concatenate(test_best_seq_scores))
-    
-    best_seq_means.append(seq_best_mean)
-    test_best_seq_means.append(seq_best_test_mean)
-print("Best case one-model-per sequence results for skips 0, 1, 2:")
-print("All data:", best_seq_means)
-print("Test data:", test_best_seq_means)
-
-
-#%%
-
-# Type hint for a dict with string keys and items that are either (int, int)
-# intervals or a bool numpy array of indices.
-IndDict = typing.Dict[
-    str, typing.Union[typing.Tuple[int,int], NDArray[np.bool]]
-]
-
-# Gets the per-frame pose error in millimeters for a set of "labels" which 
-# represent which physics-based motion model (non-regression-ML) chosen each 
-# frame.
-# Returns a dict that separates these MAEs based on frame category, e.g., skip
-# amount.
-def getErrorPerSkip(concat_errs: NDArray, pred_labels: NDArray, inds_dict: IndDict):
-    pred_labels_rs = pred_labels.reshape(-1,1)
-    taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
-    ret_dict: typing.Dict[str, NDArray] = dict()
-    for k, inds in inds_dict.items():
-        if inds is not None and isinstance(inds, tuple):
-            ret_dict[k] = taken_errs[inds[0]:inds[1]]
-        else:
-            ret_dict[k] = taken_errs[inds]
-        {k: taken_errs[inds] for k, inds in inds_dict.items()}
-    return ret_dict
-
-# Same as the above, but returns MAE per inds_dict category rather than a whole
-# list of per-frame errors.
-def assessPredError(concat_errs, pred_labels, inds_dict = None):
-    if inds_dict is None:
-        inds_dict = {"all:": None}
-    all_errs_dict = getErrorPerSkip(concat_errs, pred_labels, inds_dict)
-    mean_dict = {k: v.mean() for k, v in all_errs_dict.items()}
-    return mean_dict
 #%%
 
 # Get the indices of each skip amount inside the concatenated 2D array we
@@ -279,136 +183,12 @@ s_ind_dict["all"] = None # Because my_np_array[None] returns all elements.
 s_train_ind_dict = {"skip" + str(i): s_train_inds[i] for i in range(3)}
 s_train_ind_dict["all"] = None
 
-mc = WeightedErrorCriterion(1, np.array([len(MOTION_MODEL)], dtype=np.intp))
-y_errs_reshape = concat_train_errs.reshape((
-    concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
-))
-mc.set_y_errs(y_errs_reshape)
-
 # Find the "lower bound" for error when we train a classifier to use the physics
 # models for prediction, by finding pose MAE for perfect classification.
-error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
-print("Classification MAE limit:", error_lim)
-
-# A tree depth of 8 is already way beyond "human-readable", and I think the
-# graphs don't show miraculous improvements past 8, so 8 seems like a good max.
-max_depth = 8
+# error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
+# print("Classification MAE limit:", error_lim)
 
 
-#%% Training decision tree at max depth.
-# ---
-# We'll train a tree at max depth and then trim it to smaller depths to evaulate
-# the performance at lower depths. This yields the exact same trees as if we
-# were to train individual ones with lower max depths (confirmed via tests), but
-# eliminates duplicated training time. I might leave the old code for training
-# individual trees below as a comment, for reference.
-
-big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
-print("Starting decision tree training!")
-start_time = time.time()
-big_tree = big_tree.fit(concat_train_data, concat_train_labels)
-print("Done!")
-print("Time spent:", time.time() - start_time)
-#%%
-
-# A recursive function to help trim_to_depth(). The params should be a tree's
-# children_left and children_right, then a specified node's index and its
-# depth, and a target tree depth. 
-def _trim_to_depth_helper(left_children_inds: NDArray[np.signedinteger],
-                          right_children_inds: NDArray[np.signedinteger],
-                          current_node_index: int, current_node_depth: int,
-                          target_depth: int):
-    if current_node_depth >= target_depth:
-        left_children_inds[current_node_index] = TREE_LEAF
-        right_children_inds[current_node_index] = TREE_LEAF
-    else:
-        # Recurse left and right subtrees to set required nodes to leaves.
-        _trim_to_depth_helper(
-            left_children_inds, right_children_inds, 
-            left_children_inds[current_node_index], current_node_depth + 1,
-            target_depth
-        )
-        _trim_to_depth_helper(
-            left_children_inds, right_children_inds, 
-            right_children_inds[current_node_index], current_node_depth + 1,
-            target_depth
-        )
-    return
-        
-def trim_to_depth(tree: sk_tree._classes.DecisionTreeClassifier, depth):
-    assert depth >= 1, "Depth to trim tree to must be >= 1!"
-    depth = min(depth, tree.get_depth())
-    tree_copy = copy.deepcopy(tree)  # Make a copy to avoid modifying original.
-    lefts = tree_copy.tree_.children_left
-    rights = tree_copy.tree_.children_right
-
-    _trim_to_depth_helper(lefts, rights, 0, 0, depth)
-    return tree_copy
-
-#%%
-scores = {k: np.empty(max_depth) for k in s_ind_dict.keys()}
-depths = np.arange(1, max_depth + 1)
-for d in depths:
-    # Preiously, we trained new trees from scratch using the below code, but as
-    # described above, we'll instead trim the "main" tree to get new ones.
-    #         clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
-    #         clf = clf.fit(concat_train_data, concat_train_labels)
-    trimmed_tree = trim_to_depth(big_tree, d)
-    graph_pred = trimmed_tree.predict(concat_test_data)
-    scores_for_depth = assessPredError(concat_test_errs, graph_pred, s_ind_dict)
-    for k, score_for_depth in scores_for_depth.items():
-        scores[k][d-1] = score_for_depth
-
-print("Scores for trimmed trees:")
-print(scores)
-#%%
-import matplotlib.pyplot as plt
-
-# Plot decision tree test score errors for the different depths.
-for k, score_sub in scores.items():
-    #score_normed = (score_sub - score_sub.min()) / np.ptp(score_sub)
-    curr_plt_ln, = plt.plot(depths, score_sub, label=k)
-    err_lim_k = error_lim[k]
-    curr_plt_col = curr_plt_ln.get_color()
-    plt.plot(
-        [1, max_depth], [err_lim_k, err_lim_k], color=curr_plt_col, dashes=[1,1]
-    )
-plt.legend()
-plt.ylabel("Test Set Error")# (normed to [0,1])")
-plt.xlabel("Max decision tree depth")
-plt.show()
-print("TODO: Add single 'limit' legend entry!")
-
-#%%
-# Again, we'll replace old code with a trimming of our main tree.
-#         mclf = sk_tree.DecisionTreeClassifier(max_depth=4, criterion=mc)
-#         mclf = mclf.fit(concat_train_data, concat_train_labels)
-mclf = trim_to_depth(big_tree, 4)
-
-mclfps = mclf.predict(concat_test_data).copy()
-
-#%%
-
-mc_errs = assessPredError(concat_test_errs, mclfps, s_ind_dict)
-print("Error for my decision tree=", mc_errs)
-print("Done!", mclfps)
-#%%
-from sklearn.tree import export_graphviz
-import pathlib
-
-tree_path = pathlib.Path(__file__).parent.resolve() / "results" / "tree.dot"
-feature_names = [e.name for e in motion_data_keys]
-class_names = [str(i) for i in range(1, len(MOTION_MODEL) + 1)]
-
-export_graphviz(
-    mclf, out_file=str(tree_path), 
-    feature_names=feature_names, 
-    class_names=class_names,
-    filled=True, rounded=True, special_characters=True,
-    
-)
-# Convert to .pdf with:
-# Graphviz\bin\dot.exe -Tpdf tree.dot -o tree.pdf
 
 #%%
 
@@ -676,78 +456,6 @@ print("Most important feature inds:", scramble_rank[:10], sep='\n')
 nonco_col_nums = np.where(nonco_cols)[0]
 
 
-#%%
-import shap
-default_rng = np.random.default_rng()
-rng_choice = default_rng.choice(z_nonco_test_data, 100, False, axis=0)
-shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
-
-#%%
-rng_single = default_rng.choice(rng_choice, 1, axis=0)
-shap_values = shap_ex.shap_values(rng_single)#, samples=500)
-shap.initjs()
-
-# shap.summary_plot(shap_values=shap_values, features=rng_choice[35:36])
-
-shap.force_plot(
-    shap_ex.expected_value[1].numpy(), shap_values[:, :, 1] #, feature_names=X_train.columns
-)
-#%%
-
-################################################################################
-# Vanilla Classification Network
-################################################################################
-
-def customPoseLoss(y_true, y_pred):
-    probs = tf.nn.softmax(y_pred, axis=1)
-    return tf.reduce_sum(y_true * probs, axis=1)
-# Example Usage
-# tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
-tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
-
-input_dim = concat_train_data.shape[1]
-num_classes = len(MOTION_MODEL)
-
-onehot_train_labels = tf.one_hot(concat_train_labels, num_classes)
-
-tfmodel = keras.Sequential([
-    keras.layers.Input((input_dim,)),
-    keras.layers.Dense(512, activation='sigmoid'),
-    # keras.layers.Dropout(0.2),
-    keras.layers.Dense(512, activation='sigmoid'),
-    keras.layers.Dense(512, activation='sigmoid'),
-    # keras.layers.Dense(1024, activation='sigmoid'),
-    # keras.layers.Dropout(0.2),
-    # keras.layers.Dense(1, activation='sigmoid'),
-    keras.layers.Dense(num_classes, activation='sigmoid')])
-
-tfmodel.summary()
-
-tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
-adam = keras.optimizers.Adam(0.01)
-
-tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
-tfmodel.fit(concat_train_data, concat_train_errs, epochs=5, shuffle=True)
-#%%
-bgtrain = big_tree.predict(concat_train_data)
-bgtrain_score = assessPredError(concat_train_errs, bgtrain, s_train_ind_dict)
-print("Big tree train errs=", bgtrain_score)
-
-mclf_train = mclf.predict(concat_train_data)
-mclf_train_score = assessPredError(concat_train_errs, mclf_train, s_train_ind_dict)
-print("Smaller tree train errs=", mclf_train_score)
-
-tf_train_preds = np.argmax(tfmodel(concat_train_data).numpy(), axis=1)
-tf_train_errs = assessPredError(concat_train_errs, tf_train_preds, s_train_ind_dict)
-print("TF train errs=", tf_train_errs)
-print()
-
-tf_test_preds = np.argmax(tfmodel(concat_test_data).numpy(), axis=1)
-tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
-print("TF test errs=", tf_test_errs)
-
-#%%
-
 ################################################################################
 # World-Frame LSTM
 ################################################################################
@@ -757,7 +465,6 @@ import sklearn.preprocessing
 from sklearn.preprocessing import MinMaxScaler
 #%%
 win_size = 4
-num_classes = len(MOTION_MODEL)
 
 # For type hint. Seems that sklearn's "Scalers" don't have a single superclass
 # that has a transform() method, unless I'm missing something. So I'm doing a
@@ -837,7 +544,7 @@ lstm_model.summary()
 
 lstm_model.compile(optimizer='adam', loss='mse')#tf_loss_fn)
 #%%
-lstm_model.fit(train_translations_in, train_translations_out, epochs=33)
+lstm_model.fit(train_translations_in, train_translations_out, epochs=32)
 
 
 #%%
@@ -929,7 +636,7 @@ jav_lstm_model.summary()
 
 jav_lstm_model.compile(optimizer='adam', loss='mse')#tf_loss_fn)
 #%%
-jav_lstm_model.fit(train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=15)
+jav_lstm_model.fit(train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=32)
 
 #%% Test on test data.
 test_jav_in, test_jav_out = rnnDataWindows(
@@ -955,22 +662,13 @@ print("JAV LSTM score:", jav_lstm_test_errs.mean())
 # Comparing Error Histograms
 ################################################################################
 
-big_tree_preds = big_tree.predict(concat_test_data)
-tree_errs_for_plt = getErrorPerSkip(
-    concat_test_errs, big_tree_preds, s_ind_dict
-)
-acc_only_preds = np.full_like(
-    big_tree_preds, motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
-)
-acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
-
+import matplotlib.pyplot as plt
 
 bar_skip_key = 'skip2'
 bar_data = [
-    tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[s_ind_dict[bar_skip_key]], jav_lstm_test_errs
+    bcs_test_errs[s_ind_dict[bar_skip_key]], lstm_test_errs, jav_lstm_test_errs
 ]
-bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM']
+bar_labels = ['JAV NN', 'Global LSTM', 'JAV LSTM']
 for i, arr in enumerate(bar_data):
     if arr.ndim > 1 and arr.shape[1] == 1:
         bar_data[i] = arr.flatten()
