@@ -950,6 +950,23 @@ jav_lstm_test_errs = np.linalg.norm(
 print("JAV LSTM score:", jav_lstm_test_errs.mean())
 
 #%%
+from sklearn.linear_model import LinearRegression
+
+jav_train_flatter = train_jav_in[:, -1, -3:].reshape(train_jav_in.shape[0], 3)
+jav_test_flatter = test_jav_in[:, -1, -3:].reshape(test_jav_in.shape[0], 3)
+jav_lin_reg = LinearRegression()
+jav_lin_reg.fit(jav_train_flatter, train_jav_out[:, -3:])
+
+#%%
+jav_lin_pred = jav_lin_reg.predict(jav_test_flatter)
+
+scaled_jav_lin_test_pred = jav_scaler_3.inverse_transform(jav_lin_pred)
+jav_lin_test_errs = np.linalg.norm(
+    scaled_jav_lin_test_pred - jav_scaled_lstm_gt, axis=-1
+)
+print("JAV lin score:", jav_lin_test_errs.mean())
+
+#%%
 
 ################################################################################
 # Comparing Error Histograms
@@ -968,9 +985,10 @@ acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
 bar_skip_key = 'skip2'
 bar_data = [
     tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[s_ind_dict[bar_skip_key]], jav_lstm_test_errs
+    bcs_test_errs[s_ind_dict[bar_skip_key]], jav_lstm_test_errs, 
+    error_lim_all[bar_skip_key]
 ]
-bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM']
+bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM', 'Class lim']
 for i, arr in enumerate(bar_data):
     if arr.ndim > 1 and arr.shape[1] == 1:
         bar_data[i] = arr.flatten()
