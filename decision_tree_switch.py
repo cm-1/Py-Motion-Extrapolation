@@ -231,7 +231,8 @@ print("Test data:", test_best_seq_means)
 # Type hint for a dict with string keys and items that are either (int, int)
 # intervals or a bool numpy array of indices.
 IndDict = typing.Dict[
-    str, typing.Union[typing.Tuple[int,int], NDArray[np.bool]]
+    str, 
+    typing.Union[typing.Tuple[int,int], NDArray] # NDArray holds bool indices.
 ]
 
 # Gets the per-frame pose error in millimeters for a set of "labels" which 
