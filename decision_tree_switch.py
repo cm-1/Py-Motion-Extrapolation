@@ -953,15 +953,21 @@ test_jav_in, test_jav_out = rnnDataWindows(
 
 jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
 
-
+def getErrsLSTM(scaler, unscaled_preds, scaled_gt):
+    scaled_preds = scaler.inverse_transform(unscaled_preds)
+    return np.linalg.norm(scaled_preds - scaled_gt, axis=-1)
 
 # Transform the coordinates back into non-normalized form to get the errors
 # in millimeters.
-jav_scaler_3 = jav_scalers_3[jav_lstm_skip]
-scaled_lstm_jav_test_pred = jav_scaler_3.inverse_transform(jav_lstm_test_pred)
-jav_scaled_lstm_gt = jav_scaler_3.inverse_transform(test_jav_out[:, -3:])
-jav_lstm_test_errs = np.linalg.norm(
-    scaled_lstm_jav_test_pred - jav_scaled_lstm_gt, axis=-1
+jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
+    test_jav_out[:, -3:]
+)
+
+jav_scaled_lstm_gt_train = jav_scalers_3[jav_lstm_skip].inverse_transform(
+    train_jav_out[:, -3:]
+)
+jav_lstm_test_errs = getErrsLSTM(
+    jav_scalers_3[jav_lstm_skip], jav_lstm_test_pred, jav_scaled_lstm_gt_test
 )
 print("JAV LSTM score:", jav_lstm_test_errs.mean())
 
@@ -970,17 +976,39 @@ from sklearn.linear_model import LinearRegression
 
 jav_train_flatter = train_jav_in[:, -1, -3:].reshape(train_jav_in.shape[0], 3)
 jav_test_flatter = test_jav_in[:, -1, -3:].reshape(test_jav_in.shape[0], 3)
-jav_lin_reg = LinearRegression()
+jav_lin_reg = LinearRegression()#fit_intercept=False)
 jav_lin_reg.fit(jav_train_flatter, train_jav_out[:, -3:])
 
 #%%
-jav_lin_pred = jav_lin_reg.predict(jav_test_flatter)
+jav_lin_test_pred = jav_lin_reg.predict(jav_test_flatter)
 
-scaled_jav_lin_test_pred = jav_scaler_3.inverse_transform(jav_lin_pred)
-jav_lin_test_errs = np.linalg.norm(
-    scaled_jav_lin_test_pred - jav_scaled_lstm_gt, axis=-1
+jav_lin_test_errs = getErrsLSTM(
+    jav_scalers_3[jav_lstm_skip], jav_lin_test_pred, jav_scaled_lstm_gt_test
 )
+
 print("JAV lin score:", jav_lin_test_errs.mean())
+
+#%%
+
+print("Linear JAV coefs:")
+print(np.round(jav_lin_reg.coef_, 2))
+print("Linear JAV intercept:")
+
+print(np.round(jav_lin_reg.intercept_, 2))
+
+
+#%%
+
+vel_preds = np.zeros_like(jav_test_flatter)
+vel_preds[:, 0] = np.linalg.norm(jav_test_flatter, axis=-1)
+
+
+vel_scores = getErrsLSTM(
+    jav_scalers_3[jav_lstm_skip], vel_preds, jav_scaled_lstm_gt_test
+)
+
+print(vel_scores.mean())
+
 
 #%%
 
