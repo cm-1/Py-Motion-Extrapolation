@@ -750,6 +750,9 @@ print("TF test errs=", tf_test_errs)
 
 
 #%%
+################################################################################
+# Comparing Error Histograms
+################################################################################
 import matplotlib.pyplot as plt
 
 big_tree_preds = big_tree.predict(concat_test_data)
