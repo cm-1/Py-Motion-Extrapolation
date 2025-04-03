@@ -288,6 +288,7 @@ mc.set_y_errs(y_errs_reshape)
 
 # Find the "lower bound" for error when we train a classifier to use the physics
 # models for prediction, by finding pose MAE for perfect classification.
+error_lim_all = getErrorPerSkip(concat_test_errs, concat_test_labels, s_ind_dict)
 error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
 print("Classification MAE limit:", error_lim)
 
@@ -436,10 +437,10 @@ ComboList = typing.List[gtc.Combo]
 # time and the position at the next time in this frame.
 # Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
 # by frame skip amount and by combo.
-def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
+def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
     all_data = [dict() for _ in range(3)] # Empty dict for each skip amount.
 
-    skip_end = 1 if onlySkip0 else 3
+    skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
         calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
         all_translations = calc_obj.getTranslationsGTNP(False)
@@ -888,35 +889,46 @@ print("LSTM err when all points translated by same amount:", shift_lstm_errs.mea
 # combo so that we know the starting and ending points for a video's data and,
 # thus, can create our data windows without having a window erroneously overlap
 # two separate videos.
-all_jav = dataForCombosJAV(nametup_combos, True)[0]
+all_jav = dataForCombosJAV(nametup_combos)
 
-# While we'll keep data separated by combo, we'll combine our per-combo columns,
-# currently split up as separate dict entries, into single numpy arrays.
-all_jav = {
+# While we'll keep data separated by skip amount and by combo, we'll combine our
+# per-combo columns, currently split up as separate dict entries, into single 
+# numpy arrays.
+all_jav = [{
     _combo: np.stack([col_data for _, col_data in _combo_data.items()], axis=-1) 
-    for _combo, _combo_data in all_jav.items()
-}
+    for _combo, _combo_data in aj.items()
+} for aj in all_jav]
 
-# We'll *temporarily* combine the data for all combos into a single numpy array,
-# but that will just be to fit the Scaler used to normalize the data.
-all_jav_concat = np.concatenate(
-    [all_jav[c[:2]] for c in combos], axis=0
-)
-# Scaler for all data columns.
-jav_scaler = MinMaxScaler(feature_range=(0,1))
-jav_scaler.fit(all_jav_concat)
-# Scaler for just the last three columns, the "displacement" ones.
-jav_scaler_3 = MinMaxScaler(feature_range=(0,1))
-jav_scaler_3.fit(all_jav_concat[..., -3:])
-# We no longer need all_jav_concat, and it might take up a fair bit of RAM.
-del all_jav_concat
+jav_scalers = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
+jav_scalers_3 = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
+
+for skip in range(3):
+    # We'll *temporarily* combine the data for all combos into a single numpy
+    # array, but that will just be to fit the Scaler used to normalize the data.
+    all_jav_concat = np.concatenate(
+        [all_jav[skip][c[:2]] for c in combos], axis=0
+    )
+    # Scaler for all data columns.
+    jav_scalers[skip].fit(all_jav_concat)
+    # Scale all 3 axes by uniform amount and centre to 0 for later simplicity
+    jav_scalers[skip].scale_[-3:] = jav_scalers[skip].scale_[-1]
+    jav_scalers[skip].min_[-3:] = 0.0
+
+    # Scaler for just the last three columns, the "displacement" ones.
+    jav_scalers_3[skip].fit(all_jav_concat[:, -3:])
+    # Ensure this scaler matches the other one.
+    jav_scalers_3[skip].scale_[-3:] = jav_scalers[skip].scale_[-1]
+    jav_scalers_3[skip].min_[-3:] = 0.0
+    # We no longer need all_jav_concat, and it might take up a fair bit of RAM.
+    del all_jav_concat
 
 #%% Get data windows
 
 jav_lstm_skip = 2
 
 train_jav_in, train_jav_out = rnnDataWindows(
-    all_jav, train_combos, win_size, jav_scaler, jav_lstm_skip
+    all_jav[jav_lstm_skip], train_combos, win_size, jav_scalers[jav_lstm_skip], 
+    0 # Always a skip of 0 in this case because the frame is rotating...
 )
 
 #%%
@@ -934,7 +946,9 @@ jav_lstm_model.fit(train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=15)
 
 #%% Test on test data.
 test_jav_in, test_jav_out = rnnDataWindows(
-    all_jav, test_combos, win_size, jav_scaler, jav_lstm_skip
+    all_jav[jav_lstm_skip], test_combos, win_size, jav_scalers[jav_lstm_skip], 
+    0 # Always a skip of 0 in this case because the frame is rotating...
+
 )
 
 jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
@@ -943,6 +957,7 @@ jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
 
 # Transform the coordinates back into non-normalized form to get the errors
 # in millimeters.
+jav_scaler_3 = jav_scalers_3[jav_lstm_skip]
 scaled_lstm_jav_test_pred = jav_scaler_3.inverse_transform(jav_lstm_test_pred)
 jav_scaled_lstm_gt = jav_scaler_3.inverse_transform(test_jav_out[:, -3:])
 jav_lstm_test_errs = np.linalg.norm(
