@@ -436,10 +436,10 @@ ComboList = typing.List[gtc.Combo]
 # time and the position at the next time in this frame.
 # Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
 # by frame skip amount and by combo.
-def dataForCombosJAV(combos: ComboList, onlySkip0: bool = False):
+def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
     all_data = [dict() for _ in range(3)] # Empty dict for each skip amount.
 
-    skip_end = 1 if onlySkip0 else 3
+    skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
         calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
         all_translations = calc_obj.getTranslationsGTNP(False)
