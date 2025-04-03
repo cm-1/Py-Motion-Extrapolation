@@ -11,7 +11,7 @@ from sklearn import tree as sk_tree
 from sklearn.tree._tree import TREE_LEAF
 from sklearn.model_selection import train_test_split
 
-from custom_tree.weighted_impurity import WeightedErrorCriterion
+# from custom_tree.weighted_impurity import WeightedErrorCriterion
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
@@ -280,11 +280,11 @@ s_ind_dict["all"] = None # Because my_np_array[None] returns all elements.
 s_train_ind_dict = {"skip" + str(i): s_train_inds[i] for i in range(3)}
 s_train_ind_dict["all"] = None
 
-mc = WeightedErrorCriterion(1, np.array([len(MOTION_MODEL)], dtype=np.intp))
-y_errs_reshape = concat_train_errs.reshape((
-    concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
-))
-mc.set_y_errs(y_errs_reshape)
+#mc = WeightedErrorCriterion(1, np.array([len(MOTION_MODEL)], dtype=np.intp))
+#y_errs_reshape = concat_train_errs.reshape((
+#    concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
+#))
+#mc.set_y_errs(y_errs_reshape)
 
 # Find the "lower bound" for error when we train a classifier to use the physics
 # models for prediction, by finding pose MAE for perfect classification.
@@ -295,7 +295,83 @@ print("Classification MAE limit:", error_lim)
 # A tree depth of 8 is already way beyond "human-readable", and I think the
 # graphs don't show miraculous improvements past 8, so 8 seems like a good max.
 max_depth = 8
+#%%
+import autosklearn.classification
+import datetime
 
+del cfc
+del results
+del all_motion_data
+del min_norm_labels
+del err_norm_lists
+
+del train_data
+del train_errs
+del train_labels
+del test_data
+del test_errs
+del test_labels
+
+concat_train_data = concat_train_data.astype(np.float32)
+concat_test_data = concat_test_data.astype(np.float32)
+
+
+auto_train_seconds = 3600*24
+
+
+
+import psutil
+avail_mem_bytes = psutil.virtual_memory().available
+avail_mem_mb = avail_mem_bytes / (1024*1024)
+avail_mem_90 = int(0.9 * avail_mem_bytes)
+avail_mem_08g = avail_mem_bytes - int(0.8 * (1024**3))
+avail_mem_safe = max(avail_mem_90, avail_mem_08g)
+avail_mem_safe_mb = avail_mem_safe // (1024*1024)
+
+# Use a max of 8GB for now.
+# I'm concerned that more leads to overfitting.
+avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
+
+automl = autosklearn.classification.AutoSklearnClassifier(auto_train_seconds, memory_limit=avail_mem_safe_mb, max_models_on_disc=32, tmp_folder='./astemp', delete_tmp_folder_after_terminate=False)
+auto_start_time = datetime.datetime.now()
+auto_start_str = "{}:{}".format(
+    auto_start_time.hour, auto_start_time.minute
+)
+
+print("Using {}/{} available MB.".format(
+    automl.memory_limit, avail_mem_mb
+))
+print("Auto-sklearn fit started at {} and will last {} seconds!".format(
+    auto_start_str, automl.time_left_for_this_task
+))
+
+automl.fit(concat_train_data.T, concat_train_labels)
+print("Done auto-sklearn fit!")
+import pickle
+
+auto_fname = "auto-{:%Y-%m-%d_%H-%M-%S}.pickle".format(datetime.datetime.now())
+pickle.dump(automl, open(auto_fname, "wb"))
+asklabs = automl.predict(concat_test_data.T)
+auto_test_score = assessPredError(concat_test_errs, asklabs, s_ind_dict)
+print(auto_test_score)
+print(automl.leaderboard())
+import pprint
+pprint.pp(automl.show_models())
+automl.sprint_statistics()
+
+auto_summary_str = ''
+auto_summary_str += str(auto_test_score) + '\n'
+auto_summary_str += str(automl.leaderboard()) + '\n'
+auto_summary_str += str(automl.show_models()) + '\n'
+auto_summary_str += str(automl.sprint_statistics())
+
+t_fname = 't_' + auto_fname + '.txt'
+with open(t_fname, 'w') as f:
+    f.write(auto_summary_str)
+
+print("Done automl stuff!")
+
+raise Exception("Stopping after automl stuff for now!")
 
 #%% Training decision tree at max depth.
 # ---
