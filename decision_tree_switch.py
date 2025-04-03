@@ -288,6 +288,7 @@ mc.set_y_errs(y_errs_reshape)
 
 # Find the "lower bound" for error when we train a classifier to use the physics
 # models for prediction, by finding pose MAE for perfect classification.
+error_lim_all = getErrorPerSkip(concat_test_errs, concat_test_labels, s_ind_dict)
 error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
 print("Classification MAE limit:", error_lim)
 
@@ -751,7 +752,7 @@ print("TF test errs=", tf_test_errs)
 #%%
 import matplotlib.pyplot as plt
 
-big_tree_preds = big_tree.predict(concat_test_data.T)
+big_tree_preds = big_tree.predict(concat_test_data)
 tree_errs_for_plt = getErrorPerSkip(
     concat_test_errs, big_tree_preds, s_ind_dict
 )
@@ -764,9 +765,9 @@ acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
 bar_skip_key = 'skip2'
 bar_data = [
     tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[s_ind_dict[bar_skip_key]]
+    bcs_test_errs[s_ind_dict[bar_skip_key]], error_lim_all[bar_skip_key]
 ]
-bar_labels = ['Tree', 'Acc Only', 'JAV NN']
+bar_labels = ['Tree', 'Acc Only', 'JAV NN', "Classification lim"]
 for i, arr in enumerate(bar_data):
     if arr.ndim > 1 and arr.shape[1] == 1:
         bar_data[i] = arr.flatten()
