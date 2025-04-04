@@ -21,6 +21,7 @@ class ErrStats(typing.NamedTuple):
     avg_dist_from_mean: float
     avg_sq_dist_from_mean: float
     cov_mat: NDArray
+    mean_mag: float
 
 class LocalizedErrsCollection(typing.NamedTuple):
     wrt_world: NDArray
@@ -126,10 +127,11 @@ def getStats(errs: NDArray):
     det = np.linalg.det(cov)
     # if np.abs(det - np.prod(eigVals)) > 0.0001:
     #     raise Exception("Determinant not as expected!")
+    mean_mag = np.linalg.norm(errs, axis=-1).mean()
 
     return ErrStats(
         mean, mc, std_dev, len(errs), eigVals, eigVecs, det,
-        avg_dist, avg_sq_dist, cov
+        avg_dist, avg_sq_dist, cov, mean_mag
     )
 
 
@@ -198,6 +200,6 @@ def formattedErrStats(stats: ErrStats, name: str, indent_spaces: int,
         fs += "\n"
     fs += tab + "  - Eigenvectors:\n"
     for eig_ind in eig_order:
-        fs += tab + "    " + formatVec(stats.eigvecs[eig_ind])
+        fs += tab + "    " + formatVec(stats.eigvecs[eig_ind]) + "\n"
     
     return fs

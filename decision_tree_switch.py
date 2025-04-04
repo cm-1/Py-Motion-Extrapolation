@@ -429,7 +429,7 @@ from sklearn.preprocessing import StandardScaler
 # we predict for the next timestamp.
 
 ComboList = typing.List[gtc.Combo]
-
+PerComboJAV = typing.List[typing.Dict[gtc.Combo, typing.Dict[str, NDArray]]]
 # For each frame of video, we consider a coordinate frame where one axis is
 # aligned with the object's velocity and another is aligned with the
 # acceleration (or, at least, the part of it orthogonal to velocity).
@@ -437,16 +437,22 @@ ComboList = typing.List[gtc.Combo]
 # time and the position at the next time in this frame.
 # Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
 # by frame skip amount and by combo.
-def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
-    all_data = [dict() for _ in range(3)] # Empty dict for each skip amount.
+def dataForCombosJAV(combos: ComboList, return_world2locals = False, 
+                     return_translations = False):
+    # Empty dict for each skip amount.
+    all_data: PerComboJAV = [dict() for _ in range(3)]
+    all_world2local_mats: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+        [dict() for _ in range(3)]
+    all_translations: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+        [dict() for _ in range(3)]
 
     skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
         calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
-        all_translations = calc_obj.getTranslationsGTNP(False)
+        curr_translations = calc_obj.getTranslationsGTNP(False)
         for skip in range(skip_end):
             step = skip + 1
-            translations = all_translations[::step]
+            translations = curr_translations[::step]
             vels = np.diff(translations, axis=0)
             # We need a velocity for the last timestep, but not an acceleration,
             # because we need the vectors that take each current position to
@@ -495,12 +501,37 @@ def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
             }
 
             all_data[skip][c] = c_res
+            if return_world2locals:
+                all_world2local_mats[skip][c] = mats
+            if return_translations:
+                all_translations[skip][c] = translations
+    if return_world2locals or return_translations:
+        res = (all_data, )
+        if return_world2locals:
+            res += (all_world2local_mats, )
+        if return_translations:
+            res += (all_translations, )
+        return res
     return all_data
 
 # Function that combines the results of the previous one into a 2D numpy
 # array.
-def dataForComboSplitJAV(combos: ComboList, train_combos: ComboList, test_combos: ComboList):    
-    all_data = dataForCombosJAV(combos)
+# List[Dict]
+def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
+                         combos: typing.Optional[ComboList] = None, 
+                         precalc_per_combo: typing.Optional[PerComboJAV] = None):   
+    if combos is None and precalc_per_combo is None:
+        raise ValueError(
+            "Cannot have combos and precalc_per_combo both be None!"
+        )
+    elif combos is not None and precalc_per_combo is not None:
+        raise ValueError(
+            "Cannot provide values for both  combos and precalc_per_combo!"
+        )
+     
+    all_data = precalc_per_combo
+    if precalc_per_combo is None:
+        all_data = dataForCombosJAV(combos)
     
     key_ord = [
         'v', 'a_p', 'a_o', 'j_v', 'j_a', 'j_cross', 'd_v', 'd_a', 'd_cross'
@@ -547,6 +578,19 @@ def poseLossJAV(y_true, y_pred):
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
+
+def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+    disp = np.empty((len(y_true), 3))
+    # Calculating the local displacement is the same as custom tf loss function.
+    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 2]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 2]
+
+    # Convert local displacement into world displacement.
+    local2worlds = np.swapaxes(world2locals, -1, -2)
+    return pm.einsumMatVecMul(local2worlds, disp) 
+
 #%%
 # A lot of the features we calculated might be collinear (especially since a lot 
 # of very similar features were tried for the decision tree) we'll remove the
@@ -611,8 +655,12 @@ bcs_model.summary()
 bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
 # Get local-frame data.
+bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
+    nametup_combos, True, True
+)
+
 bcs_train, bcs_test = dataForComboSplitJAV(
-    nametup_combos, train_combos, test_combos
+    train_combos, test_combos, precalc_per_combo=bcs_per_combo
 )
 
 # Convert from numpy array to tf tensor.
@@ -633,6 +681,79 @@ bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
 print(bcs_test_scores)
 #%%
+import errorstats as es
+nonco_col_nums = np.where(nonco_cols)[0]
+motion_data_key_subset = [motion_data_keys[i] for i in nonco_col_nums]
+
+all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+for combo in combos:
+    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
+    all_rotation_mats_T[combo[:2]] = np.swapaxes(
+        calculator.getRotationMatsGTNP(False), -1, -2
+    ) # transposes
+#%%
+print("Starting the confidence interval stuff.")
+
+# TODO: Replace motion-kind str with an enum in here and other files.
+motion_kinds_plus = motion_kinds + ["all"]
+reframed_JAV_errs: typing.List[typing.Dict[str, NDArray]] = [
+    {mk: [] for mk in motion_kinds_plus} for _ in range(3)
+]
+
+for skip in range(3):
+    for combo in test_combos:
+        c2 = combo[:2]
+        curr_input_dict = all_motion_data[skip][c2]
+        curr_input = np.stack(
+            [curr_input_dict[k] for k in motion_data_key_subset], axis=-1
+        )
+        curr_input = bcs_scalar.transform(curr_input)
+
+        curr_jav_pred = bcs_model.predict(
+            curr_input, batch_size=1024, verbose=0
+        )
+
+        curr_bcs_data = dataForComboSplitJAV(
+            [c2], [c2], precalc_per_combo=bcs_per_combo[skip:(skip+1)]
+        )[0]
+
+        world_disp = getWorldFrameDisplacements(
+            curr_bcs_data, curr_jav_pred, w2ls_JAV[skip][c2]
+        )
+        curr_translations = translations_JAV[skip][c2]
+        in_translations = curr_translations[-(len(world_disp) + 1):-1]
+        jav_pred = in_translations + world_disp
+
+        curr_jav_errs = es.localizeErrsInFrames(
+            {"JAV": jav_pred}, curr_translations[1:], 
+            all_rotation_mats_T[c2][::(skip+1)][1:]
+        )["JAV"]
+
+        reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
+        reframed_JAV_errs[skip]["all"].append(curr_jav_errs)
+        progress_str = "\rskip {}, ctrl ({:2},{:2})".format(
+            skip, c2[0], c2[1]
+        )
+        print(progress_str, end = '', flush=True)
+#%%
+world_field = es.LocalizedErrsCollection._fields[0]
+for skip in range(3):
+    print("\nSkip {}:".format(skip))
+
+    for mk in motion_kinds_plus:
+        curr_jav_errs = np.concatenate(reframed_JAV_errs[skip][mk], axis=1)
+
+        stats = {
+            f: es.getStats(curr_jav_errs[i])
+            for i, f in enumerate(es.LocalizedErrsCollection._fields)
+        }
+        print("  {} (score {:0.4f}):".format(mk, stats[world_field].mean_mag))
+        for name, stat in stats.items():
+            print(es.formattedErrStats(stat, name, 4, stats[world_field]))
+        print()
+
+
+
 
 #%% 
 
@@ -674,8 +795,6 @@ scramble_rank = np.argsort(scramble_scores, axis=0)[::-1]
 print("Most important feature inds:", scramble_rank[:10], sep='\n')
     
 
-#%%
-nonco_col_nums = np.where(nonco_cols)[0]
 
 
 #%%
