@@ -640,8 +640,8 @@ nonco_test_data = concat_test_data[:, nonco_cols]
 # %%
 
 
-# Custom importance weighting layer
-# Class written by ChatGPT and then manually verified.
+# Custom importance weighting layer suggested/described "in theory" by a friend.
+# Then, I had the class written by ChatGPT and manually verified.
 # (But I'm not a big tensorflow expert, so maybe my verification was faulty...)
 class ImportanceLayer(tf.keras.layers.Layer):
     def __init__(self, input_dim, weight_decay=1e-4, **kwargs):
@@ -751,7 +751,7 @@ for skip in range(3):
 
         reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
         reframed_JAV_errs[skip]["all"].append(curr_jav_errs)
-        progress_str = "\rskip {}, ctrl ({:2},{:2})".format(
+        progress_str = "\rProgress: skip {}, combo ({:2},{:2})".format(
             skip, c2[0], c2[1]
         )
         print(progress_str, end = '', flush=True)
