@@ -215,6 +215,7 @@ class FeaturesAndResultsForCombo:
     motion_data: typing.List[typing.Dict[MOTION_DATA_KEY_TYPE, NDArray]]
     err_norms: typing.List[typing.Dict[MOTION_MODEL, NDArray]]
     min_norm_labels: typing.List[NDArray]
+    min_norm_vecs: typing.List[NDArray]
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
 class CalcsForCombo:
@@ -306,13 +307,14 @@ class CalcsForCombo:
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
+        self.min_norm_vecs = [dict() for _ in range(3)]
         for i in range(3):
             for combo in self.combos:
                 res = results[combo]
                 self.all_motion_data[i][combo] = res.motion_data[i]
                 self.err_norm_lists[i][combo] = res.err_norms[i]
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
-
+                self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
     def getInputFeatures(self, combo: gtc.Combo,
                          check_key_completeness: bool = False):
@@ -334,6 +336,7 @@ class CalcsForCombo:
         motion_datas = []
         all_err_norms = []
         min_err_labels = []
+        min_err_vecs = []
 
         for step in range(1, 4):
             step_sq = step*step
@@ -602,6 +605,18 @@ class CalcsForCombo:
             curr_min_norm_labels = np.argmin(curr_err_norms, axis=0).flatten()
             motion_data[MOTION_DATA.LAST_BEST_LABEL] = curr_min_norm_labels[:-1]
 
+            curr_min_keys = [
+                self.motion_mod_keys[i] for i in curr_min_norm_labels[1:]
+            ]
+
+            curr_min_norm_vecs = np.array([
+                curr_errs_3D[k][i + 1] for i, k in enumerate(curr_min_keys)
+            ])
+
+            # curr_min_norm_vecs = np.take_along_axis(
+            #     curr_errs_3D[1:], curr_min_norm_labels[1:].reshape(-1, 1, 1),
+            #     axis=1
+            # )
             
             circ_vd1_ind = MOTION_MODEL.CIRC_VEL_DEG1.value - 1
             circ_vd2_ind = MOTION_MODEL.CIRC_VEL_DEG2.value - 1
@@ -767,9 +782,10 @@ class CalcsForCombo:
             motion_datas.append(motion_data)
             min_err_labels.append(curr_min_norm_labels[1:])
             all_err_norms.append(curr_err_norms_dict)
+            min_err_vecs.append(curr_min_norm_vecs)
 
         return (combo, FeaturesAndResultsForCombo(
-            motion_datas, all_err_norms, min_err_labels
+            motion_datas, all_err_norms, min_err_labels, min_err_vecs
         ))
         # all_motion_data[skip_amt][c2] = motion_data
         # err_norm_lists[skip_amt][c2] = curr_err_norms_dict

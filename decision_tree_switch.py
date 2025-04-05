@@ -724,6 +724,10 @@ reframed_JAV_errs: typing.List[typing.Dict[str, NDArray]] = [
     {mk: [] for mk in motion_kinds_plus} for _ in range(3)
 ]
 
+lim_class_errs: typing.List[typing.Dict[str, NDArray]] = [
+    {mk: [] for mk in motion_kinds_plus} for _ in range(3)
+]
+
 for skip in range(3):
     for combo in test_combos:
         c2 = combo[:2]
@@ -744,35 +748,48 @@ for skip in range(3):
         in_translations = curr_translations[-(len(world_disp) + 1):-1]
         jav_pred = in_translations + world_disp
 
+        curr_rotation_mats = all_rotation_mats_T[c2][::(skip+1)]
         curr_jav_errs = es.localizeErrsInFrames(
             {"JAV": jav_pred}, curr_translations[1:], 
-            all_rotation_mats_T[c2][::(skip+1)][1:]
+            curr_rotation_mats[1:]
         )["JAV"]
+
+        # class_lim_start_ind = -(len(curr_min_norm_vecs) + 1)
+        curr_min_norm_vecs = cfc.min_norm_vecs[skip][c2] \
+            + curr_translations[-len(world_disp):]
+        
+        curr_class_lim_errs = es.localizeErrsInFrames(
+            {"Class Lim":  curr_min_norm_vecs},
+            curr_translations[1:], curr_rotation_mats[1:]
+        )["Class Lim"]
 
         reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
         reframed_JAV_errs[skip]["all"].append(curr_jav_errs)
+        lim_class_errs[skip][combo[-1]].append(curr_class_lim_errs)
+        lim_class_errs[skip]["all"].append(curr_class_lim_errs)
         progress_str = "\rProgress: skip {}, combo ({:2},{:2})".format(
             skip, c2[0], c2[1]
         )
         print(progress_str, end = '', flush=True)
 #%%
-world_field = es.LocalizedErrsCollection._fields[0]
-for skip in range(3):
-    print("\nSkip {}:".format(skip))
+def printErrStats3D(errs: typing.List[typing.Dict[str, NDArray]]):
+    world_field = es.LocalizedErrsCollection._fields[0]
+    for skip in range(3):
+        print("\nSkip {}:".format(skip))
 
-    for mk in motion_kinds_plus:
-        curr_jav_errs = np.concatenate(reframed_JAV_errs[skip][mk], axis=1)
+        for mk in motion_kinds_plus:
+            curr_errs = np.concatenate(errs[skip][mk], axis=1)
 
-        stats = {
-            f: es.getStats(curr_jav_errs[i])
-            for i, f in enumerate(es.LocalizedErrsCollection._fields)
-        }
-        print("  {} (score {:0.4f}):".format(mk, stats[world_field].mean_mag))
-        for name, stat in stats.items():
-            print(es.formattedErrStats(stat, name, 4, stats[world_field]))
-        print()
+            stats = {
+                f: es.getStats(curr_errs[i])
+                for i, f in enumerate(es.LocalizedErrsCollection._fields)
+            }
+            print("  {} (score {:0.4f}):".format(mk, stats[world_field].mean_mag))
+            for name, stat in stats.items():
+                print(es.formattedErrStats(stat, name, 4, stats[world_field]))
+            print()
 
-
+printErrStats3D(reframed_JAV_errs)
 
 
 #%% 
