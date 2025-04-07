@@ -155,8 +155,8 @@ for skip_amt in range(3):
     for pk in prediction_kinds:
         print("  " + pk + ":")
         for mk in motion_kinds_plus:
-            print("    " + mk + ":")
             world_stats = world_stats_struct[skip_amt][pk][mk]
+            print("    {} (score {:0.4f}):".format(mk, world_stats.mean_mag))
             local_stats = local_stats_struct[skip_amt][pk][mk]
             vel_deg1_stats = vel_deg1_stats_struct[skip_amt][pk][mk]
             vel_deg2_stats = vel_deg2_stats_struct[skip_amt][pk][mk]

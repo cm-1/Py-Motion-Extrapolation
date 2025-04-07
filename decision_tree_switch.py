@@ -422,13 +422,21 @@ import tensorflow as tf
 import keras
 import posemath as pm # Small "library" I wrote for vector operations.
 from sklearn.preprocessing import StandardScaler
+from enum import Enum
 
 # We will start off the neural net code by constructing a regression network
 # that predicts multipliers for velocity, acceleration, and jerk that we will
 # use to construct the displacement from the current position to the position
 # we predict for the next timestamp.
 
+class JAV(Enum):
+    VELOCITY = 1
+    ACCELERATION = 2
+    JERK = 3
+
 ComboList = typing.List[gtc.Combo]
+PerComboJAV = typing.List[typing.Dict[gtc.Combo, typing.Dict[str, NDArray]]]
+OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 # For each frame of video, we consider a coordinate frame where one axis is
 # aligned with the object's velocity and another is aligned with the
@@ -437,16 +445,26 @@ ComboList = typing.List[gtc.Combo]
 # time and the position at the next time in this frame.
 # Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
 # by frame skip amount and by combo.
-def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
-    all_data = [dict() for _ in range(3)] # Empty dict for each skip amount.
-
+def dataForCombosJAV(combos: ComboList, return_world2locals: bool = False, 
+                     return_translations: bool = False, 
+                     vec_order: typing.Optional[OrderForJAV] = None):
+    # Empty dict for each skip amount.
+    all_data: PerComboJAV = [dict() for _ in range(3)]
+    all_world2local_mats: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+        [dict() for _ in range(3)]
+    all_translations: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+        [dict() for _ in range(3)]
+    
+    if len(vec_order) != 3 or {v.value for v in vec_order} != {1, 2, 3}:
+        raise ValueError("Vector order must be a permutation of (velocity, acceleration, jerk)!")
+    
     skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
         calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
-        all_translations = calc_obj.getTranslationsGTNP(False)
+        curr_translations = calc_obj.getTranslationsGTNP(False)
         for skip in range(skip_end):
             step = skip + 1
-            translations = all_translations[::step]
+            translations = curr_translations[::step]
             vels = np.diff(translations, axis=0)
             # We need a velocity for the last timestep, but not an acceleration,
             # because we need the vectors that take each current position to
@@ -456,28 +474,41 @@ def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
             accs = np.diff(vels[:-1], axis=0)
             jerks = np.diff(accs, axis=0)
 
+            # Here we specify which order in which we orthonormalize our
+            # velocity, acceleration, and jerk vectors into orthonormal frames.
+            # The first-chosen of these gets aligned exactly with an axis, while
+            # the others only get orthogonal components aligned with an axis.
+            
             # To only calculate as much as we need, we clip the arrays' fronts
             # off when we can.
-            speeds = np.linalg.norm(vels[2:-1], axis=-1)
-            unit_vels = pm.safelyNormalizeArray(vels[2:-1], speeds[:, np.newaxis])
-            # Find the magnitude of the velocity that is parallel to and
-            # orthogonal to velocity.
-            acc_p = pm.einsumDot(accs[1:], unit_vels) # Parallel magnitude
-            acc_p_vecs = pm.scalarsVecsMul(acc_p, unit_vels) # Parallel vec3
-            acc_o_vecs = accs[1:] - acc_p_vecs # Orthogonal vec3
-            acc_o = np.linalg.norm(acc_o_vecs, axis=-1) # Orthogonal magnitude
+            default_ordered = (vels[2:-1], accs[1:], jerks)
+            ordered = copy.copy(default_ordered)
+            if vec_order is not None:
+                ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
 
-            unit_acc_o = pm.safelyNormalizeArray(acc_o_vecs, acc_o[:, np.newaxis])
+            mags0 = np.linalg.norm(ordered[0], axis=-1)
+            unit_vecs0 = pm.safelyNormalizeArray(
+                ordered[0], mags0[:, np.newaxis]
+            )
+            # Find the magnitude of the second vector that is parallel to and
+            # orthogonal to the first.
+            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
+            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
+            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
+            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-            # If velocity and the orthogonal acceleration form two axes of our
-            # coordinate frame, their cross product forms the third.
-            plane_orthos = np.cross(unit_vels, unit_acc_o)
+            unit_vecs_o1 = pm.safelyNormalizeArray(
+                vecs_o1, mags_o1[:, np.newaxis]
+            )
+
+            unit_vecs2 = np.cross(unit_vecs0, unit_vecs_o1)
             # We now have matrices to convert vectors in world space into
-            # these local velocity-aligned frames.
-            mats = np.stack([unit_vels, unit_acc_o, plane_orthos], axis=1)
+            # these local vector-aligned frames.
+            mats = np.stack([unit_vecs0, unit_vecs_o1, unit_vecs2], axis=1)
 
-            # Transform each jerk and to-next-frame into this frame via matmul.
-            local_jerks = pm.einsumMatVecMul(mats, jerks)
+            # Transform each third vector and to-next-frame displacement into
+            # this frame via matmul.
+            local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
 
             # We'll now return all of the data needed to convert velocity,
@@ -487,51 +518,75 @@ def dataForCombosJAV(combos: ComboList): #, onlySkip0: bool = False):
             # frame (a vector [speed, 0, 0]), the acceleration in this frame
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
-            c_res = {
-                'v': speeds, 'a_p': acc_p, 'a_o': acc_o, 
-                'j_v': local_jerks[:, 0], 'j_a': local_jerks[:, 1],
-                'j_cross': local_jerks[:, 2], 'd_v': local_diffs[:, 0],
-                'd_a': local_diffs[:, 1], 'd_cross': local_diffs[:, 2]
-            }
+            c_res = (
+                mags0, mags_p1, mags_o1, *(local_vecs2.T), *(local_diffs.T)
+            )
 
-            all_data[skip][c] = c_res
+            all_data[skip][c] = np.stack(c_res, axis=-1)
+            if return_world2locals:
+                all_world2local_mats[skip][c] = mats
+            if return_translations:
+                all_translations[skip][c] = translations
+    if return_world2locals or return_translations:
+        res = (all_data, )
+        if return_world2locals:
+            res += (all_world2local_mats, )
+        if return_translations:
+            res += (all_translations, )
+        return res
     return all_data
 
 # Function that combines the results of the previous one into a 2D numpy
 # array.
-def dataForComboSplitJAV(combos: ComboList, train_combos: ComboList, test_combos: ComboList):    
-    all_data = dataForCombosJAV(combos)
+# List[Dict]
+def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
+                         combos: typing.Optional[ComboList] = None, 
+                         precalc_per_combo: typing.Optional[PerComboJAV] = None):   
+    if combos is None and precalc_per_combo is None:
+        raise ValueError(
+            "Cannot have combos and precalc_per_combo both be None!"
+        )
+    elif combos is not None and precalc_per_combo is not None:
+        raise ValueError(
+            "Cannot provide values for both  combos and precalc_per_combo!"
+        )
+     
+    all_data = precalc_per_combo
+    if precalc_per_combo is None:
+        all_data = dataForCombosJAV(combos)
     
-    key_ord = [
-        'v', 'a_p', 'a_o', 'j_v', 'j_a', 'j_cross', 'd_v', 'd_a', 'd_cross'
-    ]
-    _, train_res = get2DArrayFromDataStruct(
-        concatForComboSubset(all_data, train_combos), key_ord, -1
+
+    train_res = np.concatenate(
+        concatForComboSubset(all_data, train_combos), axis=0
     )
-    _, test_res = get2DArrayFromDataStruct(
-        concatForComboSubset(all_data, test_combos), key_ord, -1
+    test_res = np.concatenate(
+        concatForComboSubset(all_data, test_combos), axis=0
     )
     return train_res, test_res
 
 # Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
 def poseLossJAV(y_true, y_pred):
     '''
-    Assumes y_true contains the following columns, in order:
+    When we create the "JAV" data, we specify the permutation of
+    (velocity, acceleration, jerk) to orthonormalize into frames. For simplicity
+    below, assume the order is in fact velocity, then acceleration, then jerk.
+
+    In that case, y_true contains the following columns, in order:
      - speed
      - accel parallel to velocity
      - accel ortho to velocity
      - jerk parallel to speed, ortho to speed but in acc plane, ortho to plane
      - correct pose displacement in the same "coordinate frame" as the jerk.
 
-    In other words, we are working in an orthonormal coordinate frame where one 
-    axis is aligned with velocity, another with acceleration, and then a third
+    In other words, we are working in an orthonormal coordinate frame where the 
+    x-axis is aligned with velocity, the y with acceleration, and then z is
     orthogonal to both.
     
-    Then, we assume y_pred contains the multipliers for velocity, acceleration,
-    and jerk. The predicted "local" displacement is thus:
-    [[speed, acc_p, jerk_v],       [vel_multiplier,
-     [0,     acc_o, jerk_a],     x  acc_multiplier,
-     [0,     0,     jerk_cross]]    jerk_multiplier]
+    Then, y_pred contains the multipliers for velocity, acceleration, and jerk, 
+    respectively. The predicted "local" displacement is thus:
+    [[speed, acc_x, jerk_x],       [vel_multiplier,
+     [0,     acc_y, jerk_y],     x  acc_multiplier,
+     [0,     0,     jerk_z]]        jerk_multiplier]
 
     Then after this matrix multiplication, we find the distance between it and
     the correct pose displacement, both vec3s.
@@ -547,6 +602,19 @@ def poseLossJAV(y_true, y_pred):
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
+
+def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+    disp = np.empty((len(y_true), 3))
+    # Calculating the local displacement is the same as custom tf loss function.
+    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 2]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 2]
+
+    # Convert local displacement into world displacement.
+    local2worlds = np.swapaxes(world2locals, -1, -2)
+    return pm.einsumMatVecMul(local2worlds, disp) 
+
 #%%
 # A lot of the features we calculated might be collinear (especially since a lot 
 # of very similar features were tried for the decision tree) we'll remove the
@@ -572,8 +640,8 @@ nonco_test_data = concat_test_data[:, nonco_cols]
 # %%
 
 
-# Custom importance weighting layer
-# Class written by ChatGPT and then manually verified.
+# Custom importance weighting layer suggested/described "in theory" by a friend.
+# Then, I had the class written by ChatGPT and manually verified.
 # (But I'm not a big tensorflow expert, so maybe my verification was faulty...)
 class ImportanceLayer(tf.keras.layers.Layer):
     def __init__(self, input_dim, weight_decay=1e-4, **kwargs):
@@ -611,8 +679,12 @@ bcs_model.summary()
 bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
 # Get local-frame data.
+bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
+    nametup_combos, True, True, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+)
+
 bcs_train, bcs_test = dataForComboSplitJAV(
-    nametup_combos, train_combos, test_combos
+    train_combos, test_combos, precalc_per_combo=bcs_per_combo
 )
 
 # Convert from numpy array to tf tensor.
@@ -633,6 +705,92 @@ bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
 print(bcs_test_scores)
 #%%
+import errorstats as es
+nonco_col_nums = np.where(nonco_cols)[0]
+motion_data_key_subset = [motion_data_keys[i] for i in nonco_col_nums]
+
+all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+for combo in combos:
+    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
+    all_rotation_mats_T[combo[:2]] = np.swapaxes(
+        calculator.getRotationMatsGTNP(False), -1, -2
+    ) # transposes
+#%%
+print("Starting the confidence interval stuff.")
+
+# TODO: Replace motion-kind str with an enum in here and other files.
+motion_kinds_plus = motion_kinds + ["all"]
+reframed_JAV_errs: typing.List[typing.Dict[str, NDArray]] = [
+    {mk: [] for mk in motion_kinds_plus} for _ in range(3)
+]
+
+lim_class_errs: typing.List[typing.Dict[str, NDArray]] = [
+    {mk: [] for mk in motion_kinds_plus} for _ in range(3)
+]
+
+for skip in range(3):
+    for combo in test_combos:
+        c2 = combo[:2]
+        curr_input_dict = all_motion_data[skip][c2]
+        curr_input = np.stack(
+            [curr_input_dict[k] for k in motion_data_key_subset], axis=-1
+        )
+        curr_input = bcs_scalar.transform(curr_input)
+
+        curr_jav_pred = bcs_model.predict(
+            curr_input, batch_size=1024, verbose=0
+        )
+
+        world_disp = getWorldFrameDisplacements(
+            bcs_per_combo[skip][c2], curr_jav_pred, w2ls_JAV[skip][c2]
+        )
+        curr_translations = translations_JAV[skip][c2]
+        in_translations = curr_translations[-(len(world_disp) + 1):-1]
+        jav_pred = in_translations + world_disp
+
+        curr_rotation_mats = all_rotation_mats_T[c2][::(skip+1)]
+        curr_jav_errs = es.localizeErrsInFrames(
+            {"JAV": jav_pred}, curr_translations[1:], 
+            curr_rotation_mats[1:]
+        )["JAV"]
+
+        # class_lim_start_ind = -(len(curr_min_norm_vecs) + 1)
+        curr_min_norm_vecs = cfc.min_norm_vecs[skip][c2] \
+            + curr_translations[-len(world_disp):]
+        
+        curr_class_lim_errs = es.localizeErrsInFrames(
+            {"Class Lim":  curr_min_norm_vecs},
+            curr_translations[1:], curr_rotation_mats[1:]
+        )["Class Lim"]
+
+        reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
+        reframed_JAV_errs[skip]["all"].append(curr_jav_errs)
+        lim_class_errs[skip][combo[-1]].append(curr_class_lim_errs)
+        lim_class_errs[skip]["all"].append(curr_class_lim_errs)
+        progress_str = "\rProgress: skip {}, combo ({:2},{:2})".format(
+            skip, c2[0], c2[1]
+        )
+        print(progress_str, end = '', flush=True)
+#%%
+def printErrStats3D(errs: typing.List[typing.Dict[str, NDArray]]):
+    world_field = es.LocalizedErrsCollection._fields[0]
+    for skip in range(3):
+        print("\nSkip {}:".format(skip))
+
+        for mk in motion_kinds_plus:
+            curr_errs = np.concatenate(errs[skip][mk], axis=1)
+
+            stats = {
+                f: es.getStats(curr_errs[i])
+                for i, f in enumerate(es.LocalizedErrsCollection._fields)
+            }
+            print("  {} (score {:0.4f}):".format(mk, stats[world_field].mean_mag))
+            for name, stat in stats.items():
+                print(es.formattedErrStats(stat, name, 4, stats[world_field]))
+            print()
+
+printErrStats3D(reframed_JAV_errs)
+
 
 #%% 
 
@@ -674,8 +832,6 @@ scramble_rank = np.argsort(scramble_scores, axis=0)[::-1]
 print("Most important feature inds:", scramble_rank[:10], sep='\n')
     
 
-#%%
-nonco_col_nums = np.where(nonco_cols)[0]
 
 
 #%%
@@ -1032,7 +1188,8 @@ bar_data = [
     bcs_test_errs[s_ind_dict[bar_skip_key]], jav_lstm_test_errs, 
     error_lim_all[bar_skip_key]
 ]
-bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM', 'Class lim']
+bar_labels = ['Tree', 'Acc Only', 'JAV NN', 'LSTM', 'Classification lim']
+
 for i, arr in enumerate(bar_data):
     if arr.ndim > 1 and arr.shape[1] == 1:
         bar_data[i] = arr.flatten()
