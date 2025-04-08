@@ -116,7 +116,7 @@ class BCOT_Data_Calculator:
         calcFName = "cvOnly_skip" + str(self.skipAmt) + "_poses_" \
             + self._seq + "_" + self._bod +".txt"
 
-        print("Pose path:", self.posePathGT)
+        # print("Pose path:", self.posePathGT)
         posePathCalc = BCOT_Data_Calculator._CV_POSE_EXPORT_DIR / calcFName
         #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
@@ -148,7 +148,7 @@ class BCOT_Data_Calculator:
                 # self.issueFrames = np.hstack((
                 #     flipInds, rotArr[flipInds], rotArr[flipInds - 1]
                 # ))
-                print("Issue frames:", self.issueFrames)
+                # print("Issue frames:", self.issueFrames)
         self._dataLoaded = True
 
     # Returns (rotation mat data, translation data) tuple, where each element is

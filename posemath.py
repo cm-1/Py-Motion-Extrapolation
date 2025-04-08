@@ -618,7 +618,7 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
         raise Exception("Numpification of AA code resulted in angle diff > pi!")
         
-    print("Reminder to remove Exception checks and look @ other TODOs.")
+    # print("Reminder to remove Exception checks and look @ other TODOs.")
         
     # Now we combine the angles and unit axes into a final array of vec3s.
     return np.einsum('...i,...ij->...ij', angles, unitAxes)

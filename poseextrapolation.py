@@ -178,7 +178,7 @@ class CircularMotionAnalysis:
         dist_from_circ = np.linalg.norm(vecs_from_circ, axis=-1)
 
         ratio_from_circ = dist_from_circ/prev_radii
-        print("TODO: prop circ params from prev when successful if new is too dissimilar?")
+        # print("TODO: prop circ params from prev when successful if new is too dissimilar?")
 
 
         c_over_thresh = ratio_from_circ > err_radius_ratio_thresh
