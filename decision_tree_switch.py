@@ -312,29 +312,59 @@ del test_data
 del test_errs
 del test_labels
 
+#%%
 concat_train_data = concat_train_data.astype(np.float32)
 concat_test_data = concat_test_data.astype(np.float32)
-
-
+#%%
+# Settings that I'll just edit manually on each run for now.
 auto_train_seconds = 3600*24
+really_max_mem = False
 
 
 
 import psutil
 avail_mem_bytes = psutil.virtual_memory().available
 avail_mem_mb = avail_mem_bytes / (1024*1024)
-avail_mem_90 = int(0.9 * avail_mem_bytes)
-avail_mem_08g = avail_mem_bytes - int(0.8 * (1024**3))
-avail_mem_safe = max(avail_mem_90, avail_mem_08g)
+
+# 90% and 0.8GB untouched
+avail_mem_by_ratio = int(0.9 * avail_mem_bytes)
+avail_mem_by_buffer = avail_mem_bytes - int(0.8 * (1024**3))
+
+if really_max_mem:
+    # 99% and 350MB untouched
+    avail_mem_by_ratio = int(0.99 * avail_mem_bytes)
+    avail_mem_by_buffer = avail_mem_bytes - 350 * (1024**2)
+
+avail_mem_safe = max(avail_mem_by_ratio, avail_mem_by_buffer)
 avail_mem_safe_mb = avail_mem_safe // (1024*1024)
 
-# Use a max of 8GB for now.
-# I'm concerned that more leads to overfitting.
-avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
+if not really_max_mem:
+    # Cap to 8GB for now. Part of motivation: running on multi-user computer.
+    # Another possibility: I'm concerned that more RAM leads to overfitting.
+    avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
 
-automl = autosklearn.classification.AutoSklearnClassifier(auto_train_seconds, memory_limit=avail_mem_safe_mb, max_models_on_disc=32, tmp_folder='./astemp', delete_tmp_folder_after_terminate=False)
+# Ensure local tmp folder does not already exist, or else auto-sklearn will
+# throw an exception.
+import os
+import shutil
+tmp_dir_name = "./auto-sklearn-tmp"
+if os.path.exists(tmp_dir_name) and os.path.isdir(tmp_dir_name):
+    shutil.rmtree(tmp_dir_name)
+
+# We need to limit the models on disc to avoid taking up too much disc space.
+# To debug when too much disc space is used, I'll specify a local tmp folder
+# and I won't let auto-sklearn handle the deletion (though I'll do it myself
+# after so that there's room for the pickled model).
+automl = autosklearn.classification.AutoSklearnClassifier(
+    auto_train_seconds, memory_limit=avail_mem_safe_mb, 
+    max_models_on_disc = 7, tmp_folder=tmp_dir_name,
+    delete_tmp_folder_after_terminate=False,
+    smac_scenario_args={"n_trials": 35}
+)
+
+
 auto_start_time = datetime.datetime.now()
-auto_start_str = "{}:{}".format(
+auto_start_str = "{}:{:02d}".format(
     auto_start_time.hour, auto_start_time.minute
 )
 
@@ -345,14 +375,38 @@ print("Auto-sklearn fit started at {} and will last {} seconds!".format(
     auto_start_str, automl.time_left_for_this_task
 ))
 
-automl.fit(concat_train_data.T, concat_train_labels)
+automl.fit(concat_train_data, concat_train_labels)
+
 print("Done auto-sklearn fit!")
+
+# If fitting did not run into exceptions, then the tmp folder currently exists
+# and is not required for debugging said exceptions but *is* taking up space.
+# So we delete it to ensure the pickling has enough disc space available.
+if os.path.exists(tmp_dir_name) and os.path.isdir(tmp_dir_name):
+    shutil.rmtree(tmp_dir_name)
+
+# Create a unique filename and save before printing/saving other results, so
+# that if there's an unexpected crash in those other steps, we do not lose
+# hours of training/work!
+auto_fname = "auto-{:%Y-%m-%d_%H-%M-%S}.pickle".format(datetime.datetime.now())
+
+#%%
 import pickle
 
-auto_fname = "auto-{:%Y-%m-%d_%H-%M-%S}.pickle".format(datetime.datetime.now())
+# with open('./auto-2025-04-03_20-18-32.pickle', 'rb') as f:
+#     automl = pickle.load(f)
+#%%
+
 pickle.dump(automl, open(auto_fname, "wb"))
-asklabs = automl.predict(concat_test_data.T)
+
+
+asklabs = automl.predict(concat_test_data)
 auto_test_score = assessPredError(concat_test_errs, asklabs, s_ind_dict)
+asklabs = automl.predict(concat_train_data)
+auto_train_score = assessPredError(concat_train_errs, asklabs, s_train_ind_dict)
+print("Train data score:")
+print(auto_train_score)
+print("Test data score:")
 print(auto_test_score)
 print(automl.leaderboard())
 import pprint
@@ -360,6 +414,9 @@ pprint.pp(automl.show_models())
 automl.sprint_statistics()
 
 auto_summary_str = ''
+auto_summary_str += "Train data score:\n"
+auto_summary_str += str(auto_train_score) + '\n'
+auto_summary_str += "Test data score:\n"
 auto_summary_str += str(auto_test_score) + '\n'
 auto_summary_str += str(automl.leaderboard()) + '\n'
 auto_summary_str += str(automl.show_models()) + '\n'
