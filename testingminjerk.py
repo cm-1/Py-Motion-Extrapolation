@@ -43,7 +43,7 @@ print("max first preds diff:", np.max(np.abs(pred_diff)))
 # plt.show()
 #%%
 
-def scenario(max_noise = 0.0, main_seed = None, noise_seed = None):
+def scenario(max_noise = 0.0, main_seed = None, noise_seed = None, forget_fac = 0.91):
     rng = np.random.default_rng(main_seed)
     noise_rng = np.random.default_rng(noise_seed)
     
@@ -95,8 +95,9 @@ def scenario(max_noise = 0.0, main_seed = None, noise_seed = None):
 
 
     preds = mj.min_jerk_lsq(
-        prev_translations, d_under_thresh.flatten(), a_over_thresh.flatten()
-    )#, forget_fac: float = 0.91):
+        prev_translations, d_under_thresh.flatten(), a_over_thresh.flatten(),
+        forget_fac = forget_fac
+    )
 
     return all_ts, y_concat, preds
 
@@ -106,7 +107,8 @@ seed_generator = np.random.default_rng()
 seed = seed_generator.integers(0, 10000, 1)[0]
 noise_seed = seed_generator.integers(0, 10000, 1)[0]
 
-all_ts, y_concat, preds = scenario(0.000001)#,                  379, 33)
+all_ts, y_concat, preds = scenario(0.001, seed, noise_seed, forget_fac=0.92)#, 379, 33)
+
 
 crop_plot = True
 
@@ -115,10 +117,25 @@ draw_ind = 0
 y_draw_ind_vals = y_concat[:, draw_ind]
 plt.plot(all_ts, y_draw_ind_vals, label = "ground truth")
 plt.plot(all_ts[-len(preds):], preds[:, draw_ind], label="prediction")
+plt.plot(all_ts[1:], y_draw_ind_vals[:-1], label="static", ls="dashed")
 if crop_plot:
-    plt.ylim(y_draw_ind_vals.min() - 1, y_draw_ind_vals.max() + 100)
+    plt.ylim(y_draw_ind_vals.min() - 35, y_draw_ind_vals.max() + 35)
 plt.legend()
 plt.show()
+
+# # %%
+deriv_labels = ["vels", "accs", "jerks", "snaps", "crackles"]
+last_calc = y_concat
+for deriv_label in deriv_labels:
+    last_calc = np.diff(last_calc, 1, axis=0)
+    last_calc_mag = np.linalg.norm(last_calc, axis=-1)
+    plt.plot(
+        all_ts[-len(last_calc):], last_calc_mag, label=deriv_label
+    )
+plt.legend()
+plt.show()
+
+
 
 # %%
 plt.plot(*(y_concat.T), label="gt")
