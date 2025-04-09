@@ -29,7 +29,7 @@ cursor over the calls to the imported function/class/etc.
 
 # About the Dataset
 
-The source dataset contains a bunch of videos split up by "sequence" and "body".
+The [source dataset](https://ar3dv.github.io/BCOT-Benchmark/) contains a bunch of videos split up by "sequence" and "body".
 Each "sequence" is a different set of lighting, motion, and background-clutter
 choices, while each body is a 3D-printed object in the scene whose motion is
 tracked. So the dataset has a bunch of folders for sequence, subfolders for

@@ -146,7 +146,7 @@ jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
 jav_lstm_test_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], jav_lstm_test_pred, jav_scaled_lstm_gt_test
 )
-print("JAV LSTM score (millimeters):", jav_lstm_test_errs.mean())
+print("\n\nJAV LSTM score (millimeters) on test data:", jav_lstm_test_errs.mean())
 print("Above score is for skip{} data.".format(jav_lstm_skip))
 #%%
 

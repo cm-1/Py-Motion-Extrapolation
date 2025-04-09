@@ -131,7 +131,7 @@ unscaled_lstm_test_gt = translation_scaler.inverse_transform(test_translations_o
 lstm_test_errs = np.linalg.norm(
     unscaled_lstm_test_pred - unscaled_lstm_test_gt, axis=-1
 )
-print("LSTM score (millimeters):", lstm_test_errs.mean())
+print("\n\nLSTM score (millimeters) on test data:", lstm_test_errs.mean())
 print("Above score is for skip{} data.".format(lstm_skip))
 
 #%% 

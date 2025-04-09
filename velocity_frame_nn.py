@@ -229,6 +229,7 @@ s_train_ind_dict["all"] = None
 #%% Print scores on test data.
 
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
+print("\n\nScores on the test data (MAE, millimeters):")
 print(bcs_test_scores)
 
 #%%
@@ -277,7 +278,13 @@ def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: 
 # score.
 keys_s_ind = s_ind_dict.keys()
 scramble_scores = np.empty((z_nonco_test_data.shape[1], len(s_ind_dict.keys())))
-for col_ind in range(z_nonco_test_data.shape[1]):
+print()
+num_nonco_cols = z_nonco_test_data.shape[1]
+for col_ind in range(num_nonco_cols):
+    print(
+        "Testing column index {:03d}/{}.".format(col_ind + 1, num_nonco_cols),
+        end='\r', flush=True
+    )
     errs = errsForColScramble(bcs_model, z_nonco_test_data, col_ind, bcs_test)
     for i, k in enumerate(keys_s_ind):
         scramble_scores[col_ind, i] = np.mean(errs[s_ind_dict[k]])
