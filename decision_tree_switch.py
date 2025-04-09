@@ -445,9 +445,9 @@ OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 # time and the position at the next time in this frame.
 # Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
 # by frame skip amount and by combo.
-def dataForCombosJAV(combos: ComboList, return_world2locals: bool = False, 
-                     return_translations: bool = False, 
-                     vec_order: typing.Optional[OrderForJAV] = None):
+def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
+                     return_world2locals: bool = False, 
+                     return_translations: bool = False):
     # Empty dict for each skip amount.
     all_data: PerComboJAV = [dict() for _ in range(3)]
     all_world2local_mats: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
@@ -553,7 +553,9 @@ def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
      
     all_data = precalc_per_combo
     if precalc_per_combo is None:
-        all_data = dataForCombosJAV(combos)
+        all_data = dataForCombosJAV(
+            combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+        )
     
 
     train_res = np.concatenate(
@@ -680,7 +682,7 @@ bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
 # Get local-frame data.
 bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
-    nametup_combos, True, True, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+    nametup_combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), True, True
 )
 
 bcs_train, bcs_test = dataForComboSplitJAV(
@@ -1045,15 +1047,9 @@ print("LSTM err when all points translated by same amount:", shift_lstm_errs.mea
 # combo so that we know the starting and ending points for a video's data and,
 # thus, can create our data windows without having a window erroneously overlap
 # two separate videos.
-all_jav = dataForCombosJAV(nametup_combos)
-
-# While we'll keep data separated by skip amount and by combo, we'll combine our
-# per-combo columns, currently split up as separate dict entries, into single 
-# numpy arrays.
-all_jav = [{
-    _combo: np.stack([col_data for _, col_data in _combo_data.items()], axis=-1) 
-    for _combo, _combo_data in aj.items()
-} for aj in all_jav]
+all_jav = dataForCombosJAV(
+    nametup_combos, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
+)
 
 jav_scalers = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
 jav_scalers_3 = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
