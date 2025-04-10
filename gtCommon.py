@@ -1,8 +1,10 @@
-import numpy as np
-
+from abc import ABC, abstractmethod
 import pathlib
 import json
 import typing
+
+import numpy as np
+from numpy.typing import NDArray
 
 import posemath as pm
 
@@ -58,22 +60,13 @@ class VidBCOT(typing.NamedTuple):
     body_ind: int
     seq_ind: int
 
-class PoseLoaderBCOT:
-    _DATASET_DIR = None
-    _CV_POSE_EXPORT_DIR = None
-    _dir_paths_initialized = False
+class PoseLoader:
 
-    def __init__(self, bodyIndex, seqIndex, skipAmt):
-        PoseLoaderBCOT._setupPosePaths()
+    def __init__(self, skipAmt):
+        self._setupPosePaths()
         
         self.skipAmt = skipAmt
         self.issueFrames = []
-
-        self._seq = BCOT_SEQ_NAMES[seqIndex]
-        self._bod = BCOT_BODY_NAMES[bodyIndex]
-        
-        self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
-            / self._bod / "pose.txt"
 
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._translationsCalcNP = np.zeros((0,3), dtype=np.float64)
@@ -82,54 +75,51 @@ class PoseLoaderBCOT:
         self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
         self._dataLoaded = False
 
-    def _setupPosePaths():
-        if PoseLoaderBCOT._dir_paths_initialized:
+    
+    @classmethod
+    @abstractmethod
+    def _posePathsFromJSON(cls, json_read_result):
+        pass
+
+    # The error-handling here was added by ChatGPT, but all remaining code is
+    # human-written.
+    @classmethod
+    def _setupPosePaths(cls):
+        if cls._dir_paths_initialized:
             return
+            
         settingsDir = pathlib.Path(__file__).parent.resolve()
         jsonPath = settingsDir / "config" / "local.config.json"
-        with open(jsonPath) as f:
-            d = json.load(f)
-            PoseLoaderBCOT._DATASET_DIR = pathlib.Path(
-                d["dataset_directory"]
-            )
-            PoseLoaderBCOT._CV_POSE_EXPORT_DIR = pathlib.Path(
-                d["result_directory"]
-            )
+        d = None
+        try:
+            with open(jsonPath, "r") as f:
+                d = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Config file not found: {jsonPath}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON in: {jsonPath}") from e
+        except OSError as e:
+            raise RuntimeError(f"Error reading config file: {jsonPath}") from e
+
+        return cls._posePathsFromJSON(d)
+    
+    @abstractmethod
+    def _getPoseMatrices(self):
+        pass
             
-    def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
-        PoseLoaderBCOT._setupPosePaths()
-
-        seq = BCOT_SEQ_NAMES[seqIndex]
-        bod = BCOT_BODY_NAMES[bodyIndex]
-
-        if exclude_cam2 and "cam2" in seq:
-            return False
-        
-        posePathGT = PoseLoaderBCOT._DATASET_DIR / seq / bod
-        return posePathGT.is_dir()
-
     def loadData(self):
         if self._dataLoaded:
             return
 
-        calcFName = "cvOnly_skip" + str(self.skipAmt) + "_poses_" \
-            + self._seq + "_" + self._bod +".txt"
+        gtMatData, calcMatData = self._getPoseMatrices()
 
-        print("Pose path:", self.posePathGT)
-        posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
-        #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
-        #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
-        #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
-
-        gtMatData = PoseLoaderBCOT.matrixDataFromFile(self.posePathGT)
         self._translationsGTNP = gtMatData[1]
         self._rotationMatsGTNP = gtMatData[0]
 
         self._rotationsGTNP = pm.axisAngleFromMatArray(gtMatData[0])
 
         # Check if file for CV-calculated pose data exists; if so, load it too.
-        if posePathCalc.is_file():
-            calcMatData = PoseLoaderBCOT.matrixDataFromFile(posePathCalc)
+        if calcMatData is not None:
             self._translationsCalcNP = calcMatData[1]
             self._rotationsCalcNP = pm.axisAngleFromMatArray(calcMatData[0])
 
@@ -338,3 +328,57 @@ class PoseLoaderBCOT:
         # we get the position we have below.
         ratio = v_mag/rot_rate
         return ratio * sin_vals, -ratio * cos_vals, zs
+
+class PoseLoaderBCOT(PoseLoader):
+
+    _DATASET_DIR = None
+    _CV_POSE_EXPORT_DIR = None
+    _dir_paths_initialized = False
+
+    def __init__(self, bodyIndex, seqIndex, skipAmt):
+        super(PoseLoaderBCOT, self).__init__(skipAmt)
+
+        self._seq = BCOT_SEQ_NAMES[seqIndex]
+        self._bod = BCOT_BODY_NAMES[bodyIndex]
+        
+        self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
+            / self._bod / "pose.txt"
+
+
+    @classmethod
+    def _posePathsFromJSON(cls, json_read_result):
+        PoseLoaderBCOT._DATASET_DIR = pathlib.Path(
+            json_read_result["bcot_dataset_directory"]
+        )
+        PoseLoaderBCOT._CV_POSE_EXPORT_DIR = pathlib.Path(
+            json_read_result["bcot_result_directory"]
+        )
+
+    def _getPoseMatrices(self):
+        calcFName = "cvOnly_skip" + str(self.skipAmt) + "_poses_" \
+            + self._seq + "_" + self._bod +".txt"
+
+        print("Pose path:", self.posePathGT)
+        posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
+        #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
+        #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
+        #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
+
+        gtMatData = PoseLoader.matrixDataFromFile(self.posePathGT)
+        calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
+        if posePathCalc.is_file():
+            calcMatData = PoseLoader.matrixDataFromFile(posePathCalc)
+
+        return (gtMatData, calcMatData)
+
+    def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
+        PoseLoaderBCOT._setupPosePaths()
+
+        seq = BCOT_SEQ_NAMES[seqIndex]
+        bod = BCOT_BODY_NAMES[bodyIndex]
+
+        if exclude_cam2 and "cam2" in seq:
+            return False
+        
+        posePathGT = PoseLoaderBCOT._DATASET_DIR / seq / bod
+        return posePathGT.is_dir()
