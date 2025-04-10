@@ -9,7 +9,7 @@ from spline_approximation import BSplineFitCalculator, SplinePredictionMode
 import gtCommon as gtc
 import posemath as pm
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 
 TRANSLATION_THRESH_5 = 50.0#50.0
 TRANSLATION_THRESH_2 = 20.0
@@ -34,13 +34,13 @@ skipAmount = 2
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 poseDataDict: typing.Dict[typing.Tuple[int,int], PoseData] = dict()
 
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], skipAmount)
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_gt_aa = calculator.getRotationsGTNP(True)
     #rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)

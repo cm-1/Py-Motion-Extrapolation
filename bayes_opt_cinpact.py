@@ -1,7 +1,7 @@
 import numpy as np
 from bayes_opt import BayesianOptimization
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 from cinpact import CinpactAccelExtrapolater
 import gtCommon as gtc
 
@@ -12,12 +12,12 @@ SKIP_AMT = 2
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 combo_translations = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], SKIP_AMT)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], SKIP_AMT)
     translations = calculator.getTranslationsGTNP(True)
     combo_translations[combo] = translations
 

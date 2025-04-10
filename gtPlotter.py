@@ -4,12 +4,12 @@ from matplotlib.widgets import Slider
 
 import cinpact
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 
 bodIndex = 1
 seqIndex = 11
 skipAmount = 2
-calculator = BCOT_Data_Calculator(bodIndex, seqIndex, skipAmount)
+calculator = PoseLoaderBCOT(bodIndex, seqIndex, skipAmount)
 
 
 

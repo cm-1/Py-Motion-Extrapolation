@@ -72,9 +72,9 @@ class ObjSeqData:
         self.seqID = seqID
         self.hasData = False
         self.calculator = None
-        if gtCommon.BCOT_Data_Calculator.isBodySeqPairValid(bodID, seqID):
+        if gtCommon.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self.hasData = True
-            self.calculator = gtCommon.BCOT_Data_Calculator(
+            self.calculator = gtCommon.PoseLoaderBCOT(
                 bodID, seqID, FRAME_SKIP_AMT
             )
         self.lastKnownPtIndex = 40# SPLINE_DEGREE
@@ -236,7 +236,7 @@ slider_ax1 = plt.axes([0.6, 0.2, 0.35, 0.03])#, facecolor='lightgoldenrodyellow'
 slider_ax2 = plt.axes([0.6, 0.15, 0.35, 0.03])#, facecolor='lightgoldenrodyellow')
 
 slider1 = Slider(
-    slider_ax1, gtCommon.shortBodyNameBCOT(gtCommon.BCOT_BODY_NAMES[0]), 
+    slider_ax1, gtCommon.truncateName(gtCommon.BCOT_BODY_NAMES[0]), 
     0, len(gtCommon.BCOT_BODY_NAMES) - 1, valstep=1
 )
 numSeqs = len(gtCommon.BCOT_SEQ_NAMES)
@@ -376,7 +376,7 @@ def clearAndRedraw(objSeqDataInfo):
 def update(val):
     bInd = int(slider1.val + 0.001)
     sInd = int(slider2.val + 0.001)
-    slider1.label.set_text(gtCommon.shortBodyNameBCOT(gtCommon.BCOT_BODY_NAMES[bInd]))
+    slider1.label.set_text(gtCommon.truncateName(gtCommon.BCOT_BODY_NAMES[bInd]))
     slider2.label.set_text(gtCommon.shortSeqNameBCOT(gtCommon.BCOT_SEQ_NAMES[sInd]))
 
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]

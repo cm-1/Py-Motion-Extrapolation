@@ -38,7 +38,7 @@ BCOT_SEQ_NAMES = [
     "outdoor_scene2_movable_suspension_cam2",
 ]
 
-def shortBodyNameBCOT(longName, maxLen = 11):
+def truncateName(longName, maxLen = 11):
     if len(longName) < maxLen:
         return longName
     return longName[:maxLen - 3] + "..."
@@ -54,18 +54,17 @@ def shortSeqNameBCOT(longName):
     return retVal[:-1]
 
 
-class Combo(typing.NamedTuple):
+class VidBCOT(typing.NamedTuple):
     body_ind: int
     seq_ind: int
 
-class BCOT_Data_Calculator:
-
+class PoseLoaderBCOT:
     _DATASET_DIR = None
     _CV_POSE_EXPORT_DIR = None
     _dir_paths_initialized = False
 
     def __init__(self, bodyIndex, seqIndex, skipAmt):
-        BCOT_Data_Calculator._setupPosePaths()
+        PoseLoaderBCOT._setupPosePaths()
         
         self.skipAmt = skipAmt
         self.issueFrames = []
@@ -73,7 +72,7 @@ class BCOT_Data_Calculator:
         self._seq = BCOT_SEQ_NAMES[seqIndex]
         self._bod = BCOT_BODY_NAMES[bodyIndex]
         
-        self.posePathGT = BCOT_Data_Calculator._DATASET_DIR / self._seq \
+        self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
             / self._bod / "pose.txt"
 
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
@@ -84,21 +83,21 @@ class BCOT_Data_Calculator:
         self._dataLoaded = False
 
     def _setupPosePaths():
-        if BCOT_Data_Calculator._dir_paths_initialized:
+        if PoseLoaderBCOT._dir_paths_initialized:
             return
         settingsDir = pathlib.Path(__file__).parent.resolve()
         jsonPath = settingsDir / "config" / "local.config.json"
         with open(jsonPath) as f:
             d = json.load(f)
-            BCOT_Data_Calculator._DATASET_DIR = pathlib.Path(
+            PoseLoaderBCOT._DATASET_DIR = pathlib.Path(
                 d["dataset_directory"]
             )
-            BCOT_Data_Calculator._CV_POSE_EXPORT_DIR = pathlib.Path(
+            PoseLoaderBCOT._CV_POSE_EXPORT_DIR = pathlib.Path(
                 d["result_directory"]
             )
             
     def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
-        BCOT_Data_Calculator._setupPosePaths()
+        PoseLoaderBCOT._setupPosePaths()
 
         seq = BCOT_SEQ_NAMES[seqIndex]
         bod = BCOT_BODY_NAMES[bodyIndex]
@@ -106,7 +105,7 @@ class BCOT_Data_Calculator:
         if exclude_cam2 and "cam2" in seq:
             return False
         
-        posePathGT = BCOT_Data_Calculator._DATASET_DIR / seq / bod
+        posePathGT = PoseLoaderBCOT._DATASET_DIR / seq / bod
         return posePathGT.is_dir()
 
     def loadData(self):
@@ -117,12 +116,12 @@ class BCOT_Data_Calculator:
             + self._seq + "_" + self._bod +".txt"
 
         print("Pose path:", self.posePathGT)
-        posePathCalc = BCOT_Data_Calculator._CV_POSE_EXPORT_DIR / calcFName
+        posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
         #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
-        gtMatData = BCOT_Data_Calculator.matrixDataFromFile(self.posePathGT)
+        gtMatData = PoseLoaderBCOT.matrixDataFromFile(self.posePathGT)
         self._translationsGTNP = gtMatData[1]
         self._rotationMatsGTNP = gtMatData[0]
 
@@ -130,7 +129,7 @@ class BCOT_Data_Calculator:
 
         # Check if file for CV-calculated pose data exists; if so, load it too.
         if posePathCalc.is_file():
-            calcMatData = BCOT_Data_Calculator.matrixDataFromFile(posePathCalc)
+            calcMatData = PoseLoaderBCOT.matrixDataFromFile(posePathCalc)
             self._translationsCalcNP = calcMatData[1]
             self._rotationsCalcNP = pm.axisAngleFromMatArray(calcMatData[0])
 

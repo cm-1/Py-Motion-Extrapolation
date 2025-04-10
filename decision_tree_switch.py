@@ -15,7 +15,7 @@ from custom_tree.weighted_impurity import WeightedErrorCriterion
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 # Stuff needed for calculating the input features for the non-RNN models.
@@ -63,7 +63,7 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
         # Some sequence-body pairs do not have videos, and some have two videos
         # with identical motion but a different camera. So we first check that 
         # a video exists and has unique motion.
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b, s, k))
 
 
@@ -75,7 +75,7 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
 
 # From the combo 3-tuples, construct nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-nametup_combos = [gtc.Combo(*c[:2]) for c in combos]
+nametup_combos = [gtc.VidBCOT(*c[:2]) for c in combos]
 
 cfc = CalcsForCombo(
     nametup_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
@@ -434,8 +434,8 @@ class JAV(Enum):
     ACCELERATION = 2
     JERK = 3
 
-ComboList = typing.List[gtc.Combo]
-PerComboJAV = typing.List[typing.Dict[gtc.Combo, typing.Dict[str, NDArray]]]
+ComboList = typing.List[gtc.VidBCOT]
+PerComboJAV = typing.List[typing.Dict[gtc.VidBCOT, typing.Dict[str, NDArray]]]
 OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 # For each frame of video, we consider a coordinate frame where one axis is
@@ -450,9 +450,9 @@ def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
                      return_translations: bool = False):
     # Empty dict for each skip amount.
     all_data: PerComboJAV = [dict() for _ in range(3)]
-    all_world2local_mats: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+    all_world2local_mats: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
         [dict() for _ in range(3)]
-    all_translations: typing.List[typing.Dict[gtc.Combo, NDArray]] = \
+    all_translations: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
         [dict() for _ in range(3)]
     
     if len(vec_order) != 3 or {v.value for v in vec_order} != {1, 2, 3}:
@@ -460,7 +460,7 @@ def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
     
     skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
-        calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
+        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind, 0)
         curr_translations = calc_obj.getTranslationsGTNP(False)
         for skip in range(skip_end):
             step = skip + 1
@@ -713,7 +713,7 @@ motion_data_key_subset = [motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
     all_rotation_mats_T[combo[:2]] = np.swapaxes(
         calculator.getRotationMatsGTNP(False), -1, -2
     ) # transposes

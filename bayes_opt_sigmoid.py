@@ -8,7 +8,7 @@ from bayes_opt import BayesianOptimization
 import matplotlib.pyplot as plt
 
 import posemath as pm
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 @dataclass
@@ -34,14 +34,14 @@ def angWahbaFunc(x: np.ndarray, scale: float):
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 
 
 combo_rotations: typing.Dict[typing.Tuple[int, int], RotationInfo] = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], SKIP_AMT)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], SKIP_AMT)
     aa_rotations = calculator.getRotationsGTNP(True)
     qs = pm.quatsFromAxisAngleVec3s(aa_rotations)
     quatDiffs = pm.multiplyQuatLists(qs[1:], pm.conjugateQuats(qs[:-1]))

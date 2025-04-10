@@ -14,7 +14,7 @@ from spline_approximation import SplinePredictionMode, BSplineFitCalculator
 from cinpact import CinpactAccelExtrapolater
 
 import gtCommon as gtc
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 
 import posemath as pm
 import poseextrapolation as pex
@@ -510,7 +510,7 @@ class ConsolidatedResults:
             if group_mode == DisplayGrouping.BY_OBJECT:
                 mean_ax = 1
                 row_names = [
-                    gtc.shortBodyNameBCOT(n, 7) for n in gtc.BCOT_BODY_NAMES
+                    gtc.truncateName(n, 7) for n in gtc.BCOT_BODY_NAMES
                 ]
             elif group_mode == DisplayGrouping.BY_SEQUENCE:
                 mean_ax = 0
@@ -681,7 +681,7 @@ class ConsolidatedResults:
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b,s))
 
 skipAmount = 2
@@ -728,7 +728,7 @@ maxTimestamps = 0
 maxTimestampsWhenSkipped = 0
 max_angle = 0
 for i, combo in enumerate(combos):
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], skipAmount)
 
     translations_gt = calculator.getTranslationsGTNP(True)
     rotations_aa_gt = calculator.getRotationsGTNP(True)

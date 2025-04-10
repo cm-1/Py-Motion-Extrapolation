@@ -21,9 +21,9 @@ class ObjSeqData:
         self._seqID = seqID
         self._hasData = False
         self._calculator = None
-        if gtc.BCOT_Data_Calculator.isBodySeqPairValid(bodID, seqID):
+        if gtc.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self._hasData = True
-            self._calculator = gtc.BCOT_Data_Calculator(
+            self._calculator = gtc.PoseLoaderBCOT(
                 bodID, seqID, FRAME_SKIP_AMT
             )
         self.numDataToShow = -0
@@ -132,7 +132,7 @@ def switchObjects():
     bInd = combos[selectedComboInd][1]
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
 
-    bName = gtc.shortBodyNameBCOT(gtc.BCOT_BODY_NAMES[bInd])
+    bName = gtc.truncateName(gtc.BCOT_BODY_NAMES[bInd])
     sName = gtc.shortSeqNameBCOT(gtc.BCOT_SEQ_NAMES[sInd])
 
     noDataTextAxis.set_visible(not objSeqDataInfo.hasData)

@@ -4,7 +4,7 @@ import json
 import numpy as np
 
 import errorstats as es
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 
@@ -22,7 +22,7 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
             k = k_opt
             break
     for b in range(len(gtc.BCOT_BODY_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b, s, k))
 
 
@@ -31,7 +31,7 @@ all_translations: typing.Dict[typing.Tuple[int, int, int], np.ndarray] = dict()
 
 for skip_amt in range(3):
     for combo in combos:
-        calculator = BCOT_Data_Calculator(combo[0], combo[1], skip_amt)
+        calculator = PoseLoaderBCOT(combo[0], combo[1], skip_amt)
         rotations = calculator.getRotationMatsGTNP(True)
         ck = (skip_amt, ) + combo[:2]
         all_rotations_T[ck] = np.swapaxes(rotations, -1, -2) # transposes

@@ -13,7 +13,7 @@ import posemath as pm
 import poseextrapolation as pex
 import minjerk as mj
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 DEFAULT_OBJ_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -219,7 +219,7 @@ class FeaturesAndResultsForCombo:
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
 class CalcsForCombo:
-    def __init__(self, combos: typing.List[gtc.Combo],
+    def __init__(self, combos: typing.List[gtc.VidBCOT],
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: float = FLOAT_32_MAX,
@@ -316,7 +316,7 @@ class CalcsForCombo:
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
                 self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
-    def getInputFeatures(self, combo: gtc.Combo,
+    def getInputFeatures(self, combo: gtc.VidBCOT,
                          check_key_completeness: bool = False):
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
         # shorter aliases might be helpful.
@@ -327,7 +327,7 @@ class CalcsForCombo:
         V3D = Vec3Data
 
         
-        calculator = BCOT_Data_Calculator(combo.body_ind, combo.seq_ind, 0)
+        calculator = PoseLoaderBCOT(combo.body_ind, combo.seq_ind, 0)
         all_translations = calculator.getTranslationsGTNP(False)
         aa_rotations = calculator.getRotationsGTNP(False)
         all_quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
