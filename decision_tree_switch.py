@@ -705,7 +705,9 @@ bcs_pred = bcs_model.predict(z_nonco_test_data)
 bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
 #%% Print scores on test data.
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
-print(bcs_test_scores)
+for k, v in bcs_test_scores.items():
+    print(k + ":", v)
+# print(bcs_test_scores)
 #%%
 import errorstats as es
 nonco_col_nums = np.where(nonco_cols)[0]
@@ -817,7 +819,7 @@ def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: 
     )
 
     # Getting new errors:
-    preds = model.predict(data_scramble)
+    preds = model.predict(data_scramble, batch_size=1024, verbose=0)
     errs = model.loss(y_true, preds)
     return errs
 
@@ -825,7 +827,17 @@ def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: 
 # score.
 keys_s_ind = s_ind_dict.keys()
 scramble_scores = np.empty((z_nonco_test_data.shape[1], len(s_ind_dict.keys())))
-for col_ind in range(z_nonco_test_data.shape[1]):
+print()
+ 
+
+num_nonco_cols = z_nonco_test_data.shape[1]
+ 
+
+for col_ind in range(num_nonco_cols):
+    print(
+        "Testing column index {:03d}/{}.".format(col_ind + 1, num_nonco_cols),
+        end='\r', flush=True
+    )
     errs = errsForColScramble(bcs_model, z_nonco_test_data, col_ind, bcs_test)
     for i, k in enumerate(keys_s_ind):
         scramble_scores[col_ind, i] = np.mean(errs[s_ind_dict[k]])
