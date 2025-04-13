@@ -23,9 +23,7 @@ class ObjSeqData:
         self._calculator = None
         if gtc.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self._hasData = True
-            self._calculator = gtc.PoseLoaderBCOT(
-                bodID, seqID, FRAME_SKIP_AMT
-            )
+            self._calculator = gtc.PoseLoaderBCOT(bodID, seqID)
         self.numDataToShow = -0
         self._initialized = False
         self._accelData = None
@@ -37,7 +35,8 @@ class ObjSeqData:
     def initialize(self):
         if self._hasData and not self._initialized:
             self._initialized = True
-            translations = self._calculator.getTranslationsGTNP(True)
+            step = (FRAME_SKIP_AMT + 1)
+            translations = self._calculator.getTranslationsGTNP()[::step]
             self._accelData = np.diff(translations, 2, axis = 0)
             reps = np.full(len(self._accelData), 2)
             reps[0] = 1

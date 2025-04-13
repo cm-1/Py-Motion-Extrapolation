@@ -30,12 +30,13 @@ all_rotations_T: typing.Dict[typing.Tuple[int, int, int], np.ndarray] = dict()
 all_translations: typing.Dict[typing.Tuple[int, int, int], np.ndarray] = dict()
 
 for skip_amt in range(3):
+    step = skip_amt + 1
     for combo in combos:
-        calculator = PoseLoaderBCOT(combo[0], combo[1], skip_amt)
-        rotations = calculator.getRotationMatsGTNP(True)
+        calculator = PoseLoaderBCOT(combo[0], combo[1])
+        rotations = calculator.getRotationMatsGTNP()[::step]
         ck = (skip_amt, ) + combo[:2]
         all_rotations_T[ck] = np.swapaxes(rotations, -1, -2) # transposes
-        all_translations[ck] = calculator.getTranslationsGTNP(True)
+        all_translations[ck] = calculator.getTranslationsGTNP()[::step]
 
 #%%
 

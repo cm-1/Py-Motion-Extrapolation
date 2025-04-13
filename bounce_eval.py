@@ -16,8 +16,8 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 
 combo_translations = dict()
 for combo in combos:
-    calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
-    translations = calculator.getTranslationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    translations = calculator.getTranslationsGTNP()[::1]
     combo_translations[combo] = translations
 #%%
 def getBounceScore(thresh: float, skip_amt: int):

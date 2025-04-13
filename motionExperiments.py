@@ -728,10 +728,10 @@ maxTimestamps = 0
 maxTimestampsWhenSkipped = 0
 max_angle = 0
 for i, combo in enumerate(combos):
-    calculator = PoseLoaderBCOT(combo[0], combo[1], skipAmount)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
 
-    translations_gt = calculator.getTranslationsGTNP(True)
-    rotations_aa_gt = calculator.getRotationsGTNP(True)
+    translations_gt = calculator.getTranslationsGTNP()[::(skipAmount + 1)]
+    rotations_aa_gt = calculator.getRotationsGTNP()[::(skipAmount + 1)]
     rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_aa_gt)
 
 
@@ -896,7 +896,7 @@ for i, combo in enumerate(combos):
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
-    r_mats = calculator.getRotationMatsGTNP(True)
+    r_mats = calculator.getRotationMatsGTNP()[::(skipAmount + 1)]
     fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
     angles = angles.flatten()
     #rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
@@ -1182,7 +1182,7 @@ for i, combo in enumerate(combos):
     ))
 
     maxTimestamps = max(
-        maxTimestamps, len(calculator.getTranslationsGTNP(False))
+        maxTimestamps, len(calculator.getTranslationsGTNP())
     )
     if (not egFound):
         allLastLerpScores = allResultsObj.translation_results["AccLERP"].scores

@@ -40,9 +40,10 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 poseDataDict: typing.Dict[typing.Tuple[int,int], PoseData] = dict()
 
 for combo in combos:
-    calculator = PoseLoaderBCOT(combo[0], combo[1], skipAmount)
-    translations_gt = calculator.getTranslationsGTNP(True)
-    rotations_gt_aa = calculator.getRotationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    step = skipAmount + 1
+    translations_gt = calculator.getTranslationsGTNP()[::step]
+    rotations_gt_aa = calculator.getRotationsGTNP()[::step]
     #rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
     rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
 
@@ -110,7 +111,7 @@ results_5deg = np.zeros(out_shape)
 results_mean_dist = np.zeros(out_shape)
 results_mean_angle = np.zeros(out_shape)
 
-mode = SplinePredictionMode.EXTRAPOLATE
+mode = SplinePredictionMode.CONST_ACCEL
 
 smooth_and_accel = (mode == SplinePredictionMode.SMOOTH_AND_ACCEL)
 for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):

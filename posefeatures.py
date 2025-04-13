@@ -327,11 +327,11 @@ class CalcsForCombo:
         V3D = Vec3Data
 
         
-        calculator = PoseLoaderBCOT(combo.body_ind, combo.seq_ind, 0)
-        all_translations = calculator.getTranslationsGTNP(False)
-        aa_rotations = calculator.getRotationsGTNP(False)
+        calculator = PoseLoaderBCOT(combo.body_ind, combo.seq_ind)
+        all_translations = calculator.getTranslationsGTNP()
+        aa_rotations = calculator.getRotationsGTNP()
         all_quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
-        all_rotation_mats = calculator.getRotationMatsGTNP(False)
+        all_rotation_mats = calculator.getRotationMatsGTNP()
 
         motion_datas = []
         all_err_norms = []

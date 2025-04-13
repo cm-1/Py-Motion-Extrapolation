@@ -74,9 +74,7 @@ class ObjSeqData:
         self.calculator = None
         if gtCommon.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self.hasData = True
-            self.calculator = gtCommon.PoseLoaderBCOT(
-                bodID, seqID, FRAME_SKIP_AMT
-            )
+            self.calculator = gtCommon.PoseLoaderBCOT(bodID, seqID)
         self.lastKnownPtIndex = 40# SPLINE_DEGREE
         self.plot_data = PlotData([], getEmptyYData())
         self.pred_data = PredictionData()
@@ -256,12 +254,12 @@ def updatePredictionData(objSeqDataInfo):
     selectedCalc = objSeqDataInfo.calculator
 
     # Flatten needed here or else array looks like [[0], [2], ...]
-    originData = selectedCalc.getTranslationsGTNP(True)
+    originData = selectedCalc.getTranslationsGTNP()[::(FRAME_SKIP_AMT + 1)]
 
     # IGNORE MIDDLE BUTTON COLUMNS FOR NOW!
 
     # Flatten needed here for same reason as before.
-    aaData = selectedCalc.getRotationsGTNP(True)
+    aaData = selectedCalc.getRotationsGTNP()[::(FRAME_SKIP_AMT + 1)]
 
     # Points stored such that each row is a timestamp and each column is a
     # component of either the origin, the axis-angle rotation, or another pt

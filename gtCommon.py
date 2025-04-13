@@ -62,10 +62,9 @@ class VidBCOT(typing.NamedTuple):
 
 class PoseLoader:
 
-    def __init__(self, skipAmt):
+    def __init__(self):
         self._setupPosePaths()
         
-        self.skipAmt = skipAmt
         self.issueFrames = []
 
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
@@ -78,7 +77,7 @@ class PoseLoader:
     
     @classmethod
     @abstractmethod
-    def _posePathsFromJSON(cls, json_read_result):
+    def _setPosePathsFromJSON(cls, json_read_result):
         pass
 
     # The error-handling here was added by ChatGPT, but all remaining code is
@@ -101,7 +100,7 @@ class PoseLoader:
         except OSError as e:
             raise RuntimeError(f"Error reading config file: {jsonPath}") from e
 
-        return cls._posePathsFromJSON(d)
+        cls._setPosePathsFromJSON(d)
     
     @abstractmethod
     def _getPoseMatrices(self):
@@ -151,21 +150,18 @@ class PoseLoader:
         translations = data[:, 9:12]
         return (rotations, translations)
 
-    def getTranslationsGTNP(self, useSkipAmt):
+    def getTranslationsGTNP(self):
         self.loadData()
-        step = (1 + self.skipAmt) if useSkipAmt else 1
-        return self._translationsGTNP[::step]
+        return self._translationsGTNP
     def getTranslationsCalcNP(self):
         self.loadData()
         return self._translationsCalcNP
-    def getRotationsGTNP(self, useSkipAmt):
+    def getRotationsGTNP(self):
         self.loadData()
-        step = (1 + self.skipAmt) if useSkipAmt else 1
-        return self._rotationsGTNP[::step]
-    def getRotationMatsGTNP(self, useSkipAmt):
+        return self._rotationsGTNP
+    def getRotationMatsGTNP(self):
         self.loadData()
-        step = (1 + self.skipAmt) if useSkipAmt else 1
-        return self._rotationMatsGTNP[::step]
+        return self._rotationMatsGTNP
     def getRotationsCalcNP(self):
         self.loadData()
         return self._rotationsCalcNP
@@ -335,18 +331,20 @@ class PoseLoaderBCOT(PoseLoader):
     _CV_POSE_EXPORT_DIR = None
     _dir_paths_initialized = False
 
-    def __init__(self, bodyIndex, seqIndex, skipAmt):
-        super(PoseLoaderBCOT, self).__init__(skipAmt)
+    def __init__(self, bodyIndex: int, seqIndex: int, cvFrameSkipForLoad = -1):
+        '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
+        super(PoseLoaderBCOT, self).__init__()
 
         self._seq = BCOT_SEQ_NAMES[seqIndex]
         self._bod = BCOT_BODY_NAMES[bodyIndex]
+        self._cvFrameSkipForLoad = cvFrameSkipForLoad
         
         self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
             / self._bod / "pose.txt"
 
 
     @classmethod
-    def _posePathsFromJSON(cls, json_read_result):
+    def _setPosePathsFromJSON(cls, json_read_result):
         PoseLoaderBCOT._DATASET_DIR = pathlib.Path(
             json_read_result["bcot_dataset_directory"]
         )
@@ -355,7 +353,7 @@ class PoseLoaderBCOT(PoseLoader):
         )
 
     def _getPoseMatrices(self):
-        calcFName = "cvOnly_skip" + str(self.skipAmt) + "_poses_" \
+        calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
             + self._seq + "_" + self._bod +".txt"
 
         print("Pose path:", self.posePathGT)
@@ -366,7 +364,7 @@ class PoseLoaderBCOT(PoseLoader):
 
         gtMatData = PoseLoader.matrixDataFromFile(self.posePathGT)
         calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
-        if posePathCalc.is_file():
+        if self._cvFrameSkipForLoad >= 0 and posePathCalc.is_file():
             calcMatData = PoseLoader.matrixDataFromFile(posePathCalc)
 
         return (gtMatData, calcMatData)

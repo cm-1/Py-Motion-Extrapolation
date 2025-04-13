@@ -8,24 +8,19 @@ from gtCommon import PoseLoaderBCOT
 
 bodIndex = 1
 seqIndex = 11
-skipAmount = 2
-calculator = PoseLoaderBCOT(bodIndex, seqIndex, skipAmount)
-
-
-
-
-
+cvFrameSkip = 2
+calculator = PoseLoaderBCOT(bodIndex, seqIndex, cvFrameSkip)
 
 def plotGTvsCalc(gt, calc, showOnlyGT = False):
-    skipAmt = calculator.skipAmt
+    cvFrameSkip = calculator._cvFrameSkipForLoad
     x = gt[:, 0]
     y = gt[:, 1]
     z = gt[:, 2]
     w = np.arange(len(x))#translationsNP.shape[0])
 
-    lastFrameNum = len(gt) - (len(gt) % (calculator.skipAmt + 1))
+    lastFrameNum = len(gt) - (len(gt) % (cvFrameSkip + 1))
     # TODO: Remove the below sanity check after I get a chance to test with real data again.
-    if len(calc) > 0 and lastFrameNum != len(calc) * (calculator.skipAmt + 1):
+    if len(calc) > 0 and lastFrameNum != len(calc) * (cvFrameSkip + 1):
         raise Exception("Logic error in frame num calc!")
 
     init_k = 10
@@ -45,7 +40,7 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
     ax.set_box_aspect(np.ptp(gt, axis=0))
     scatterGT = ax.scatter(x, y, z, marker='.', edgecolors=colors)
     if not showOnlyGT:
-        colorsCalc = colors[1::(skipAmt + 1)]
+        colorsCalc = colors[1::(cvFrameSkip + 1)]
         scatterCalc = ax.scatter(calc[:, 0], calc[:, 1], calc[:, 2], marker='+', edgecolors=colorsCalc)
         scatterCalc.set_edgecolor(colorsCalc) # Need to do this again to make it look right
 
@@ -79,14 +74,16 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
         )
 
         def updateDisplay(_):
-            end = int(tSlider.val) // (skipAmt + 1)
+            end = int(tSlider.val) // (cvFrameSkip + 1)
             endGT = int(tSlider.val) + 1
             scatterGT.set_offsets(gt[:endGT, :2])
             scatterGT.set_3d_properties(gt[:endGT, 2], 'z')
             scatterGT.set_edgecolor(colors[:endGT])
             scatterCalc.set_offsets(calc[:end, :2])
             scatterCalc.set_3d_properties(calc[:end, 2], 'z')
-            scatterCalc.set_edgecolor(colors[1:(end * skipAmt)+1:(skipAmt + 1)])
+            scatterCalc.set_edgecolor(
+                colors[1:(end * cvFrameSkip)+1:(cvFrameSkip + 1)]
+            )
             fig.canvas.draw_idle()
 
         def updatePts(_):
@@ -108,6 +105,6 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 
 calculator.loadData()
 # calculator.replaceDataWithHelix(False)
-plotGTvsCalc(calculator.getTranslationsGTNP(False), calculator.getTranslationsCalcNP(), False)
+plotGTvsCalc(calculator.getTranslationsGTNP(), calculator.getTranslationsCalcNP(), False)
 
 print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)

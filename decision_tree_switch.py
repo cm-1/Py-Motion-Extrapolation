@@ -460,8 +460,8 @@ def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
     
     skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
-        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind, 0)
-        curr_translations = calc_obj.getTranslationsGTNP(False)
+        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind)
+        curr_translations = calc_obj.getTranslationsGTNP()
         for skip in range(skip_end):
             step = skip + 1
             translations = curr_translations[::step]
@@ -715,9 +715,9 @@ motion_data_key_subset = [motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in combos:
-    calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
     all_rotation_mats_T[combo[:2]] = np.swapaxes(
-        calculator.getRotationMatsGTNP(False), -1, -2
+        calculator.getRotationMatsGTNP(), -1, -2
     ) # transposes
 #%%
 print("Starting the confidence interval stuff.")

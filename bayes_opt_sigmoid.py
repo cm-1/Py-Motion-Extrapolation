@@ -41,8 +41,8 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 
 combo_rotations: typing.Dict[typing.Tuple[int, int], RotationInfo] = dict()
 for combo in combos:
-    calculator = PoseLoaderBCOT(combo[0], combo[1], SKIP_AMT)
-    aa_rotations = calculator.getRotationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    aa_rotations = calculator.getRotationsGTNP()[::(SKIP_AMT + 1)]
     qs = pm.quatsFromAxisAngleVec3s(aa_rotations)
     quatDiffs = pm.multiplyQuatLists(qs[1:], pm.conjugateQuats(qs[:-1]))
     axes, angles = pm.axisAnglesFromQuats(quatDiffs)

@@ -17,8 +17,8 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
 
 combo_translations = dict()
 for combo in combos:
-    calculator = PoseLoaderBCOT(combo[0], combo[1], SKIP_AMT)
-    translations = calculator.getTranslationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    translations = calculator.getTranslationsGTNP()[::(SKIP_AMT + 1)]
     combo_translations[combo] = translations
 
 def getCinpactScore(supportRad: float, k: float):
