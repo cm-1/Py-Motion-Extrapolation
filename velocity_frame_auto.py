@@ -142,7 +142,7 @@ if os.path.exists(tmp_dir_name) and os.path.isdir(tmp_dir_name):
 # and I won't let auto-sklearn handle the deletion (though I'll do it myself
 # after so that there's room for the pickled model).
 automl = autosklearn.regression.AutoSklearnRegressor(
-    time_left_for_this_task=3600,
+    time_left_for_this_task=auto_train_seconds,
     memory_limit=avail_mem_safe_mb,
     max_models_on_disc=7,
     tmp_folder=tmp_dir_name,
@@ -219,10 +219,10 @@ def assessJAVError(gt, pred, ind_dict):
     norms = np.linalg.norm(gt - pred, axis = -1)
     return {k: np.mean(norms[v]) for k, v in ind_dict.items()}
 
-askPreds = automl.predict(concat_test_data)
-auto_test_score = assessJAVError(bcs_train[:, -3:], askPreds, s_ind_dict)
-askPreds = automl.predict(concat_train_data)
-auto_train_score = assessJAVError(bcs_test[:, -3:], askPreds, s_train_ind_dict)
+askPreds = automl.predict(z_nonco_test_data)
+auto_test_score = assessJAVError(bcs_test[:, -3:], askPreds, s_ind_dict)
+askPreds = automl.predict(z_nonco_train_data)
+auto_train_score = assessJAVError(bcs_train[:, -3:], askPreds, s_train_ind_dict)
 print("Train data score:")
 print(auto_train_score)
 print("Test data score:")
