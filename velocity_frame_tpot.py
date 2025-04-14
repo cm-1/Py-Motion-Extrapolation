@@ -102,13 +102,25 @@ z_nonco_test_data = bcs_scalar.transform(nonco_test_data)
 ################################################################################
 # TPOT Setup and Training
 ################################################################################
+
+auto_train_minutes = 60
 print("Configuring and training TPOT.")
 tpot = TPOTRegressor(
     generations=5,
     population_size=50,
     random_state=42,
-    max_time_mins=60  # Limit training time to 1 hour
+    max_time_mins=auto_train_minutes
 )
+
+auto_start_time = datetime.datetime.now()
+auto_start_str = "{}:{:02d}".format(
+    auto_start_time.hour, auto_start_time.minute
+)
+print("TPOT fit started at {} and will last {} minutes!".format(
+    auto_start_str, auto_train_minutes
+))
+
+
 
 tpot.fit(z_nonco_train_data, bcs_train[:, -3:])
 
