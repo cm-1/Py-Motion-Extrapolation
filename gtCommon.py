@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import pathlib
 import json
+import re
 import typing
 
 import numpy as np
@@ -60,7 +61,7 @@ class VidBCOT(typing.NamedTuple):
     body_ind: int
     seq_ind: int
 
-class PoseLoader:
+class PoseLoader(ABC):
 
     def __init__(self):
         self._setupPosePaths()
@@ -79,6 +80,13 @@ class PoseLoader:
     def getAllIDs(cls) -> typing.List:
         return []
 
+    # The below code is meant to replace sklearn's train_test_split because
+    # I want this class to be importable without having to install sklearn.
+    # However, to ensure my other code that relied on train_test_split still
+    # gives the same output, I made sure behaviour matched the sklearn source:
+    #   sklearn/model_selection/_split.py
+    # My code is a lot simpler (e.g., assumes random seed's type is never an 
+    # existing rng instead of an int) but should hopefully be "good enough".
     @staticmethod
     def trainValidationTestSplit(data_to_split: NDArray,
                                  validation_ratio: float = 0.15,
@@ -98,8 +106,8 @@ class PoseLoader:
                 )
             )
         
-        # This part also matches sklearn source code functionality, though significantly simplified
-        # because I don't want to handle all the edge cases.
+        # This part also matches sklearn source code functionality, though 
+        # significantly simplified (doesn't handle all the "edge cases").
         rng = np.random.RandomState(random_seed)
         rng_inds = rng.permutation(n_total)
         test_inds = rng_inds[:n_test]
@@ -156,14 +164,14 @@ class PoseLoader:
         cls._setPosePathsFromJSON(d)
     
     @abstractmethod
-    def _getPoseMatrices(self):
+    def _getPosesFromDisk(self):
         pass
             
     def loadData(self):
         if self._dataLoaded:
             return
 
-        gtMatData, calcMatData = self._getPoseMatrices()
+        gtMatData, calcMatData = self._getPosesFromDisk()
 
         self._translationsGTNP = gtMatData[1]
         self._rotationMatsGTNP = gtMatData[0]
@@ -194,7 +202,7 @@ class PoseLoader:
 
     # Returns (rotation mat data, translation data) tuple, where each element is
     # a numpy array, the former with shape (n,3,3), the latter with shape (n,3).
-    def matrixDataFromFile(filepath):
+    def posesFromMatsFile(filepath):
         data = np.loadtxt(filepath)
     
         # Assumes that each line has 12 floats, where the first 9 are the 3x3
@@ -478,7 +486,7 @@ class PoseLoaderBCOT(PoseLoader):
             json_read_result["bcot_result_directory"]
         )
 
-    def _getPoseMatrices(self):
+    def _getPosesFromDisk(self):
         calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
             + self._seq + "_" + self._bod +".txt"
 
@@ -488,13 +496,14 @@ class PoseLoaderBCOT(PoseLoader):
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
-        gtMatData = PoseLoader.matrixDataFromFile(self.posePathGT)
+        gtMatData = PoseLoader.posesFromMatsFile(self.posePathGT)
         calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
         if self._cvFrameSkipForLoad >= 0 and posePathCalc.is_file():
-            calcMatData = PoseLoader.matrixDataFromFile(posePathCalc)
+            calcMatData = PoseLoader.posesFromMatsFile(posePathCalc)
 
         return (gtMatData, calcMatData)
 
+    @staticmethod
     def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
         PoseLoaderBCOT._setupPosePaths()
 
@@ -506,3 +515,76 @@ class PoseLoaderBCOT(PoseLoader):
         
         posePathGT = PoseLoaderBCOT._DATASET_DIR / seq / bod
         return posePathGT.is_dir()
+
+class PoseLoaderBOP(PoseLoader, ABC):
+    def __init__(self):
+        super(PoseLoaderBOP, self).__init__() 
+
+    @staticmethod
+    def _getPosesFromFileBOP(filename):
+        with open(filename, 'r') as f:
+            content = f.read()
+
+        matches = []
+        pattern = r'"(\d+)"\s*:\s*\[\s*{[^}]*?"cam_R_m2c"\s*:\s*\[([^\]]+)\],\s*"cam_t_m2c"\s*:\s*\[([^\]]+)\]'
+        for line in content.split("\n"):
+            matches += re.findall(pattern, content)
+
+        keys = []
+        rotations = []
+        translations = []
+
+        for key, r_str, t_str in matches:
+            keys.append(int(key))
+            r = np.fromstring(r_str, sep=',')
+            t = np.fromstring(t_str, sep=',')
+            rotations.append(r.reshape(3, 3))
+            translations.append(t)
+
+        return (
+            np.stack(rotations),
+            np.stack(translations),
+            np.diff(np.array(keys, dtype=int), prepend=keys[0])
+        )
+    
+    @staticmethod
+    def _posePathFromSeq(parent_path: pathlib.Path, seq_num: int):
+        num_str = "{n:0{w}}".format(n=seq_num, w=6)
+        return parent_path / num_str / "scene_gt.json"
+
+class PoseLoaderTUDL(PoseLoaderBOP):
+    _NUM_SEQS = 3
+    _DATASET_DIR = None
+    _dir_paths_initialized = False
+
+
+    def __init__(self, seq_num: int):
+        super(PoseLoaderTUDL, self).__init__()
+
+        assert seq_num > 0, "Sequence # must be > 0."
+        assert seq_num <= PoseLoaderTUDL._NUM_SEQS, "Sequence # must be <= 3."
+        self.seq_num = seq_num
+
+
+        self.posePathGT = self._posePathFromSeq(
+            PoseLoaderTUDL._DATASET_DIR / "test", seq_num
+        )
+    
+    @classmethod
+    def getAllIDs(cls):
+        return np.arange(PoseLoaderTUDL._NUM_SEQS)
+    
+
+    @classmethod
+    def _setPosePathsFromJSON(cls, json_read_result):
+        PoseLoaderTUDL._DATASET_DIR = pathlib.Path(
+            json_read_result["tudl_dataset_directory"]
+        )
+
+    def _getPosesFromDisk(self):
+        print("Pose path:", self.posePathGT)
+       
+        gtMatData = self._getPosesFromFileBOP(self.posePathGT)
+        
+        return (gtMatData, None)
+    
