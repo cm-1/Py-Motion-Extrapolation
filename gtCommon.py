@@ -74,7 +74,60 @@ class PoseLoader:
         self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
         self._dataLoaded = False
 
+    @classmethod
+    @abstractmethod
+    def getAllIDs(cls) -> typing.List:
+        return []
+
+    @staticmethod
+    def trainValidationTestSplit(data_to_split: NDArray,
+                                 validation_ratio: float = 0.15,
+                                 test_ratio: float = 0.2,
+                                 random_seed: int = 0):
+        n_total = len(data_to_split)
+
+        # sklearn's train_test_split uses ceil for test and floor for train.
+        n_test = int(np.ceil(test_ratio * n_total))
+        n_validation = int(np.ceil(validation_ratio * n_total))
+        n_test_and_valid = (n_test + n_validation)
+        n_train = n_total - n_test_and_valid
+        if n_train <= 0:
+            raise ValueError(
+                "Validation ({}) and test ({}) ratios too high; no training data!".format(
+                    validation_ratio, test_ratio
+                )
+            )
+        
+        # This part also matches sklearn source code functionality, though significantly simplified
+        # because I don't want to handle all the edge cases.
+        rng = np.random.RandomState(random_seed)
+        rng_inds = rng.permutation(n_total)
+        test_inds = rng_inds[:n_test]
+        validation_inds = rng_inds[n_test: n_test_and_valid]
+        train_inds = rng_inds[n_test_and_valid:]
+
+        return (
+            data_to_split[train_inds], data_to_split[validation_inds],
+            data_to_split[test_inds]
+        )
     
+    @classmethod
+    def trainValidationTestSplitIDs(cls, validation_ratio = 0.15, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
+        all_ids = cls.getAllIDs()
+
+        return PoseLoader.trainValidationTestSplit(
+            all_ids, validation_ratio, test_ratio, random_seed
+        )
+        
+    @classmethod
+    def trainTestIDs(cls, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List]:
+        train_valid_test = cls.trainValidationTestSplit(
+            0.0, test_ratio, random_seed
+        )
+        # Extract the (train, test) from the (train, validation, test) tuple,
+        # where validation == [].
+        return (train_valid_test[0], train_valid_test[2])
+
     @classmethod
     @abstractmethod
     def _setPosePathsFromJSON(cls, json_read_result):
@@ -326,6 +379,12 @@ class PoseLoader:
         return ratio * sin_vals, -ratio * cos_vals, zs
 
 class PoseLoaderBCOT(PoseLoader):
+    # Video motion categories.
+    # TODO: Make enum.
+    motion_kinds = [
+        "movable_handheld", "movable_suspension", "static_handheld",
+        "static_suspension", "static_trans"
+    ]
 
     _DATASET_DIR = None
     _CV_POSE_EXPORT_DIR = None
@@ -341,6 +400,73 @@ class PoseLoaderBCOT(PoseLoader):
         
         self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
             / self._bod / "pose.txt"
+
+    @classmethod
+    def getAllIDs(cls):
+        '''
+        Generate the following tuples that represent each video:
+            
+            (sequence_name, body_name, motion_kind)
+        
+        The first two tuple elements uniquely identify a video, while the third
+        is redundant (it's part of each sequence name) but might be used for 
+        more convenient filtering of videos.
+
+        ---
+        In the BCOT dataset, videos are categorized first by the "sequence" type 
+        (which is motion/lighting/background), and then by the object ("body") 
+        featured in the video. Each "combo" of a sequence and body thus represents
+        a distinct video.
+        '''
+
+        combos = []
+        for s, s_val in enumerate(BCOT_SEQ_NAMES):
+            k = ""
+            # For now, using a for loop, not regex, to get motion kind from seq name.
+            for k_opt in PoseLoaderBCOT.motion_kinds:
+                if k_opt in s_val:
+                    k = k_opt
+                    break
+            for b in range(len(BCOT_BODY_NAMES)):
+                # Some sequence-body pairs do not have videos, and some have two videos
+                # with identical motion but a different camera. So we first check that 
+                # a video exists and has unique motion.
+                if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
+                    combos.append((b, s, k))
+        return combos
+
+    @staticmethod
+    def combosByBodyIDs(bods):
+        '''Filter out combos based on the 3D object ("body") subset chosen.''' 
+        combos = PoseLoaderBCOT.getAllIDs()
+        return [c for c in combos if c[0] in bods]
+
+    @classmethod
+    def trainValidationTestByBody(cls, validation_ratio = 0.15, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
+        '''
+        We'll split our data into train/validation/test sets where the vids for
+        a single body will either all be train vids or all be test vids. This 
+        way (a) we are guaranteed to have every motion "class" in our train and 
+        test sets, and (b) we'll know how well the models generalize to new 3D 
+        objects not trained on.
+        '''
+        all_bodies = np.arange(len(BCOT_BODY_NAMES))
+
+        body_split = PoseLoader.trainValidationTestSplit(
+            all_bodies, validation_ratio, test_ratio, random_seed
+        )
+
+        return tuple(PoseLoaderBCOT.combosByBodyIDs(b_ids) for b_ids in body_split)
+
+    @classmethod
+    def trainTestByBody(cls, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
+        '''See the documentation for trainValidationTestByBody().'''
+        train_valid_test = cls.trainValidationTestByBody(
+            0.0, test_ratio, random_seed
+        )
+        # Extract the (train, test) from the (train, validation, test) tuple,
+        # where validation == [].
+        return (train_valid_test[0], train_valid_test[2])
 
 
     @classmethod

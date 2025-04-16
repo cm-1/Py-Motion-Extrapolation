@@ -1,5 +1,7 @@
 from enum import Enum
 import typing
+import copy
+
 from dataclasses import dataclass
 from math import ceil, floor
 
@@ -792,5 +794,116 @@ class CalcsForCombo:
         # # err3D_lists[skip_amt][c2] = curr_errs_3D
         # min_norm_labels[skip_amt][c2] = curr_min_norm_labels[1:]
         
+class JAV(Enum):
+    VELOCITY = 1
+    ACCELERATION = 2
+    JERK = 3
 
+ComboList = typing.List[gtc.VidBCOT]
+PerComboJAV = typing.List[typing.Dict[gtc.VidBCOT, typing.Dict[str, NDArray]]]
+OrderForJAV = typing.Tuple[JAV, JAV, JAV]
+
+
+def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
+                     return_world2locals: bool = False, 
+                     return_translations: bool = False):
+    '''
+    For each frame of video, we consider a coordinate frame where one axis is
+    aligned with the object's velocity and another is aligned with the
+    acceleration (or, at least, the part of it orthogonal to velocity).
+    We then calculate and return the speed, acceleration, and jerk for the current
+    time and the position at the next time in this frame.
+    Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
+    by frame skip amount and by combo.
+    '''
+
+    # Empty dict for each skip amount.
+    all_data: PerComboJAV = [dict() for _ in range(3)]
+    all_world2local_mats: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
+        [dict() for _ in range(3)]
+    all_translations: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
+        [dict() for _ in range(3)]
+    
+    if vec_order is None:
+        vec_order = (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
+    if len(vec_order) != 3 or {v.value for v in vec_order} != {1, 2, 3}:
+        raise ValueError("Vector order must be a permutation of (velocity, acceleration, jerk)!")
+    
+    skip_end = 3#1 if onlySkip0 else 3
+    for c in combos:
+        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind)
+        curr_translations = calc_obj.getTranslationsGTNP()
+        for skip in range(skip_end):
+            step = skip + 1
+            translations = curr_translations[::step]
+            vels = np.diff(translations, axis=0)
+            # We need a velocity for the last timestep, but not an acceleration,
+            # because we need the vectors that take each current position to
+            # the next when calculating the "ground truth" for displacement
+            # predictions. This is the velocity vector; acceleration vectors
+            # are not needed for this; we only need "current" acceleration.
+            accs = np.diff(vels[:-1], axis=0)
+            jerks = np.diff(accs, axis=0)
+
+            # Here we specify which order in which we orthonormalize our
+            # velocity, acceleration, and jerk vectors into orthonormal frames.
+            # The first-chosen of these gets aligned exactly with an axis, while
+            # the others only get orthogonal components aligned with an axis.
+            
+            # To only calculate as much as we need, we clip the arrays' fronts
+            # off when we can.
+            default_ordered = (vels[2:-1], accs[1:], jerks)
+            ordered = copy.copy(default_ordered)
+            if vec_order is not None:
+                ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
+
+            mags0 = np.linalg.norm(ordered[0], axis=-1)
+            unit_vecs0 = pm.safelyNormalizeArray(
+                ordered[0], mags0[:, np.newaxis]
+            )
+            # Find the magnitude of the second vector that is parallel to and
+            # orthogonal to the first.
+            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
+            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
+            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
+            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
+
+            unit_vecs_o1 = pm.safelyNormalizeArray(
+                vecs_o1, mags_o1[:, np.newaxis]
+            )
+
+            unit_vecs2 = np.cross(unit_vecs0, unit_vecs_o1)
+            # We now have matrices to convert vectors in world space into
+            # these local vector-aligned frames.
+            mats = np.stack([unit_vecs0, unit_vecs_o1, unit_vecs2], axis=1)
+
+            # Transform each third vector and to-next-frame displacement into
+            # this frame via matmul.
+            local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
+            local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+
+            # We'll now return all of the data needed to convert velocity,
+            # acceleration, and jerk multipliers into local vectors in these
+            # new frames. To do this, we don't need to return the coordinate
+            # frames themselves: we just need to know the velocity in this
+            # frame (a vector [speed, 0, 0]), the acceleration in this frame
+            # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
+            # we can just return the following:
+            c_res = (
+                mags0, mags_p1, mags_o1, *(local_vecs2.T), *(local_diffs.T)
+            )
+
+            all_data[skip][c] = np.stack(c_res, axis=-1)
+            if return_world2locals:
+                all_world2local_mats[skip][c] = mats
+            if return_translations:
+                all_translations[skip][c] = translations
+    if return_world2locals or return_translations:
+        res = (all_data, )
+        if return_world2locals:
+            res += (all_world2local_mats, )
+        if return_translations:
+            res += (all_translations, )
+        return res
+    return all_data
 
