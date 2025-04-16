@@ -666,14 +666,15 @@ class ImportanceLayer(tf.keras.layers.Layer):
 
 dropout_rate = 0.2
 nodes_per_layer = 128
+vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
 bcs_model = keras.Sequential([
     keras.layers.Input((nonco_train_data.shape[1],)),
     # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
+    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
     keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
+    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
     keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
+    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
     keras.layers.Dense(3)
 ])
 
