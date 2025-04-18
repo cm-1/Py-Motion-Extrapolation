@@ -1,0 +1,126 @@
+# Unresolved Dataset Wishlist:
+
+- Waves/projectiles/driving (not just falling/collision)
+- IMU data for case where both camera **and** object are moving.
+  - I guess it could be "simulated" if ground truth contains both poses instead of just relative pose.
+  - Could maybe be "simulated" with SLAM?
+
+
+# Dataset Info
+
+Still need to assess:
+
+
+- Stereobj-1m
+- YCBInEOAT
+- Those in "Related Works" of "Efficient 6-DoF Tracking of Handheld Objects from an Egocentric Viewpoint"
+- Other BOP datasets
+
+Already assessed:
+
+Real motion:
+
+- Pauwels et al. 2013: Handheld->synthetic, textured, continuous motion.
+  - Paper: https://openaccess.thecvf.com/content_cvpr_2013/papers/Pauwels_Real-Time_Model-Based_Rigid_2013_CVPR_paper.pdf
+  - Data: http://www.karlpauwels.com/datasets/rigid-pose/
+  - Paper says, "Using the proposed system, we recorded a realistic and complex motion trace by manually manipulating an object....
+    This, possibly erroneous, motion trace was then used to generate synthetic sequences and so it is, by definition, the ground-truth object motion."
+    - I.e., the motion is real (but perhaps has "noise" added), and the renders are synthetic.
+  - RBOT authors say of Pauwels dataset: "However, five out of the six objects used within this dataset are particularly well textured.
+    Also the objects are rendered using a Lambertian illumination model without including any
+    directional light source, meaning that the intensity of corresponding pixels between frames
+    does not change. These renderings are furthermore simply pasted onto real images without
+    e.g. blurring their contours in order to smooth the transition between the object and the background"
+    - Could maybe still plug motion params into blender-proc to generate new dataset?
+  - License: Not explicitly specified, so maybe a derivative is not possible!
+- RTB: Synthetic, multijoint, continuous motion, made by Stoiber et al. for their M3T joints tracking paper.
+- YCB: Handheld cam, textured, continuous motion.
+  - Very big & annotations are not the most accurate!
+  - License: MIT
+- BCOT: Handheld obj.s (+ similar), untextured, continuous motion
+  - https://ar3dv.github.io/BCOT-Benchmark/
+    - Downloading from OneDrive requires to sign in with an `@outlook.com` email address, not a UofC one!
+  - License: Not explicitly specified!
+- OPT: robotic arm motion, textured (SW/Marvel toys), continuous motion
+  - http://media.ee.ntu.edu.tw/research/OPT/
+  - Features 2D markers, plain white BG, etc.
+  - License: Not explicitly specified!
+- TUD-L: handheld motion, (textureless?), (continuous motion?)
+  - Scroll down at https://bop.felk.cvut.cz/datasets/
+  - License: CC BY-SA
+- HMD: handheld motion + headset cam, single remote w/ hand occlusion, (continuous motion?)
+  - https://openaccess.thecvf.com/content_ECCV_2018/papers/Rohit_Pandey_Efficient_6-DoF_Tracking_ECCV_2018_paper.pdf
+- IC-MI: 
+  - "Latent Class Hough Forests" paper.
+  - Download: Either BOP website or https://rkouskou.gitlab.io/research/LCHF.html
+  - Seems to skip some frames?
+  - License: "If you make use of te [sic] dataset, please cite:",
+  and there's a more prominent email contact option,
+  _and_ BOP uses/**redistributes** this dataset, so it seems fine...
+
+Real but "unknown" motion (We could perhaps "create" ground truth? E.g., via SLAM and state-of-the-art-non-realtime?):
+
+- CHOI: Handheld obj.s, textured (milk/Tide), continuous motion
+  - REAL SEQUENCES LACK GROUND TRUTH!
+    - 
+  - Paper: https://people.ece.umn.edu/~cchoi/pub/Choi13iros_gputracking.pdf
+  - Data: https://people.ece.umn.edu/~cchoi/research_rgbdtracking.html
+  - License: "Please cite the following paper if you use this dataset" 
+- HB (HomebrewedDB) dataset from BOP
+
+
+"Synthetic" but still continuous (or mostly) motion:
+
+- RBOT: Synthetic, untextured, continuous motion.
+  - Single motion path shared by all non-occluding objects!
+  - CC0, but web link seems to be down now!
+- T-Less
+  - license: CC BY 4.0.
+  - I compiled vid from portions of the train and test data for the different cameras.
+    All motion was just a 360 turntable spin around the models **with discontinuous elevation angle jumps** at the end of each 360.
+    Definitely did not seem handheld or "interesting".
+
+-
+ 
+## Download Status:
+
+Fully Downloaded:
+
+ - RBOT
+ - Choi
+ - IC-MI: "Latent Class Hough Forests"
+ - TUD-L (missing "all test images")
+ - BCOT
+  
+## Datasets Not Made Public:
+
+- "DUI-VIO: Depth Uncertainty Incorporated Visual Inertial Odometry based on an RGB-D Camera"
+  - Handheld camera and walking. Not really _object_ pose prediction, so would have to use PBR to convert into that?
+- "A kinematic analysis of a haptic handheld stylus in a virtual environment: a study in healthy subjects"
+
+## Datasets to _Probably_ Skip:
+
+- BridgeDataV2: https://rail-berkeley.github.io/bridgedata/
+  - Not focused on object tracking, from what I can tell.
+  While it does have video, robotic motions, and camera poses that could be used to _generate_ further data, seems overly complicated?
+  Especially because the data would take so long to download.
+  - License: CC BY.
+- "Grasping in the Wild: Learning 6DoF Closed-Loop Grasping from Low-Cost Demonstrations"
+  - https://graspinwild.cs.columbia.edu/
+  - Human-held camera ground truth poses, but not much else that can be directly used. Would likely have to generate synthetic data, after first doing 75GB download....
+  - For visual summary of how the data was generated, see Figure 2!
+    - https://ar5iv.labs.arxiv.org/html/1912.04344/assets/x2.png
+	- Web archived paper in case above img link fails: https://ar5iv.labs.arxiv.org/html/1912.04344
+
+## Datasets to Skip:
+
+No continuous motion:
+
+- The 2012 ACCV dataset by Hinterstoisser et al. _apparently_ does not contain any continuous video sequences (being just for pose estimation, not tracking),
+  but that's assuming that Tjaden et al. are not mistaken, which cannot be 100% guaranteed.
+  - https://campar.in.tum.de/Main/StefanHinterstoisser
+- TYO-L:
+  - Image sequences clearly unordered.
+  - Scroll down at https://bop.felk.cvut.cz/datasets/
+  - License: CC BY-NC
+- IC-BIN (Doumanoglou et al.) from BOP
