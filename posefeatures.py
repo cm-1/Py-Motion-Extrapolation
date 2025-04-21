@@ -213,15 +213,15 @@ def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         return missing_keys
 
 @dataclass
-class FeaturesAndResultsForCombo:
+class FeaturesAndResultsForVid:
     motion_data: typing.List[typing.Dict[MOTION_DATA_KEY_TYPE, NDArray]]
     err_norms: typing.List[typing.Dict[MOTION_MODEL, NDArray]]
     min_norm_labels: typing.List[NDArray]
     min_norm_vecs: typing.List[NDArray]
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
-class CalcsForCombo:
-    def __init__(self, combos: typing.List[gtc.VidBCOT],
+class CalcsForVideo:
+    def __init__(self, pose_loaders: typing.List[gtc.PoseLoader],
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: float = FLOAT_32_MAX,
@@ -236,7 +236,7 @@ class CalcsForCombo:
         self.err_radius_ratio_thresh = err_radius_ratio_thresh
         self.err_na_val = err_na_val
 
-        self.combos = combos
+        self.pose_loaders = pose_loaders
 
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
@@ -263,11 +263,14 @@ class CalcsForCombo:
 
         # For the 1st combo, check to make sure all keys are there.
         # This way we can stop a lot sooner if we are missing a key.
-        result_for_1st_combo = self.getInputFeatures(self.combos[0], True)[1]
-        remaining_combos = self.combos[1:]
+        result_for_1st = self.getInputFeatures(
+            self.pose_loaders[0], True
+        )[1]
+
+        remaining_loaders = self.pose_loaders[1:]
 
         if num_procs == 1:
-            results = dict(map(self.getInputFeatures, remaining_combos))
+            results = dict(map(self.getInputFeatures, remaining_loaders))
         else: 
             cpu_count = joblib.cpu_count()
             # If caller did not specify how many children processes...
@@ -295,30 +298,31 @@ class CalcsForCombo:
                 with joblib.parallel_config(backend="loky", inner_max_num_threads=per):
                     results_list = Parallel(n_jobs=num_procs)(
                         delayed(self.getInputFeatures)(c)
-                        for c in remaining_combos
+                        for c in remaining_loaders
                     )
                     results = dict(results_list)
             else:
                 print("Running {} processes.".format(num_procs))
                 results_list = Parallel(n_jobs=num_procs)(
-                    delayed(self.getInputFeatures)(c) for c in remaining_combos
+                    delayed(self.getInputFeatures)(c) for c in remaining_loaders
                 )
                 results = dict(results_list)
-        results[self.combos[0]] = result_for_1st_combo
+        results[self.pose_loaders[0].getVidID()] = result_for_1st
 
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
         self.min_norm_vecs = [dict() for _ in range(3)]
+        combos = [pl.getVidID() for pl in self.pose_loaders]
         for i in range(3):
-            for combo in self.combos:
+            for combo in combos:
                 res = results[combo]
                 self.all_motion_data[i][combo] = res.motion_data[i]
                 self.err_norm_lists[i][combo] = res.err_norms[i]
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
                 self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
-    def getInputFeatures(self, combo: gtc.VidBCOT,
+    def getInputFeatures(self, pose_loader: gtc.PoseLoader,
                          check_key_completeness: bool = False):
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
         # shorter aliases might be helpful.
@@ -329,11 +333,10 @@ class CalcsForCombo:
         V3D = Vec3Data
 
         
-        calculator = PoseLoaderBCOT(combo.body_ind, combo.seq_ind)
-        all_translations = calculator.getTranslationsGTNP()
-        aa_rotations = calculator.getRotationsGTNP()
+        all_translations = pose_loader.getTranslationsGTNP()
+        aa_rotations = pose_loader.getRotationsGTNP()
         all_quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
-        all_rotation_mats = calculator.getRotationMatsGTNP()
+        all_rotation_mats = pose_loader.getRotationMatsGTNP()
 
         motion_datas = []
         all_err_norms = []
@@ -786,7 +789,7 @@ class CalcsForCombo:
             all_err_norms.append(curr_err_norms_dict)
             min_err_vecs.append(curr_min_norm_vecs)
 
-        return (combo, FeaturesAndResultsForCombo(
+        return (pose_loader.getVidID(), FeaturesAndResultsForVid(
             motion_datas, all_err_norms, min_err_labels, min_err_vecs
         ))
         # all_motion_data[skip_amt][c2] = motion_data
@@ -799,12 +802,12 @@ class JAV(Enum):
     ACCELERATION = 2
     JERK = 3
 
-ComboList = typing.List[gtc.VidBCOT]
+PoseLoaderList = typing.List[gtc.PoseLoader]
 PerComboJAV = typing.List[typing.Dict[gtc.VidBCOT, typing.Dict[str, NDArray]]]
 OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 
-def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
+def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                      return_world2locals: bool = False, 
                      return_translations: bool = False):
     '''
@@ -830,8 +833,8 @@ def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
         raise ValueError("Vector order must be a permutation of (velocity, acceleration, jerk)!")
     
     skip_end = 3#1 if onlySkip0 else 3
-    for c in combos:
-        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind)
+    for calc_obj in pose_loaders:
+        c = calc_obj.getVidID()
         curr_translations = calc_obj.getTranslationsGTNP()
         for skip in range(skip_end):
             step = skip + 1

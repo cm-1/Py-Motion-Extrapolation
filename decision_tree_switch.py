@@ -22,8 +22,8 @@ import gtCommon as gtc
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
 from posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo, dataForCombosJAV
-from posefeatures import ComboList, PerComboJAV # Type hints.
+from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForVideo, dataForCombosJAV
+from posefeatures import PoseLoaderList, PerComboJAV # Type hints.
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -41,9 +41,12 @@ combos = PoseLoaderBCOT.getAllIDs()
 # From the combo 3-tuples, construct nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
 nametup_combos = [gtc.VidBCOT(*c[:2]) for c in combos]
+bcot_loaders = [
+    PoseLoaderBCOT(nc.body_ind, nc.seq_ind) for nc in nametup_combos
+]
 
-cfc = CalcsForCombo(
-    nametup_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
+cfc = CalcsForVideo(
+    bcot_loaders, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
@@ -397,14 +400,14 @@ from enum import Enum
 # Function that combines the results of the previous one into a 2D numpy
 # array.
 # List[Dict]
-def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
-                         combos: typing.Optional[ComboList] = None, 
+def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, *,
+                         pose_loaders: typing.Optional[PoseLoaderList] = None, 
                          precalc_per_combo: typing.Optional[PerComboJAV] = None):   
-    if combos is None and precalc_per_combo is None:
+    if pose_loaders is None and precalc_per_combo is None:
         raise ValueError(
             "Cannot have combos and precalc_per_combo both be None!"
         )
-    elif combos is not None and precalc_per_combo is not None:
+    elif pose_loaders is not None and precalc_per_combo is not None:
         raise ValueError(
             "Cannot provide values for both  combos and precalc_per_combo!"
         )
@@ -412,7 +415,7 @@ def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
     all_data = precalc_per_combo
     if precalc_per_combo is None:
         all_data = dataForCombosJAV(
-            combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+            pose_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
         )
     
 
@@ -541,7 +544,7 @@ bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
 # Get local-frame data.
 bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
-    nametup_combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), True, True
+    bcot_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), True, True
 )
 
 bcs_train, bcs_test = dataForComboSplitJAV(

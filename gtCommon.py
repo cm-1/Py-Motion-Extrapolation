@@ -141,6 +141,10 @@ class PoseLoader(ABC):
     def _setPosePathsFromJSON(cls, json_read_result):
         pass
 
+    @abstractmethod
+    def getVidID(self):
+        pass
+
     # The error-handling here was added by ChatGPT, but all remaining code is
     # human-written.
     @classmethod
@@ -402,12 +406,22 @@ class PoseLoaderBCOT(PoseLoader):
         '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
         super(PoseLoaderBCOT, self).__init__()
 
-        self._seq = BCOT_SEQ_NAMES[seqIndex]
-        self._bod = BCOT_BODY_NAMES[bodyIndex]
+        self._bod_index = bodyIndex
+        self._seq_index = seqIndex
+        self._seq = BCOT_SEQ_NAMES[self._seq_index]
+        self._bod = BCOT_BODY_NAMES[self._bod_index]
         self._cvFrameSkipForLoad = cvFrameSkipForLoad
         
         self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
             / self._bod / "pose.txt"
+        
+        calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
+            + self._seq + "_" + self._bod +".txt"
+        self.posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
+
+
+    def getVidID(self):
+        return (self._bod_index, self._seq_index)
 
     @classmethod
     def getAllIDs(cls):
@@ -487,19 +501,16 @@ class PoseLoaderBCOT(PoseLoader):
         )
 
     def _getPosesFromDisk(self):
-        calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
-            + self._seq + "_" + self._bod +".txt"
 
         print("Pose path:", self.posePathGT)
-        posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
         #patternNum = r"(-?\d+\.?\d*e?-?\d*)" # E.g., should match "-0.11e-07"
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
         gtMatData = PoseLoader.posesFromMatsFile(self.posePathGT)
         calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
-        if self._cvFrameSkipForLoad >= 0 and posePathCalc.is_file():
-            calcMatData = PoseLoader.posesFromMatsFile(posePathCalc)
+        if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
+            calcMatData = PoseLoader.posesFromMatsFile(self.posePathCalc)
 
         return (gtMatData, calcMatData)
 
