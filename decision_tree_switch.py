@@ -23,7 +23,7 @@ import gtCommon as gtc
 # schemes like constant-velocity, constant-acceleration, etc.
 from posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
 from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForVideo, dataForCombosJAV
-from posefeatures import PoseLoaderList, PerComboJAV # Type hints.
+from posefeatures import PoseLoaderList, NumpyForSkipAndID # Type hints.
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -46,13 +46,13 @@ bcot_loaders = [
 ]
 
 cfc = CalcsForVideo(
-    bcot_loaders, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
+    obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
 )
-results = cfc.getAll()
+results = cfc.getAll(bcot_loaders)
 
 # Input features like velocity, acceleration, jerk, rotation speed, etc.
 all_motion_data = cfc.all_motion_data
@@ -87,7 +87,7 @@ err_norm_lists = cfc.err_norm_lists
 def concatForComboSubset(data, combo_subset): #, front_trim: int = 0):
     ret_val = []
     for els_for_skip in data:
-        subset_via_combos = [els_for_skip[ck[:2]] for ck in combo_subset]
+        subset_via_combos = [els_for_skip[ck] for ck in combo_subset]
         concated = None
         front_trim = 0 # May set this via param in future code.
         if isinstance(subset_via_combos[0], dict):
@@ -133,15 +133,18 @@ train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(
     test_ratio=0.2, random_seed=0
 )
 
+train_combos_c2 = [c[:2] for c in train_combos]
+test_combos_c2 = [c[:2] for c in test_combos] # Get the unique part of each.
+
 # The below gets the training and test data, but leaves them currently still
 # separated by skip amount. Here, one can quickly slap a "[0]" at the end of
 # each line to just look at data for one skip amount, for example.
-train_data = concatForComboSubset(all_motion_data, train_combos)
-train_labels = concatForComboSubset(min_norm_labels, train_combos)
-train_errs = concatForComboSubset(err_norm_lists, train_combos)
-test_labels = concatForComboSubset(min_norm_labels, test_combos)
-test_data = concatForComboSubset(all_motion_data, test_combos)
-test_errs = concatForComboSubset(err_norm_lists, test_combos)
+train_data = concatForComboSubset(all_motion_data, train_combos_c2)
+train_labels = concatForComboSubset(min_norm_labels, train_combos_c2)
+train_errs = concatForComboSubset(err_norm_lists, train_combos_c2)
+test_labels = concatForComboSubset(min_norm_labels, test_combos_c2)
+test_data = concatForComboSubset(all_motion_data, test_combos_c2)
+test_errs = concatForComboSubset(err_norm_lists, test_combos_c2)
 
 # Get 2D NDArrays from the above.
 concat_train_labels = np.concatenate(train_labels)
@@ -402,7 +405,7 @@ from enum import Enum
 # List[Dict]
 def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, *,
                          pose_loaders: typing.Optional[PoseLoaderList] = None, 
-                         precalc_per_combo: typing.Optional[PerComboJAV] = None):   
+                         precalc_per_combo: typing.Optional[NumpyForSkipAndID] = None):   
     if pose_loaders is None and precalc_per_combo is None:
         raise ValueError(
             "Cannot have combos and precalc_per_combo both be None!"

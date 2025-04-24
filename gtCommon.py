@@ -114,10 +114,11 @@ class PoseLoader(ABC):
         validation_inds = rng_inds[n_test: n_test_and_valid]
         train_inds = rng_inds[n_test_and_valid:]
 
-        return (
-            data_to_split[train_inds], data_to_split[validation_inds],
-            data_to_split[test_inds]
-        )
+        train_data = [data_to_split[i] for i in train_inds]
+        val_data = [data_to_split[i] for i in validation_inds]
+        test_data = [data_to_split[i] for i in test_inds]
+
+        return (train_data, val_data, test_data)
     
     @classmethod
     def trainValidationTestSplitIDs(cls, validation_ratio = 0.15, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
@@ -129,7 +130,7 @@ class PoseLoader(ABC):
         
     @classmethod
     def trainTestIDs(cls, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List]:
-        train_valid_test = cls.trainValidationTestSplit(
+        train_valid_test = cls.trainValidationTestSplitIDs(
             0.0, test_ratio, random_seed
         )
         # Extract the (train, test) from the (train, validation, test) tuple,
@@ -532,14 +533,31 @@ class PoseLoaderBOP(PoseLoader, ABC):
         super(PoseLoaderBOP, self).__init__() 
 
     @staticmethod
-    def _getPosesFromFileBOP(filename):
+    def _getPosesFromFileBOP(filename: str,
+                             line_range: \
+                                typing.Optional[typing.Tuple[int, int]] = None
+                             ):
+        '''NOTE: Line range has inclusive lower, exclusive upper, like range().'''
         with open(filename, 'r') as f:
-            content = f.read()
+            content = f.readlines()
+            
+        if content[0].strip() == "{":
+            content = content[1:] # Exclude first line, "{"
 
         matches = []
         pattern = r'"(\d+)"\s*:\s*\[\s*{[^}]*?"cam_R_m2c"\s*:\s*\[([^\]]+)\],\s*"cam_t_m2c"\s*:\s*\[([^\]]+)\]'
-        for line in content.split("\n"):
-            matches += re.findall(pattern, content)
+        
+        selected_content = content
+        if line_range is not None:
+            selected_content = content[line_range[0]:line_range[1]]
+        
+        for line in selected_content:
+            curr_matches = re.findall(pattern, line)
+            if len(curr_matches) > 1:
+                raise NotImplementedError("More than one object per frame!")
+            elif len(curr_matches) == 0 and line.strip() != '}':
+                raise Exception("No pose found on line!")
+            matches += curr_matches
 
         keys = []
         rotations = []
@@ -565,25 +583,63 @@ class PoseLoaderBOP(PoseLoader, ABC):
 
 class PoseLoaderTUDL(PoseLoaderBOP):
     _NUM_SEQS = 3
+    _NUM_SUBSEQS = 8
+    _SUBSEQ_SPLITS = {
+        (True, 1): (1085, 2030, 2982, 4074, 5320, 6440, 7630),
+        (True, 2): (987, 1948, 2907, 4013, 5035, 5994, 7184),
+        (True, 3): (966, 1903, 2981, 4010, 4974, 6066, 7347),
+        (False, 1): (1421, 3059, 4445, 6027, 7994, 9646, 11865),
+        (False, 2): (1274, 2765, 3899, 5180, 6622, 7749, 9793),
+        (False, 3): (1806, 3794, 5117, 6706, 8246, 9772, 11851)
+    }
     _DATASET_DIR = None
     _dir_paths_initialized = False
 
 
-    def __init__(self, seq_num: int):
+    def __init__(self, is_test: bool, seq_num: int, subseq_num: int):
         super(PoseLoaderTUDL, self).__init__()
 
         assert seq_num > 0, "Sequence # must be > 0."
         assert seq_num <= PoseLoaderTUDL._NUM_SEQS, "Sequence # must be <= 3."
+
+        # -1 means we use whole folder, including discontinuities.
+        assert subseq_num >= -1, "Subsequence # must be >= -1."
+        assert subseq_num < PoseLoaderTUDL._NUM_SUBSEQS, "Subsequence # must be < 8."
+        
         self.seq_num = seq_num
+        self.subseq_num = subseq_num
+        self.is_test = is_test
+
+        tt_folder = "test" if is_test else "train_real"
 
 
         self.posePathGT = self._posePathFromSeq(
-            PoseLoaderTUDL._DATASET_DIR / "test", seq_num
+            PoseLoaderTUDL._DATASET_DIR / tt_folder, seq_num
         )
+
+        low = 0
+        if subseq_num > 0:
+            low = PoseLoaderTUDL._SUBSEQ_SPLITS[is_test, seq_num][subseq_num - 1]
+
+        high = None
+        # -1 means we use whole folder, including discontinuities.
+        if subseq_num >= 0 and (subseq_num + 1) < PoseLoaderTUDL._NUM_SUBSEQS:
+            high = PoseLoaderTUDL._SUBSEQ_SPLITS[is_test, seq_num][subseq_num]
+        
+
+        self.subseq_interval = (low, high)
     
     @classmethod
     def getAllIDs(cls):
-        return np.arange(PoseLoaderTUDL._NUM_SEQS)
+        return [
+            (is_test, seq_num, subseq_num)
+            for is_test in (True, False) 
+            for seq_num in range(1, PoseLoaderTUDL._NUM_SEQS + 1)
+            for subseq_num in range(PoseLoaderTUDL._NUM_SUBSEQS)
+        ]
+    
+    def getVidID(self):
+        return (self.is_test, self.seq_num, self.subseq_num)
     
 
     @classmethod
@@ -595,7 +651,9 @@ class PoseLoaderTUDL(PoseLoaderBOP):
     def _getPosesFromDisk(self):
         print("Pose path:", self.posePathGT)
        
-        gtMatData = self._getPosesFromFileBOP(self.posePathGT)
+        gtMatData = self._getPosesFromFileBOP(
+            self.posePathGT, self.subseq_interval
+        )
         
         return (gtMatData, None)
     

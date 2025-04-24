@@ -3,7 +3,7 @@ import typing
 import copy
 
 from dataclasses import dataclass
-from math import ceil, floor
+from math import floor
 
 import numpy as np
 from numpy.typing import NDArray
@@ -15,7 +15,6 @@ import posemath as pm
 import poseextrapolation as pex
 import minjerk as mj
 
-from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 DEFAULT_OBJ_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -190,6 +189,7 @@ class Vec3Data:
                 # MAYBE setting unit dir to 0 is a workaround if this happens?
 
 MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
+PoseLoaderList = typing.List[gtc.PoseLoader]
 
 def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         missing_keys: typing.List[MOTION_DATA] = []
@@ -221,7 +221,7 @@ class FeaturesAndResultsForVid:
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
 class CalcsForVideo:
-    def __init__(self, pose_loaders: typing.List[gtc.PoseLoader],
+    def __init__(self, 
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: float = FLOAT_32_MAX,
@@ -235,8 +235,6 @@ class CalcsForVideo:
         self.split_min_jerk_opt_iter_lim = split_min_jerk_opt_iter_lim
         self.err_radius_ratio_thresh = err_radius_ratio_thresh
         self.err_na_val = err_na_val
-
-        self.pose_loaders = pose_loaders
 
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
@@ -258,16 +256,18 @@ class CalcsForVideo:
         self._joblib_1_3_supported = joblib_1_3_supported
         # End of constructor.
         
-    def getAll(self, num_procs: int = -1, max_threads_per_proc = 2):
+    def getAll(self, pose_loaders: PoseLoaderList, num_procs: int = -1,
+               max_threads_per_proc = 2):
+        
         results = None
 
         # For the 1st combo, check to make sure all keys are there.
         # This way we can stop a lot sooner if we are missing a key.
         result_for_1st = self.getInputFeatures(
-            self.pose_loaders[0], True
+            pose_loaders[0], True
         )[1]
 
-        remaining_loaders = self.pose_loaders[1:]
+        remaining_loaders = pose_loaders[1:]
 
         if num_procs == 1:
             results = dict(map(self.getInputFeatures, remaining_loaders))
@@ -307,13 +307,13 @@ class CalcsForVideo:
                     delayed(self.getInputFeatures)(c) for c in remaining_loaders
                 )
                 results = dict(results_list)
-        results[self.pose_loaders[0].getVidID()] = result_for_1st
+        results[pose_loaders[0].getVidID()] = result_for_1st
 
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
         self.min_norm_vecs = [dict() for _ in range(3)]
-        combos = [pl.getVidID() for pl in self.pose_loaders]
+        combos = [pl.getVidID() for pl in pose_loaders]
         for i in range(3):
             for combo in combos:
                 res = results[combo]
@@ -708,7 +708,7 @@ class CalcsForVideo:
                 motion_data[SMD(md_k, RA.ITSELF, AM.MAG, False, False)] = v3s.norms
 
 
-            rel_axes_dict: typing.Dict[RELATIVE_AXIS, np.ndarray] = {
+            rel_axes_dict: typing.Dict[RELATIVE_AXIS, NDArray] = {
                 RA.VEL_DEG1: unit_vels_deg1, RA.VEL_DEG2: unit_vels_deg2,
                 RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG2: unit_acc_ortho_deg2_vecs,
                 RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes
@@ -802,8 +802,7 @@ class JAV(Enum):
     ACCELERATION = 2
     JERK = 3
 
-PoseLoaderList = typing.List[gtc.PoseLoader]
-PerComboJAV = typing.List[typing.Dict[gtc.VidBCOT, typing.Dict[str, NDArray]]]
+NumpyForSkipAndID = typing.List[typing.Dict[typing.Any, NDArray]]
 OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 
@@ -816,16 +815,14 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
     acceleration (or, at least, the part of it orthogonal to velocity).
     We then calculate and return the speed, acceleration, and jerk for the current
     time and the position at the next time in this frame.
-    Returns a List[Dict[Combo, Dict[str, NDArray]]] that again separates things
+    Returns a List[Dict[Combo, NDArray]] that again separates things
     by frame skip amount and by combo.
     '''
 
     # Empty dict for each skip amount.
-    all_data: PerComboJAV = [dict() for _ in range(3)]
-    all_world2local_mats: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
-        [dict() for _ in range(3)]
-    all_translations: typing.List[typing.Dict[gtc.VidBCOT, NDArray]] = \
-        [dict() for _ in range(3)]
+    all_data: NumpyForSkipAndID = [dict() for _ in range(3)]
+    all_world2local_mats: NumpyForSkipAndID = [dict() for _ in range(3)]
+    all_translations: NumpyForSkipAndID = [dict() for _ in range(3)]
     
     if vec_order is None:
         vec_order = (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
