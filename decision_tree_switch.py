@@ -2,6 +2,7 @@
 import typing
 import copy
 import time
+from collections import defaultdict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -21,9 +22,12 @@ import gtCommon as gtc
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForVideo, dataForCombosJAV
-from posefeatures import PoseLoaderList, NumpyForSkipAndID # Type hints.
+from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
+# Classes, functions, and type hints:
+from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
+from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
+
+from motiontools.dataorg import DataOrganizer, concatForComboSubset
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -64,102 +68,25 @@ min_norm_labels = cfc.min_norm_labels
 # Labels for which of these physical models performed best for each vid frame.
 err_norm_lists = cfc.err_norm_lists
 
-
-# The above three data sequences have the following type: 
-#     List[Dict[Combo, (Dict|NDArray)]]
-# That is, we have a list of dictionaries which store the results per combo,
-# where said "result" might be an NDArray (in the case of min_norm_labels) or
-# another dict with "column" names.
-# 
-# The combo-keyed dict's index in the top-level list corresponds to the number 
-# of frames we are skipping when we read the dataset. So the [0] dict is when
-# not skipping any  frames, the [1] dict for when reading every 2nd frame only, 
-# etc.
-
-#%%
-# The below are functions that convert the above lists of dicts into single
-# train/test sets that we can pass into our model training.
-
-# First, we concatenate together the data for a subset of combos and get
-# a list of 3 items, where each list index again corresponds to the frame 
-# skip amount but results are no longer separated by combo.
-# Motivation: We may want to quickly filter out a skip amount for training.
-def concatForComboSubset(data, combo_subset): #, front_trim: int = 0):
-    ret_val = []
-    for els_for_skip in data:
-        subset_via_combos = [els_for_skip[ck] for ck in combo_subset]
-        concated = None
-        front_trim = 0 # May set this via param in future code.
-        if isinstance(subset_via_combos[0], dict):
-            concated = dict()
-            for k in subset_via_combos[0].keys():
-                concated[k] = np.concatenate([
-                    svc[k][front_trim:] for svc in subset_via_combos
-                ])
-        else:
-            concated = np.concatenate([
-                svc[front_trim:] for svc in subset_via_combos
-            ]) 
-        ret_val.append(concated)
-    return ret_val
-
-# This converts List[Dict[Any, NDArray]] items, which are lists of result 
-# dicts of NDarrays indexed by frame skip, into a single 2D NDArray.
-# It also returns the dictionary keys in the order that the columns appear in
-# the 2D array so that we know which column is which.
-def get2DArrayFromDataStruct(data: typing.List[typing.Dict[typing.Any, NDArray]], 
-                            ks: typing.List[MOTION_DATA_KEY_TYPE] = None,
-                            stack_axis: int = 0):
-    if ks is None:
-        ks = list(data[0].keys())
-    concated = {k: np.concatenate([d[k] for d in data]) for k in ks}
-    stacked = np.stack([concated[k] for k in ks], stack_axis)
-    return ks, stacked
-
-# Filter out combos based on the 3D object ("body") subset chosen. 
-def combosByBod(bods):
-    return [c for c in combos if c[0] in bods]
-            
-# def concatForKeys(data, keys):
-#     return np.stack((data[k] for k in keys))
-
 #%%
 
 # We'll split our data into train/test sets where the vids for a single body
 # will either all be train vids or all be test vids. This way (a) we are
 # guaranteed to have every motion "class" in our train and test sets, and (b)
 # we'll know how well the models generalize to new 3D objects not trained on.
-train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(
+bcot_train_combos, bcot_test_combos = PoseLoaderBCOT.trainTestByBody(
     test_ratio=0.2, random_seed=0
 )
+train_combos_c2 = [c[:2] for c in bcot_train_combos]
+test_combos_c2 = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
 
-train_combos_c2 = [c[:2] for c in train_combos]
-test_combos_c2 = [c[:2] for c in test_combos] # Get the unique part of each.
-
-# The below gets the training and test data, but leaves them currently still
-# separated by skip amount. Here, one can quickly slap a "[0]" at the end of
-# each line to just look at data for one skip amount, for example.
-train_data = concatForComboSubset(all_motion_data, train_combos_c2)
-train_labels = concatForComboSubset(min_norm_labels, train_combos_c2)
-train_errs = concatForComboSubset(err_norm_lists, train_combos_c2)
-test_labels = concatForComboSubset(min_norm_labels, test_combos_c2)
-test_data = concatForComboSubset(all_motion_data, test_combos_c2)
-test_errs = concatForComboSubset(err_norm_lists, test_combos_c2)
-
-# Get 2D NDArrays from the above.
-concat_train_labels = np.concatenate(train_labels)
-concat_test_labels = np.concatenate(test_labels)
-# Get the "keys" as another return value so that we know the column names/order.
-motion_data_keys, concat_train_data = get2DArrayFromDataStruct(train_data, stack_axis=-1)
-_, concat_test_data = get2DArrayFromDataStruct(test_data, motion_data_keys, stack_axis=-1)
-
-# We'll specify the column names/order manually for this one.
-motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
-_, concat_train_errs = get2DArrayFromDataStruct(train_errs, motion_mod_keys, stack_axis=-1)
-_, concat_test_errs = get2DArrayFromDataStruct(test_errs, motion_mod_keys, stack_axis=-1)
+dog = DataOrganizer(
+    all_motion_data, min_norm_labels, err_norm_lists,
+    train_combos_c2, test_combos_c2
+)
 
 #%%
-test_bodies = np.unique([c[0] for c in test_combos])
+test_bodies = np.unique([c[0] for c in bcot_test_combos])
 best_seq_means = []
 test_best_seq_means = []
 for skip in range(3):
@@ -197,69 +124,18 @@ print("Test data:", test_best_seq_means)
 
 
 #%%
-
-# Type hint for a dict with string keys and items that are either (int, int)
-# intervals or a bool numpy array of indices.
-IndDict = typing.Dict[
-    str, 
-    typing.Union[typing.Tuple[int,int], NDArray] # NDArray holds bool indices.
-]
-
-# Gets the per-frame pose error in millimeters for a set of "labels" which 
-# represent which physics-based motion model (non-regression-ML) chosen each 
-# frame.
-# Returns a dict that separates these MAEs based on frame category, e.g., skip
-# amount.
-def getErrorPerSkip(concat_errs: NDArray, pred_labels: NDArray, inds_dict: IndDict):
-    pred_labels_rs = pred_labels.reshape(-1,1)
-    taken_errs = np.take_along_axis(concat_errs, pred_labels_rs, axis=1)
-    ret_dict: typing.Dict[str, NDArray] = dict()
-    for k, inds in inds_dict.items():
-        if inds is not None and isinstance(inds, tuple):
-            ret_dict[k] = taken_errs[inds[0]:inds[1]]
-        else:
-            ret_dict[k] = taken_errs[inds]
-        {k: taken_errs[inds] for k, inds in inds_dict.items()}
-    return ret_dict
-
-# Same as the above, but returns MAE per inds_dict category rather than a whole
-# list of per-frame errors.
-def assessPredError(concat_errs, pred_labels, inds_dict = None):
-    if inds_dict is None:
-        inds_dict = {"all:": None}
-    all_errs_dict = getErrorPerSkip(concat_errs, pred_labels, inds_dict)
-    mean_dict = {k: v.mean() for k, v in all_errs_dict.items()}
-    return mean_dict
-#%%
-
-# Get the indices of each skip amount inside the concatenated 2D array we
-# created above. There might be a "smarter" way to do this given how things were
-# previously split into lists by skip amount, but whatever.
-s_inds = []       # For test data
-s_train_inds = [] # For trian data
-ts_ind = motion_data_keys.index(MOTION_DATA.TIMESTEP)
-for i in range(1,4): # We have data for frame steps of 1, 2, and 3.
-    curr_s_inds = concat_test_data[:, ts_ind] == i
-    s_inds.append(curr_s_inds)
-    s_train_inds.append(concat_train_data[:, ts_ind] == i)
-
-# Convert the above 3-item lists into dicts.
-s_ind_dict = {"skip" + str(i): s_inds[i] for i in range(3)}
-s_ind_dict["all"] = None # Because my_np_array[None] returns all elements.
-
-s_train_ind_dict = {"skip" + str(i): s_train_inds[i] for i in range(3)}
-s_train_ind_dict["all"] = None
-
-mc = WeightedErrorCriterion(1, np.array([len(MOTION_MODEL)], dtype=np.intp))
-y_errs_reshape = concat_train_errs.reshape((
-    concat_train_errs.shape[0], 1, concat_train_errs.shape[1]
+motion_mod_len = len(MOTION_MODEL)
+mc = WeightedErrorCriterion(1, np.array([motion_mod_len], dtype=np.intp))
+class_errs_shape = dog.concat_train_class_errs.shape
+y_errs_reshape = dog.concat_train_class_errs.reshape((
+    class_errs_shape[0], 1, class_errs_shape[1]
 ))
 mc.set_y_errs(y_errs_reshape)
 
 # Find the "lower bound" for error when we train a classifier to use the physics
 # models for prediction, by finding pose MAE for perfect classification.
-error_lim_all = getErrorPerSkip(concat_test_errs, concat_test_labels, s_ind_dict)
-error_lim = assessPredError(concat_test_errs, concat_test_labels, s_ind_dict)
+error_lim_all = dog.getClassErrsTest(dog.concat_test_labels)
+error_lim = dog.getClassScoresTest(dog.concat_test_labels)
 print("Classification MAE limit:", error_lim)
 
 # A tree depth of 8 is already way beyond "human-readable", and I think the
@@ -278,7 +154,7 @@ max_depth = 8
 big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
 print("Starting decision tree training!")
 start_time = time.time()
-big_tree = big_tree.fit(concat_train_data, concat_train_labels)
+big_tree = big_tree.fit(dog.concat_train_data, dog.concat_train_labels)
 print("Done!")
 print("Time spent:", time.time() - start_time)
 #%%
@@ -318,7 +194,7 @@ def trim_to_depth(tree: sk_tree._classes.DecisionTreeClassifier, depth):
     return tree_copy
 
 #%%
-scores = {k: np.empty(max_depth) for k in s_ind_dict.keys()}
+scores = defaultdict(lambda : np.empty(max_depth))
 depths = np.arange(1, max_depth + 1)
 for d in depths:
     # Preiously, we trained new trees from scratch using the below code, but as
@@ -326,8 +202,8 @@ for d in depths:
     #         clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
     #         clf = clf.fit(concat_train_data, concat_train_labels)
     trimmed_tree = trim_to_depth(big_tree, d)
-    graph_pred = trimmed_tree.predict(concat_test_data)
-    scores_for_depth = assessPredError(concat_test_errs, graph_pred, s_ind_dict)
+    graph_pred = trimmed_tree.predict(dog.concat_test_data)
+    scores_for_depth = dog.getClassScoresTest(graph_pred)
     for k, score_for_depth in scores_for_depth.items():
         scores[k][d-1] = score_for_depth
 
@@ -357,19 +233,27 @@ print("TODO: Add single 'limit' legend entry!")
 #         mclf = mclf.fit(concat_train_data, concat_train_labels)
 mclf = trim_to_depth(big_tree, 4)
 
-mclfps = mclf.predict(concat_test_data).copy()
+mclfps = mclf.predict(dog.concat_test_data).copy()
 
 #%%
 
-mc_errs = assessPredError(concat_test_errs, mclfps, s_ind_dict)
+mc_errs = dog.getClassScoresTest(mclfps)
 print("Error for my decision tree=", mc_errs)
 print("Done!", mclfps)
+
+def getTreeDataTrainScore(tree, data_organizer: DataOrganizer):
+    p = tree.predict(data_organizer.concat_train_data)
+    return data_organizer.getClassScoresTrain(p)
+def getTreeDataTestScore(tree, data_organizer: DataOrganizer):
+    p = tree.predict(data_organizer.concat_test_data)
+    return data_organizer.getClassScoresTest(p)
+
 #%%
 from sklearn.tree import export_graphviz
 import pathlib
 
 tree_path = pathlib.Path(__file__).parent.resolve() / "results" / "tree.dot"
-feature_names = [e.name for e in motion_data_keys]
+feature_names = [e.name for e in dog.motion_data_keys]
 class_names = [str(i) for i in range(1, len(MOTION_MODEL) + 1)]
 
 export_graphviz(
@@ -392,7 +276,6 @@ import tensorflow as tf
 import keras
 import posemath as pm # Small "library" I wrote for vector operations.
 from sklearn.preprocessing import StandardScaler
-from enum import Enum
 
 # We will start off the neural net code by constructing a regression network
 # that predicts multipliers for velocity, acceleration, and jerk that we will
@@ -487,21 +370,22 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
 # collinear ones before training.
 colin_thresh = 0.7 # Threshold for collinearity.
 
-nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
+nonco_cols, co_mat = pm.non_collinear_features(
+    dog.concat_train_data, colin_thresh
+)
 
-last_best_ind = motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
-timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
+timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
+
+nonco_col_nums = np.where(nonco_cols)[0]
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
 # nonco_cols[list(select_cols)] = True
 
-# Get the data subset for the selected non-collinear columns.
-nonco_train_data = concat_train_data[:, nonco_cols]
-nonco_test_data = concat_test_data[:, nonco_cols]
 
 # %%
 
@@ -532,7 +416,7 @@ dropout_rate = 0.2
 nodes_per_layer = 128
 vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
 bcs_model = keras.Sequential([
-    keras.layers.Input((nonco_train_data.shape[1],)),
+    keras.layers.Input((len(nonco_col_nums),)),
     # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
     keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
     keras.layers.Dropout(dropout_rate),
@@ -545,13 +429,15 @@ bcs_model = keras.Sequential([
 bcs_model.summary()
 bcs_model.compile(loss=poseLossJAV, optimizer='adam')
 # %%
+JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+
 # Get local-frame data.
 bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
-    bcot_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), True, True
+    bcot_loaders, JAV_order, True, True
 )
 
 bcs_train, bcs_test = dataForComboSplitJAV(
-    train_combos, test_combos, precalc_per_combo=bcs_per_combo
+    dog.train_ids, dog.test_ids, precalc_per_combo=bcs_per_combo
 )
 
 # Convert from numpy array to tf tensor.
@@ -559,24 +445,67 @@ bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
 bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
-bcs_scalar = StandardScaler()
-z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data)
+bcs_scaler = StandardScaler()
+dog.setPickAndTransform(nonco_cols, bcs_scaler)
+
+
+
 #%% Train the network.
-bcs_hist = bcs_model.fit(z_nonco_train_data, bcs_train, epochs=32, shuffle=True)
+bcs_hist = bcs_model.fit(dog.col_subset_train, bcs_train, epochs=32, shuffle=True)
 
 #%% Evaluate network on test data.
-z_nonco_test_data = bcs_scalar.transform(nonco_test_data)
-bcs_pred = bcs_model.predict(z_nonco_test_data)
-bcs_test_errs = poseLossJAV(bcs_test, bcs_pred)
+
+bcs_pred = bcs_model.predict(dog.col_subset_test)
+bcs_test_errs: NDArray = poseLossJAV(bcs_test, bcs_pred).numpy()
 #%% Print scores on test data.
-bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in s_ind_dict.items()}
+bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}
 for k, v in bcs_test_scores.items():
     print(k + ":", v)
+
+class DataForJAV:
+    def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
+                 col_inds: NDArray, JAV_order: OrderForJAV):
+
+        self.data_organizer = data_organizer
+        if len(self.data_organizer.col_subset_test) <= 0:
+            self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
+
+        jav_per_combo = dataForCombosJAV(loaders, JAV_order, False, False)
+
+        # TODO: Currently we calculate both train and test while only printing one.
+        # Need a small refactor to fix this.
+        self.jav_train, self.jav_test = dataForComboSplitJAV(
+            data_organizer.train_ids, data_organizer.test_ids,
+            precalc_per_combo=jav_per_combo
+        )
+        
+    def printErrsTrain(self, predictions: typing.Optional[NDArray] = None):
+        if predictions is None:
+            predictions = bcs_model.predict(self.data_organizer.col_subset_train)
+        self._printHelper(
+            predictions, self.jav_train, self.data_organizer.skip_train_inds_dict
+        )
+
+    def printErrsTest(self, predictions: typing.Optional[NDArray] = None):
+        if predictions is None:
+            predictions = bcs_model.predict(self.data_organizer.col_subset_test)
+        self._printHelper(
+            predictions, self.jav_test, self.data_organizer.skip_inds_dict
+        )
+
+    @staticmethod
+    def _printHelper(preds: NDArray, jav_vals: NDArray, inds: typing.Dict):
+        errs: NDArray = poseLossJAV(jav_vals, preds).numpy()
+        # Print scores on test data.
+        scores = {k: np.mean(errs[v]) for k, v in inds.items()}
+        for k, v in scores.items():
+            print(k + ":", v)
+
+
 # print(bcs_test_scores)
 #%%
 import errorstats as es
-nonco_col_nums = np.where(nonco_cols)[0]
-motion_data_key_subset = [motion_data_keys[i] for i in nonco_col_nums]
+motion_data_key_subset = [dog.motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in combos:
@@ -598,13 +527,13 @@ lim_class_errs: typing.List[typing.Dict[str, NDArray]] = [
 ]
 
 for skip in range(3):
-    for combo in test_combos:
+    for combo in bcot_test_combos:
         c2 = combo[:2]
         curr_input_dict = all_motion_data[skip][c2]
         curr_input = np.stack(
             [curr_input_dict[k] for k in motion_data_key_subset], axis=-1
         )
-        curr_input = bcs_scalar.transform(curr_input)
+        curr_input = bcs_scaler.transform(curr_input)
 
         curr_jav_pred = bcs_model.predict(
             curr_input, batch_size=1024, verbose=0
@@ -669,7 +598,7 @@ printErrStats3D(reframed_JAV_errs)
 
 # Get the column names for each of the kept columns.
 nonco_featnames = [
-    k.name for i, k in enumerate(motion_data_keys) if nonco_cols[i]
+    k.name for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]
 ]
 
 # Finds the errors for the model when one of the test data columns has its
@@ -690,12 +619,12 @@ def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: 
 
 # For each column and for each skip amount, scramble the column and find the new
 # score.
-keys_s_ind = s_ind_dict.keys()
-scramble_scores = np.empty((z_nonco_test_data.shape[1], len(s_ind_dict.keys())))
+skip_keys = dog.skip_inds_dict.keys()
+scramble_scores = np.empty((dog.col_subset_test.shape[1], len(skip_keys)))
 print()
  
 
-num_nonco_cols = z_nonco_test_data.shape[1]
+num_nonco_cols = dog.col_subset_test.shape[1]
  
 
 for col_ind in range(num_nonco_cols):
@@ -703,9 +632,9 @@ for col_ind in range(num_nonco_cols):
         "Testing column index {:03d}/{}.".format(col_ind + 1, num_nonco_cols),
         end='\r', flush=True
     )
-    errs = errsForColScramble(bcs_model, z_nonco_test_data, col_ind, bcs_test)
-    for i, k in enumerate(keys_s_ind):
-        scramble_scores[col_ind, i] = np.mean(errs[s_ind_dict[k]])
+    errs = errsForColScramble(bcs_model, dog.col_subset_test, col_ind, bcs_test)
+    for i, k in enumerate(skip_keys):
+        scramble_scores[col_ind, i] = np.mean(errs[dog.skip_inds_dict[k]])
 #%%
 scramble_rank = np.argsort(scramble_scores, axis=0)[::-1]
 print("Most important feature inds:", scramble_rank[:10], sep='\n')
@@ -716,7 +645,7 @@ print("Most important feature inds:", scramble_rank[:10], sep='\n')
 #%%
 import shap
 default_rng = np.random.default_rng()
-rng_choice = default_rng.choice(z_nonco_test_data, 100, False, axis=0)
+rng_choice = default_rng.choice(dog.col_subset_test, 100, False, axis=0)
 shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
 
 #%%
@@ -742,10 +671,10 @@ def customPoseLoss(y_true, y_pred):
 # tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
 tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
 
-input_dim = concat_train_data.shape[1]
+input_dim = dog.concat_train_data.shape[1]
 num_classes = len(MOTION_MODEL)
 
-onehot_train_labels = tf.one_hot(concat_train_labels, num_classes)
+onehot_train_labels = tf.one_hot(dog.concat_train_labels, num_classes)
 
 tfmodel = keras.Sequential([
     keras.layers.Input((input_dim,)),
@@ -764,23 +693,25 @@ tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
 adam = keras.optimizers.Adam(0.01)
 
 tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
-tfmodel.fit(concat_train_data, concat_train_errs, epochs=5, shuffle=True)
+tfmodel.fit(
+    dog.concat_train_data, dog.concat_train_class_errs, epochs=5, shuffle=True
+)
 #%%
-bgtrain = big_tree.predict(concat_train_data)
-bgtrain_score = assessPredError(concat_train_errs, bgtrain, s_train_ind_dict)
+bgtrain = big_tree.predict(dog.concat_train_data)
+bgtrain_score = dog.getClassScoresTrain(bgtrain)
 print("Big tree train errs=", bgtrain_score)
 
-mclf_train = mclf.predict(concat_train_data)
-mclf_train_score = assessPredError(concat_train_errs, mclf_train, s_train_ind_dict)
+mclf_train = mclf.predict(dog.concat_train_data)
+mclf_train_score = dog.getClassScoresTrain(mclf_train)
 print("Smaller tree train errs=", mclf_train_score)
 
-tf_train_preds = np.argmax(tfmodel(concat_train_data).numpy(), axis=1)
-tf_train_errs = assessPredError(concat_train_errs, tf_train_preds, s_train_ind_dict)
+tf_train_preds = np.argmax(tfmodel(dog.concat_train_data).numpy(), axis=1)
+tf_train_errs = dog.getClassScoresTrain(tf_train_preds)
 print("TF train errs=", tf_train_errs)
 print()
 
-tf_test_preds = np.argmax(tfmodel(concat_test_data).numpy(), axis=1)
-tf_test_errs = assessPredError(concat_test_errs, tf_test_preds, s_ind_dict)
+tf_test_preds = np.argmax(tfmodel(dog.concat_test_data).numpy(), axis=1)
+tf_test_errs = dog.getClassScoresTest(tf_test_preds)
 print("TF test errs=", tf_test_errs)
 
 
@@ -790,20 +721,19 @@ print("TF test errs=", tf_test_errs)
 ################################################################################
 import matplotlib.pyplot as plt
 
-big_tree_preds = big_tree.predict(concat_test_data)
-tree_errs_for_plt = getErrorPerSkip(
-    concat_test_errs, big_tree_preds, s_ind_dict
-)
+big_tree_preds = big_tree.predict(dog.concat_test_data)
+tree_errs_for_plt = dog.getClassErrsTest(big_tree_preds)
+
 acc_only_preds = np.full_like(
-    big_tree_preds, motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
+    big_tree_preds, dog.motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
 )
-acc_errs_for_plt = getErrorPerSkip(concat_test_errs, acc_only_preds, s_ind_dict)
+acc_errs_for_plt = dog.getClassErrsTest(acc_only_preds)
 
 
 bar_skip_key = 'skip2'
-bar_data = [
+bar_data: typing.List[NDArray] = [
     tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[s_ind_dict[bar_skip_key]], error_lim_all[bar_skip_key]
+    bcs_test_errs[dog.skip_inds_dict[bar_skip_key]], error_lim_all[bar_skip_key]
 ]
 bar_labels = ['Tree', 'Acc Only', 'JAV NN', "Classification lim"]
 for i, arr in enumerate(bar_data):
