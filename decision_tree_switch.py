@@ -341,11 +341,12 @@ def poseLossJAV(y_true, y_pred):
     the correct pose displacement, both vec3s.
     '''
     pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 2]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 2]
+        + y_true[:, 3] * y_pred[:, 3]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 5]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
+    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
     true_disp = y_true[:, 6:]
 
@@ -376,9 +377,11 @@ nonco_cols, co_mat = pm.non_collinear_features(
 
 last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
 
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
+nonco_cols[framenum_ind] = False
 
 nonco_col_nums = np.where(nonco_cols)[0]
 
@@ -411,82 +414,73 @@ class ImportanceLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
+def getUntrainedNN():
 
-dropout_rate = 0.2
-nodes_per_layer = 128
-vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
-bcs_model = keras.Sequential([
-    keras.layers.Input((len(nonco_col_nums),)),
-    # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-    keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-    keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-    keras.layers.Dense(3)
-])
+    dropout_rate = 0.2
+    nodes_per_layer = 128
+    vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
+    model = keras.Sequential([
+        keras.layers.Input((len(nonco_col_nums),)),
+        # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dropout(dropout_rate),
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dropout(dropout_rate),
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dense(6)
+    ])
 
-bcs_model.summary()
-bcs_model.compile(loss=poseLossJAV, optimizer='adam')
+    model.summary()
+    model.compile(loss=poseLossJAV, optimizer='adam')
+    return model
+bcs_model = getUntrainedNN()
 # %%
-JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
+JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
-# Get local-frame data.
-bcs_per_combo, w2ls_JAV, translations_JAV = dataForCombosJAV(
-    bcot_loaders, JAV_order, True, True
-)
-
-bcs_train, bcs_test = dataForComboSplitJAV(
-    dog.train_ids, dog.test_ids, precalc_per_combo=bcs_per_combo
-)
-
-# Convert from numpy array to tf tensor.
-bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
-bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
+# # Convert from numpy array to tf tensor.
+# bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
+# bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
 bcs_scaler = StandardScaler()
-dog.setPickAndTransform(nonco_cols, bcs_scaler)
 
-
-
-#%% Train the network.
-bcs_hist = bcs_model.fit(dog.col_subset_train, bcs_train, epochs=32, shuffle=True)
-
-#%% Evaluate network on test data.
-
-bcs_pred = bcs_model.predict(dog.col_subset_test)
-bcs_test_errs: NDArray = poseLossJAV(bcs_test, bcs_pred).numpy()
-#%% Print scores on test data.
-bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}
-for k, v in bcs_test_scores.items():
-    print(k + ":", v)
 
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
-                 col_inds: NDArray, JAV_order: OrderForJAV):
+                 col_inds: NDArray, JAV_order: OrderForJAV,
+                 save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
         if len(self.data_organizer.col_subset_test) <= 0:
             self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
 
-        jav_per_combo = dataForCombosJAV(loaders, JAV_order, False, False)
+        self.save_data_for_conf = save_data_for_conf
+        self.jav_per_combo = None
+        if save_data_for_conf:
+            res = dataForCombosJAV(loaders, JAV_order, True, True)
+            self.jav_per_combo = res[0]
+            self.w2ls_JAV = res[1]
+            self.translations_JAV = res[2]
+        else:
+            self.jav_per_combo = dataForCombosJAV(loaders, JAV_order, False, False)
+            self.w2ls_JAV = None
+            self.translations_JAV = None
 
         # TODO: Currently we calculate both train and test while only printing one.
         # Need a small refactor to fix this.
         self.jav_train, self.jav_test = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
-            precalc_per_combo=jav_per_combo
+            precalc_per_combo=self.jav_per_combo
         )
         
-    def printErrsTrain(self, predictions: typing.Optional[NDArray] = None):
+    def printScoresTrain(self, predictions: typing.Optional[NDArray] = None):
         if predictions is None:
             predictions = bcs_model.predict(self.data_organizer.col_subset_train)
         self._printHelper(
             predictions, self.jav_train, self.data_organizer.skip_train_inds_dict
         )
 
-    def printErrsTest(self, predictions: typing.Optional[NDArray] = None):
+    def printScoresTest(self, predictions: typing.Optional[NDArray] = None):
         if predictions is None:
             predictions = bcs_model.predict(self.data_organizer.col_subset_test)
         self._printHelper(
@@ -500,6 +494,22 @@ class DataForJAV:
         scores = {k: np.mean(errs[v]) for k, v in inds.items()}
         for k, v in scores.items():
             print(k + ":", v)
+
+bcotjav = DataForJAV(dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, True)
+
+
+#%% Train the network.
+bcs_hist = bcs_model.fit(dog.col_subset_train, bcotjav.jav_train, epochs=32, shuffle=True)
+
+#%% Evaluate network on test data.
+
+bcs_pred = bcs_model.predict(dog.col_subset_test)
+bcs_test_errs: NDArray = poseLossJAV(bcotjav.jav_test, bcs_pred).numpy()
+#%% Print scores on test data.
+bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}
+for k, v in bcs_test_scores.items():
+    print(k + ":", v)
+
 
 
 # print(bcs_test_scores)
@@ -540,9 +550,10 @@ for skip in range(3):
         )
 
         world_disp = getWorldFrameDisplacements(
-            bcs_per_combo[skip][c2], curr_jav_pred, w2ls_JAV[skip][c2]
+            bcotjav.jav_per_combo[skip][c2], curr_jav_pred,
+            bcotjav.w2ls_JAV[skip][c2]
         )
-        curr_translations = translations_JAV[skip][c2]
+        curr_translations = bcotjav.translations_JAV[skip][c2]
         in_translations = curr_translations[-(len(world_disp) + 1):-1]
         jav_pred = in_translations + world_disp
 
@@ -632,7 +643,9 @@ for col_ind in range(num_nonco_cols):
         "Testing column index {:03d}/{}.".format(col_ind + 1, num_nonco_cols),
         end='\r', flush=True
     )
-    errs = errsForColScramble(bcs_model, dog.col_subset_test, col_ind, bcs_test)
+    errs = errsForColScramble(
+        bcs_model, dog.col_subset_test, col_ind, bcotjav.jav_test
+    )
     for i, k in enumerate(skip_keys):
         scramble_scores[col_ind, i] = np.mean(errs[dog.skip_inds_dict[k]])
 #%%
@@ -755,3 +768,347 @@ ax.set_ylabel("Proportion")
 ax.set_xlabel("Translation Error (mm)")
 plt.show()
 
+#%%
+from gtCommon import PoseLoaderTUDL
+
+tudl_ids = PoseLoaderTUDL.getAllIDs()
+tudl_loaders = [PoseLoaderTUDL(*t) for t in tudl_ids]
+
+cfc.getAll(tudl_loaders)
+#%%
+tudl_train, tudl_test = PoseLoaderTUDL.trainTestIDs()
+tdog = DataOrganizer(
+    cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
+    tudl_train, tudl_test, dog.motion_data_keys
+)
+#
+tjav = DataForJAV(tdog, tudl_loaders, bcs_scaler, nonco_cols, JAV_order)
+#%%
+
+tjavps = bcs_model.predict(tdog.col_subset_test)
+tjav.printScoresTest(tjavps)
+#%%
+ajnn = getUntrainedNN()
+
+bt_train = np.concatenate((dog.col_subset_test, tdog.col_subset_test), axis=0)
+bt_jav = np.concatenate((bcotjav.jav_test, tjav.jav_test), axis=0)
+
+#%%
+ajnn.fit(bt_train, bt_jav, epochs=32, shuffle=True)
+
+#%%
+bcot_ajnn_pred = ajnn.predict(dog.col_subset_train, batch_size=1024)
+
+tudl_ajnn_pred = ajnn.predict(tdog.col_subset_train, batch_size=1024)
+
+bcotjav.printScoresTrain(bcot_ajnn_pred)
+tjav.printScoresTrain(tudl_ajnn_pred)
+#%%
+ax = plt.figure().add_subplot(projection='3d')
+
+data_to_3d_plot = bcot_ajnn_pred[:, :3]
+
+inds_dict = dog.skip_train_inds_dict
+
+for k in skip_keys:
+    if k == 'all':
+        continue
+    dp = data_to_3d_plot[inds_dict[k]]
+    inds = np.random.choice(len(dp), 1000)
+
+    # print(dp[inds].T.shape)
+    ax.scatter3D(*dp[inds].T, label="BCOT " + k)
+
+data_to_3d_plot = tudl_ajnn_pred[:, :3]
+inds_dict = tdog.skip_train_inds_dict
+
+for k in skip_keys:
+    if k == 'all':
+        continue
+    dp = data_to_3d_plot[inds_dict[k]]
+    inds = np.random.choice(len(dp), 1000)
+
+    # print(dp[inds].T.shape)
+    ax.scatter3D(*dp[inds].T, label="TUDL " + k)
+
+ax.set_xlabel("i")
+ax.set_ylabel("j")
+ax.set_zlabel("k")
+ax.legend()
+plt.show()
+
+# 
+
+#%%
+
+from keras import layers ########################################jljlklijlij
+def getUntrainedNNC():
+    dropout_rate = 0.2
+    nodes_per_layer = 128
+    vel_nn_activation = 'sigmoid'
+
+    input_layer = keras.Input(shape=(len(nonco_col_nums),))
+
+    def build_branch():
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(input_layer)
+        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = layers.Dense(1)(x)  # Output a single float
+        return x
+
+    # Build 3 branches
+    branch_outputs = [build_branch() for _ in range(3)]
+
+    # Concatenate the three outputs
+    output = layers.Concatenate()(branch_outputs)
+
+    model = keras.Model(inputs=input_layer, outputs=output)
+    model.summary()
+    model.compile(loss=poseLossJAV, optimizer='adam')
+    return model
+
+ajnnC = getUntrainedNNC()
+
+ajnnC.fit(bt_train, bt_jav, epochs=32, shuffle=True)
+
+#%%
+ajnnC_pred = ajnnC.predict(tdog.col_subset_train)
+tjav.printScoresTrain(ajnnC_pred)
+
+# ajnnC_loss = poseLossJAV(bcs_test, ajnnC_pred)
+# print({k: np.mean(ajnnC_loss[v]) for k, v in dog.skip_inds_dict.items()})
+
+#%%
+def getUntrainedNNSplit(input_shape1, input_shape2, input_shape3):
+    dropout_rate = 0.2
+    nodes_per_layer = 32
+    vel_nn_activation = 'sigmoid'
+
+    input1 = keras.Input(shape=(input_shape1,), name='input1')
+    input2 = keras.Input(shape=(input_shape2,), name='input2')
+    input3 = keras.Input(shape=(input_shape3,), name='input3')
+
+    def build_branch(inp):
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(inp)
+        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = layers.Dense(1)(x)
+        return x
+
+    out1 = build_branch(input1)
+    out2 = build_branch(input2)
+    out3 = build_branch(input3)
+
+    output = layers.Concatenate()([out1, out2, out3])
+
+    model = keras.Model(inputs=[input1, input2, input3], outputs=output)
+    model.compile(loss=poseLossJAV, optimizer='adam')
+    model.summary()
+    return model
+
+lnccn = len(nonco_col_nums)
+split_nn = getUntrainedNNSplit(lnccn, lnccn - 1, lnccn - 2)
+split_nn.fit([dog.col_subset_test, dog.col_subset_test[:, :-1], dog.col_subset_test[:, :-2]], bcotjav.jav_test, epochs=33, batch_size=128, shuffle=True)
+
+#%%
+tjav.printScoresTest(split_nn.predict([tdog.col_subset_test, tdog.col_subset_test[:, :-1], tdog.col_subset_test[:, :-2]]))
+
+#%%
+from scipy.optimize import lsq_linear
+# Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
+def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 32, verbose=False):
+    '''
+    When we create the "JAV" data, we specify the permutation of
+    (velocity, acceleration, jerk) to orthonormalize into frames. For simplicity
+    below, assume the order is in fact velocity, then acceleration, then jerk.
+
+    In that case, y_true contains the following columns, in order:
+     - speed
+     - accel parallel to velocity
+     - accel ortho to velocity
+     - jerk parallel to speed, ortho to speed but in acc plane, ortho to plane
+     - correct pose displacement in the same "coordinate frame" as the jerk.
+
+    In other words, we are working in an orthonormal coordinate frame where the 
+    x-axis is aligned with velocity, the y with acceleration, and then z is
+    orthogonal to both.
+    
+    Then, y_pred contains the multipliers for velocity, acceleration, and jerk, 
+    respectively. The predicted "local" displacement is thus:
+    [[speed, acc_x, jerk_x],       [vel_multiplier,
+     [0,     acc_y, jerk_y],     x  acc_multiplier,
+     [0,     0,     jerk_z]]        jerk_multiplier]
+
+    Then after this matrix multiplication, we find the distance between it and
+    the correct pose displacement, both vec3s.
+    '''
+    muls_to_pt_mats = np.zeros((len(y_true), 3, 3))
+    muls_to_pt_mats[:, 0, 0] = y_true[:, 0]
+    muls_to_pt_mats[:, :2, 1] = y_true[:, 1:3]
+    muls_to_pt_mats[:, :, 2] = y_true[:, 3:6]
+
+    if bounds is None:
+        inv_mats = np.linalg.inv(muls_to_pt_mats)
+        return pm.einsumMatVecMul(inv_mats, y_true[:, 6:])
+    
+    n = len(y_true)
+    res = np.empty((n, 3))
+    n_digs = 0
+    status_template = "Done iter {}/" + str(n) + " ({:0.2f})."
+    if verbose:
+        n_digs = int(np.ceil(np.log10(n)))
+        status_template = status_template + (" " * n_digs)
+        print(status_template.format(0, 0), end='')
+
+    for i in range(n):
+        lsq_res = lsq_linear(
+            muls_to_pt_mats[i], y_true[i, 6:], bounds, tol=tol, 
+            max_iter=max_iter
+        )
+        res[i] = lsq_res.x
+        if (verbose and (i + 1) % 1000 == 0) or i == (n - 1):
+            print("\r" + status_template.format((i + 1), (i + 1)/n), end = '')
+    if verbose:
+        print()
+    return res
+
+bounds = (-3,3)
+bounded_gt_bcot_tr = gtMultipliersJAV(bcotjav.jav_train, bounds, verbose=True)
+bounded_gt_tudl_tr = gtMultipliersJAV(tjav.jav_train, bounds, verbose=True)
+
+# %%
+def gtScaledVelAligned(y_true, bounds = None):
+    gathered = y_true[:, [0,2,5]]
+    scaled = y_true[:, -3:] / gathered
+    if bounds is not None:
+        scaled = np.clip(scaled, *bounds)
+    return scaled
+gt_bcot = gtScaledVelAligned(bcotjav.jav_train, bounds)
+gt_tudl = gtScaledVelAligned(tjav.jav_train, bounds)
+
+bcotjav.printScoresTrain(gt_bcot)
+tjav.printScoresTrain(gt_tudl)
+
+#%%
+def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbose=False):
+    '''
+    [[speed, acc_x, jerk_x],       [vel_multiplier,
+     [0,     acc_y, jerk_y],     x  acc_multiplier,
+     [0,     0,     jerk_z]]        jerk_multiplier]
+
+    '''
+    muls_to_pt_mats = np.zeros((len(y_true), 3, 6))
+    muls_to_pt_mats[:, 0, 0] = y_true[:, 0]
+    muls_to_pt_mats[:, 1, 1:3] = y_true[:, 1:3]
+    muls_to_pt_mats[:, 2, 3:] = y_true[:, 3:6]
+    
+    n = len(y_true)
+    res = np.empty((n, 6))
+    n_digs = 0
+    status_template = "Done iter {}/" + str(n) + " ({:0.2f})."
+    if verbose:
+        n_digs = int(np.ceil(np.log10(n)))
+        status_template = status_template + (" " * n_digs)
+        print(status_template.format(0, 0), end='')
+
+    for i in range(n):
+        lsq_res = lsq_linear(
+            muls_to_pt_mats[i], y_true[i, 6:], bounds, tol=tol, 
+            max_iter=max_iter
+        )
+        res[i] = lsq_res.x
+        if (verbose and (i + 1) % 1000 == 0) or i == (n - 1):
+            print("\r" + status_template.format((i + 1), (i + 1)/n), end = '')
+    if verbose:
+        print()
+    return res
+
+bounds = (-2,2)
+gt_bcot = gtMultipliers6(bcotjav.jav_train, bounds, verbose=True)
+gt_tudl = gtMultipliers6(tjav.jav_train, bounds, verbose=True)
+
+bcotjav.printScoresTrain(gt_bcot)
+tjav.printScoresTrain(gt_tudl)
+
+#%%
+bcs_pred_tr = bcs_model.predict(dog.col_subset_train, batch_size=1024)
+
+#%%
+
+current_idx = 0
+
+fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+
+def getRandSubset(data, gt, n):
+    inds = np.random.choice(len(data), n)
+    return data[inds], gt[inds]
+
+skis = [dog.skip_train_inds_dict['skip{}'.format(i)] for i in range(3)]
+bcot_sub_data = []
+bcot_sub_gt = []
+
+for s in skis:
+    skip_data = dog.concat_train_data[s]
+    bcot_sub_inds = np.random.choice(len(skip_data), 500)
+    bcot_sub_data.append(skip_data[bcot_sub_inds])
+    bcot_sub_gt.append(gt_bcot[s][bcot_sub_inds])
+# bcot_sub_nn = bcs_pred_tr[bcot_sub_inds]
+
+# p_sub_data, p_sub_gt = getRandSubset(pdog.concat_train_data, gt_p, 1000)
+
+sb = dog.skip_train_inds_dict['skip2']
+def plot_column(idx):
+    fig.suptitle(f'(BCOT) Column: {feature_names[idx]} (#{idx})')
+    for i in range(3):
+        axs[i].cla()  # clear the axes
+        for j in range(3):
+            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_gt[j][:, i+3], alpha=0.6, label="skip" + str(j))
+        # axs[i].scatter(p_sub_data[:, idx], p_sub_gt[:, i], alpha=0.6, label="Pauwels")
+        # axs[i].scatter(bcot_sub_data[:, idx], bcot_sub_nn[:, i], alpha=0.6, label="NN")
+        axs[i].set_xlabel(gtc.truncateName(feature_names[idx], 33))
+    axs[0].legend()
+    axs[0].set_ylabel("Multiplier")
+    axs[0].set_title("Vel")
+    axs[1].set_title("Acc parallel")
+    axs[2].set_title("Acc ortho")
+
+
+    plt.tight_layout()
+    fig.canvas.draw_idle()
+
+def on_key(event):
+    global current_idx
+    if event.key == 'right':
+        current_idx = min(current_idx + 1, len(feature_names) - 1)
+        plot_column(current_idx)
+    elif event.key == 'left':
+        current_idx = max(current_idx - 1, 0)
+        plot_column(current_idx)
+
+plot_column(current_idx)
+fig.canvas.mpl_connect('key_press_event', on_key)
+plt.show()
+# %%
+from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
+AVD2_DATA_IND = dog.motion_data_keys.index(SpecifiedMotionData(
+    MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG2, ANG_OR_MAG.ANG, False, False
+))
+
+if JAV_order[0] != JAV.VELOCITY or JAV_order[1] != JAV.ACCELERATION:
+    raise Exception("Below hardcoded indices will be wrong!")
+
+def sineThing(data_org: DataOrganizer, is_train: bool):
+    data = data_org.concat_train_data if is_train else data_org.concat_test_data
+    res = np.zeros((len(data), 6))
+    res[:, 0] = 1
+    avd1 = data[:, AVD2_DATA_IND]
+    res[:, 1] = 0.5 * np.sin(2 * avd1)
+    res[:, 2] = 0.5 * (1.0 - np.cos(2 * avd1))
+    return res
+    
+st = sineThing(dog, True)
+bcotjav.printScoresTrain(st)
