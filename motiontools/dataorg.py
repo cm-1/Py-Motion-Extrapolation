@@ -149,7 +149,7 @@ class DataOrganizer:
 
         # Convert the above 3-item lists into dicts.
         self.skip_inds_dict = {"skip" + str(i): skip_inds[i] for i in range(3)}
-        self.skip_inds_dict["all"] = None # my_np_array[None] gets all elements.
+        self.skip_inds_dict["all"] = ... # my_np_array[...] gets all elements.
 
         self.skip_train_inds_dict = \
             {"skip" + str(i): s_train_inds[i] for i in range(3)}
