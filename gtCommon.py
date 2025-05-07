@@ -207,7 +207,7 @@ class PoseLoader(ABC):
 
     # Returns (rotation mat data, translation data) tuple, where each element is
     # a numpy array, the former with shape (n,3,3), the latter with shape (n,3).
-    def posesFromMatsFile(filepath):
+    def posesFromMatsTXT(filepath):
         data = np.loadtxt(filepath)
     
         # Assumes that each line has 12 floats, where the first 9 are the 3x3
@@ -508,10 +508,10 @@ class PoseLoaderBCOT(PoseLoader):
         #patternTrans = re.compile((r"\s+" + patternNum) * 3 + r"\s*$")
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
-        gtMatData = PoseLoader.posesFromMatsFile(self.posePathGT)
+        gtMatData = PoseLoader.posesFromMatsTXT(self.posePathGT)
         calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
         if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
-            calcMatData = PoseLoader.posesFromMatsFile(self.posePathCalc)
+            calcMatData = PoseLoader.posesFromMatsTXT(self.posePathCalc)
 
         return (gtMatData, calcMatData)
 
@@ -657,3 +657,52 @@ class PoseLoaderTUDL(PoseLoaderBOP):
         
         return (gtMatData, None)
     
+class PoseLoaderPauwels(PoseLoader):
+    _DATASET_DIR = None
+    _dir_paths_initialized = False
+
+    def __init__(self, cvFrameSkipForLoad = -1):
+        '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
+        super(PoseLoaderPauwels, self).__init__()
+
+        self._cvFrameSkipForLoad = cvFrameSkipForLoad
+        
+        self.posePathGT = PoseLoaderPauwels._DATASET_DIR / "ground_truth.txt"
+        
+        # calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
+        #     + self._seq + "_" + self._bod +".txt"
+        # self.posePathCalc = PoseLoaderPauwels._CV_POSE_EXPORT_DIR / calcFName
+
+
+    def getVidID(self):
+        return () # empty tuple
+
+    @classmethod
+    def getAllIDs(cls):
+        return [()]
+
+    @classmethod
+    def _setPosePathsFromJSON(cls, json_read_result):
+        PoseLoaderPauwels._DATASET_DIR = pathlib.Path(
+            json_read_result["pauwels_dataset_directory"]
+        )
+        # PoseLoaderPauwels._CV_POSE_EXPORT_DIR = pathlib.Path(
+        #     json_read_result["bcot_result_directory"]
+        # )
+
+    def _getPosesFromDisk(self):
+        data = np.loadtxt(self.posePathGT)
+    
+        v3_rotations = data[:, 3:]
+        translations = data[:, :3]
+        gtMatData = (pm.matsFromScaledAxisAngleArray(v3_rotations), translations)
+
+        calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
+        # if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
+        #     calcMatData = PoseLoader.posesFromMatsTXT(self.posePathCalc)
+
+        return (gtMatData, calcMatData)
+
+    def getRotationsGTNP(self):
+        raise NotImplementedError("Could make this > efficient?")
+        return super().getRotationsGTNP()
