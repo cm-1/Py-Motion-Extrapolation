@@ -340,26 +340,31 @@ def poseLossJAV(y_true, y_pred):
     Then after this matrix multiplication, we find the distance between it and
     the correct pose displacement, both vec3s.
     '''
-    pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 5]
+
+    y_pred2 = y_pred + y_true[:, 9:15]
+
+    pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
+        + y_true[:, 3] * y_pred2[:, 3]
+    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4]
+    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
     # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
-    true_disp = y_true[:, 6:]
+    true_disp = y_true[:, 6:9]
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
 
 def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     disp = np.empty((len(y_true), 3))
+
+    y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
-    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 2]
-    disp[:, 1] = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
-    disp[:, 2] = y_true[:, 5] * y_pred[:, 2]
+    disp[:, 0] = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
+        + y_true[:, 3] * y_pred2[:, 2]
+    disp[:, 1] = y_true[:, 2] * y_pred2[:, 1] + y_true[:, 4] * y_pred2[:, 2]
+    disp[:, 2] = y_true[:, 5] * y_pred2[:, 2]
 
     # Convert local displacement into world displacement.
     local2worlds = np.swapaxes(world2locals, -1, -2)
@@ -379,9 +384,24 @@ last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
 
+# nonco_cols[:] = False
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
+
+AVD2_KEY = SpecifiedMotionData(
+    MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG, False, True
+)
+AVD2_DATA_IND = dog.motion_data_keys.index(AVD2_KEY)
+
+
+col_sub_keys = [
+    AVD2_KEY, MOTION_DATA.BOUNCE_ANGLE, MOTION_DATA.VEL_BCS_RATIOS,
+    MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
+    MOTION_DATA.DISP_MAG_RATIO
+]
+col_indices = [dog.motion_data_keys.index(k) for k in col_sub_keys]
+nonco_cols[col_indices] = True
 
 nonco_col_nums = np.where(nonco_cols)[0]
 
@@ -444,6 +464,7 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # Z-scale each column to standard normal distribution.
 bcs_scaler = StandardScaler()
 
+from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
 
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
@@ -468,10 +489,32 @@ class DataForJAV:
 
         # TODO: Currently we calculate both train and test while only printing one.
         # Need a small refactor to fix this.
-        self.jav_train, self.jav_test = dataForComboSplitJAV(
+        partial_jav_train, partial_jav_test = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
             precalc_per_combo=self.jav_per_combo
         )
+
+        jav_tr_append = self.sineThing(True)
+        jav_te_append = self.sineThing(False)
+
+        self.jav_train = np.concatenate(
+            (partial_jav_train, jav_tr_append), axis=-1
+        )
+        self.jav_test = np.concatenate(
+            (partial_jav_test, jav_te_append), axis=-1
+        )
+
+
+    def sineThing(self, is_train: bool):
+        
+        data = self.data_organizer.concat_train_data if is_train else self.data_organizer.concat_test_data
+        res = np.zeros((len(data), 6))
+        res[:, 0] = 1
+        avd1 = data[:, AVD2_DATA_IND]
+        res[:, 1] = 0.5 * np.sin(2 * avd1)
+        res[:, 2] = 0.5 * (1.0 - np.cos(2 * avd1))
+        return res
+
         
     def printScoresTrain(self, predictions: typing.Optional[NDArray] = None):
         if predictions is None:
@@ -953,7 +996,7 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     if bounds is None:
         inv_mats = np.linalg.inv(muls_to_pt_mats)
-        return pm.einsumMatVecMul(inv_mats, y_true[:, 6:])
+        return pm.einsumMatVecMul(inv_mats, y_true[:, 6:9])
     
     n = len(y_true)
     res = np.empty((n, 3))
@@ -966,7 +1009,7 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     for i in range(n):
         lsq_res = lsq_linear(
-            muls_to_pt_mats[i], y_true[i, 6:], bounds, tol=tol, 
+            muls_to_pt_mats[i], y_true[i, 6:9], bounds, tol=tol, 
             max_iter=max_iter
         )
         res[i] = lsq_res.x
@@ -999,15 +1042,14 @@ def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbo
     [[speed, acc_x, jerk_x],       [vel_multiplier,
      [0,     acc_y, jerk_y],     x  acc_multiplier,
      [0,     0,     jerk_z]]        jerk_multiplier]
-
     '''
-    muls_to_pt_mats = np.zeros((len(y_true), 3, 6))
+    muls_to_pt_mats = np.zeros((len(y_true), 3, 3))#6))
     muls_to_pt_mats[:, 0, 0] = y_true[:, 0]
     muls_to_pt_mats[:, 1, 1:3] = y_true[:, 1:3]
-    muls_to_pt_mats[:, 2, 3:] = y_true[:, 3:6]
+    # muls_to_pt_mats[:, 2, 3:] = y_true[:, 3:6]
     
     n = len(y_true)
-    res = np.empty((n, 6))
+    res = np.empty((n, 3))#6))
     n_digs = 0
     status_template = "Done iter {}/" + str(n) + " ({:0.2f})."
     if verbose:
@@ -1017,7 +1059,7 @@ def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbo
 
     for i in range(n):
         lsq_res = lsq_linear(
-            muls_to_pt_mats[i], y_true[i, 6:], bounds, tol=tol, 
+            muls_to_pt_mats[i], y_true[i, 6:9], bounds, tol=tol, 
             max_iter=max_iter
         )
         res[i] = lsq_res.x
@@ -1050,14 +1092,15 @@ def getRandSubset(data, gt, n):
 skis = [dog.skip_train_inds_dict['skip{}'.format(i)] for i in range(3)]
 bcot_sub_data = []
 bcot_sub_gt = []
+bcot_sub_nn = []
 
 for s in skis:
     skip_data = dog.concat_train_data[s]
     bcot_sub_inds = np.random.choice(len(skip_data), 500)
     bcot_sub_data.append(skip_data[bcot_sub_inds])
+    # bcot_sub_gt.append(bcotjav.jav_train[s][bcot_sub_inds, 9:15])
     bcot_sub_gt.append(gt_bcot[s][bcot_sub_inds])
-# bcot_sub_nn = bcs_pred_tr[bcot_sub_inds]
-
+    bcot_sub_nn.append(bcs_pred_tr[s][bcot_sub_inds])
 # p_sub_data, p_sub_gt = getRandSubset(pdog.concat_train_data, gt_p, 1000)
 
 sb = dog.skip_train_inds_dict['skip2']
@@ -1066,10 +1109,12 @@ def plot_column(idx):
     for i in range(3):
         axs[i].cla()  # clear the axes
         for j in range(3):
-            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_gt[j][:, i+3], alpha=0.6, label="skip" + str(j))
+            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_gt[j][:, i], alpha=0.6, label="skip" + str(j))
         # axs[i].scatter(p_sub_data[:, idx], p_sub_gt[:, i], alpha=0.6, label="Pauwels")
-        # axs[i].scatter(bcot_sub_data[:, idx], bcot_sub_nn[:, i], alpha=0.6, label="NN")
+        # for j in range(3):
+        #     axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_nn[j][:, i], alpha=0.6, label="NN" + str(j))
         axs[i].set_xlabel(gtc.truncateName(feature_names[idx], 33))
+        
     axs[0].legend()
     axs[0].set_ylabel("Multiplier")
     axs[0].set_title("Vel")
@@ -1093,22 +1138,10 @@ plot_column(current_idx)
 fig.canvas.mpl_connect('key_press_event', on_key)
 plt.show()
 # %%
-from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
-AVD2_DATA_IND = dog.motion_data_keys.index(SpecifiedMotionData(
-    MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG2, ANG_OR_MAG.ANG, False, False
-))
 
 if JAV_order[0] != JAV.VELOCITY or JAV_order[1] != JAV.ACCELERATION:
     raise Exception("Below hardcoded indices will be wrong!")
 
-def sineThing(data_org: DataOrganizer, is_train: bool):
-    data = data_org.concat_train_data if is_train else data_org.concat_test_data
-    res = np.zeros((len(data), 6))
-    res[:, 0] = 1
-    avd1 = data[:, AVD2_DATA_IND]
-    res[:, 1] = 0.5 * np.sin(2 * avd1)
-    res[:, 2] = 0.5 * (1.0 - np.cos(2 * avd1))
-    return res
     
-st = sineThing(dog, True)
+st = bcotjav.sineThing(True)
 bcotjav.printScoresTrain(st)
