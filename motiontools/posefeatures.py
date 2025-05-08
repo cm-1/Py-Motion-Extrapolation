@@ -868,18 +868,28 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
             mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-            unit_vecs_o1 = pm.safelyNormalizeArray(
+            unit_vecs1 = pm.safelyNormalizeArray(
                 vecs_o1, mags_o1[:, np.newaxis]
             )
 
-            unit_vecs2 = np.cross(unit_vecs0, unit_vecs_o1)
+            mags_p20 = pm.einsumDot(ordered[2], unit_vecs0) # Parallel magnitude
+            vecs_p20 = pm.scalarsVecsMul(mags_p20, unit_vecs0)
+            mags_p21 = pm.einsumDot(ordered[2], unit_vecs1)
+            vecs_p21 = pm.scalarsVecsMul(mags_p21, unit_vecs1)
+            vecs_o2 = ordered[2] - (vecs_p20 + vecs_p21)
+            mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
+
+            unit_vecs2 = pm.safelyNormalizeArray(
+                vecs_o2, mags_o2[:, np.newaxis]
+            )
+
             # We now have matrices to convert vectors in world space into
             # these local vector-aligned frames.
-            mats = np.stack([unit_vecs0, unit_vecs_o1, unit_vecs2], axis=1)
+            mats = np.stack([unit_vecs0, unit_vecs1, unit_vecs2], axis=1)
 
             # Transform each third vector and to-next-frame displacement into
             # this frame via matmul.
-            local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
+            # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
 
             # We'll now return all of the data needed to convert velocity,
@@ -890,7 +900,8 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
             c_res = (
-                mags0, mags_p1, mags_o1, *(local_vecs2.T), *(local_diffs.T)
+                mags0, mags_p1, mags_o1, mags_p20, mags_p21, mags_o2,
+                *(local_diffs.T)
             )
 
             all_data[skip][c] = np.stack(c_res, axis=-1)
