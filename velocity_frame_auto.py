@@ -77,6 +77,7 @@ nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
 last_best_ind = motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 
+nonco_cols[:] = True
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 
@@ -98,15 +99,15 @@ print("Normalizing input data before training.")
 
 # Z-scale each column to standard normal distribution.
 bcs_scalar = StandardScaler()
-z_nonco_train_data = bcs_scalar.fit_transform(nonco_train_data)
-z_nonco_test_data = bcs_scalar.transform(nonco_test_data)
+z_nonco_train_data = nonco_train_data # bcs_scalar.fit_transform(nonco_train_data)
+z_nonco_test_data = nonco_test_data # bcs_scalar.transform(nonco_test_data)
 #%%
 ################################################################################
 # Memory Management and Auto-Sklearn Setup
 ################################################################################
 #%%
 # Settings that I'll just edit manually on each run for now.
-auto_train_seconds = 3600*24
+auto_train_seconds = 3600*14
 really_max_mem = False
 
 avail_mem_bytes = psutil.virtual_memory().available
@@ -127,14 +128,15 @@ avail_mem_safe_mb = avail_mem_safe // (1024*1024)
 if not really_max_mem:
     # Cap to 8GB for now. Part of motivation: running on multi-user computer.
     # Another possibility: I'm concerned that more RAM leads to overfitting.
-    avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
-
+    # Update: 8GB was making me run out of disk space again. It seems 5.5GB is
+    # the smallest I can go without no models being found.
+    avail_mem_safe_mb = min(avail_mem_safe_mb, int(5.5 * 1024)) #8 * 1024)
 
 # Ensure local tmp folder does not already exist, or else auto-sklearn will
 # throw an exception.
 tmp_dir_name = "./auto-sklearn-tmp"
 if os.path.exists(tmp_dir_name) and os.path.isdir(tmp_dir_name):
-    shutil.rmtree(tmp_dir_name)
+    shutil.rmtree(tmp_dir_name, ignore_errors = True)
 
 
 # We need to limit the models on disc to avoid taking up too much disc space.
@@ -147,7 +149,9 @@ automl = autosklearn.regression.AutoSklearnRegressor(
     max_models_on_disc=7,
     tmp_folder=tmp_dir_name,
     delete_tmp_folder_after_terminate=False,
-    smac_scenario_args={"n_trials": 35}
+    smac_scenario_args={"n_trials": 35},
+    per_run_time_limit = auto_train_seconds,
+    ensemble_kwargs = {'ensemble_size': 1}
 )
 
 auto_start_time = datetime.datetime.now()
@@ -176,7 +180,8 @@ print("Done auto-sklearn fit!")
 # and is not required for debugging said exceptions but *is* taking up space.
 # So we delete it to ensure the pickling has enough disc space available.
 if os.path.exists(tmp_dir_name) and os.path.isdir(tmp_dir_name):
-    shutil.rmtree(tmp_dir_name)
+    shutil.rmtree(tmp_dir_name + "/.auto-sklearn", ignore_errors = True)
+    shutil.rmtree(tmp_dir_name + "/smac3-output", ignore_errors = True)
 
 # Create a unique filename and save before printing/saving other results, so
 # that if there's an unexpected crash in those other steps, we do not lose
