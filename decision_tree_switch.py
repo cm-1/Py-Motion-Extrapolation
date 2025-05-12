@@ -23,6 +23,7 @@ import gtCommon as gtc
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
 from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
+from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
 from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
@@ -341,12 +342,12 @@ def poseLossJAV(y_true, y_pred):
     the correct pose displacement, both vec3s.
     '''
 
-    y_pred2 = y_pred + y_true[:, 9:15]
+    # y_pred2 = y_pred + y_true[:, 9:15]
 
-    pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
-        + y_true[:, 3] * y_pred2[:, 3]
-    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4]
-    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5]
+    pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 3]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 5]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
     # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
@@ -356,15 +357,19 @@ def poseLossJAV(y_true, y_pred):
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
 
-def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+def getVelFrameDisplacements(y_true, y_pred):
     disp = np.empty((len(y_true), 3))
 
-    y_pred2 = y_pred + y_true[:, 9:15]
+    # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
-    disp[:, 0] = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
-        + y_true[:, 3] * y_pred2[:, 2]
-    disp[:, 1] = y_true[:, 2] * y_pred2[:, 1] + y_true[:, 4] * y_pred2[:, 2]
-    disp[:, 2] = y_true[:, 5] * y_pred2[:, 2]
+    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 3]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 5]
+    return disp
+
+def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+    disp = getVelFrameDisplacements(y_true, y_pred)
 
     # Convert local displacement into world displacement.
     local2worlds = np.swapaxes(world2locals, -1, -2)
@@ -384,7 +389,7 @@ last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
 
-# nonco_cols[:] = False
+nonco_cols[:] = True
 nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
@@ -1043,13 +1048,15 @@ def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbo
      [0,     acc_y, jerk_y],     x  acc_multiplier,
      [0,     0,     jerk_z]]        jerk_multiplier]
     '''
-    muls_to_pt_mats = np.zeros((len(y_true), 3, 3))#6))
-    muls_to_pt_mats[:, 0, 0] = y_true[:, 0]
-    muls_to_pt_mats[:, 1, 1:3] = y_true[:, 1:3]
-    # muls_to_pt_mats[:, 2, 3:] = y_true[:, 3:6]
+    muls_to_pt_mats = np.zeros((len(y_true), 3, 6))
+    muls_to_pt_mats[:, 0, :2] = y_true[:, :2]
+    muls_to_pt_mats[:, 0, 3] = y_true[:, 3]
+    muls_to_pt_mats[:, 1, 2] = y_true[:, 2]
+    muls_to_pt_mats[:, 1, 4] = y_true[:, 4]
+    muls_to_pt_mats[:, 2, 5] = y_true[:, 5]
     
     n = len(y_true)
-    res = np.empty((n, 3))#6))
+    res = np.empty((n, 6))
     n_digs = 0
     status_template = "Done iter {}/" + str(n) + " ({:0.2f})."
     if verbose:
@@ -1063,7 +1070,7 @@ def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbo
             max_iter=max_iter
         )
         res[i] = lsq_res.x
-        if (verbose and (i + 1) % 1000 == 0) or i == (n - 1):
+        if verbose and ((i + 1) % 1000 == 0 or i == n - 1):
             print("\r" + status_template.format((i + 1), (i + 1)/n), end = '')
     if verbose:
         print()
