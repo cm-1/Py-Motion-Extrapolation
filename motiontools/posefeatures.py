@@ -99,8 +99,8 @@ class MOTION_DATA(Enum):
     SPEED_JERK_RATIO = 43
     ACC_JERK_RATIO = 44
     SPEED_ORTHO_ACC_RATIO = 45
-    CIRC_SPEED_CIRC_ACC_RATIO = 46
-    CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO = 47
+    CIRC_ACC_CIRC_SPEED_RATIO = 46
+    CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO = 47
     CIRC_ANG_RATIO = 48
 
     BOUNCE_ANGLE_2_SUM = 49
@@ -112,6 +112,14 @@ class MOTION_DATA(Enum):
     DIST_FROM_CIRCLE = 52
     RATIO_FROM_CIRCLE = 53
 
+    ACC_VEL_DEG1_DOT = 54
+    ACC_VEL_DEG2_DOT = 55
+    VEL_DEG2_MAG_DIFF = 56
+    VEL_DEG2_MAG_DIFF_TIMESCALED = 57
+
+    INV_DISP_MAG_RATIO = 58
+    INV_VEL_BCS_RATIOS = 59
+    INV_CIRC_ANG_RATIO = 60
 
 
 class RELATIVE_AXIS(Enum):
@@ -417,12 +425,17 @@ class CalcsForVideo:
             )
             vel_bcs_ratios = vel_dots / (deg1_speeds[-n_jerk_preds:]**2)
             motion_data[MOTION_DATA.VEL_BCS_RATIOS] = vel_bcs_ratios
+            motion_data[MOTION_DATA.INV_VEL_BCS_RATIOS] = 1.0 / vel_bcs_ratios
 
             disp_mag_diffs = np.diff(deg1_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
             motion_data[MOTION_DATA.DISP_MAG_DIFF] = disp_mag_diffs
             motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] = disp_mag_diffs / step
+            speed_deg2_diffs = np.diff(deg2_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
+            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF] = speed_deg2_diffs
+            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF_TIMESCALED] = speed_deg2_diffs / step
             disp_mag_div = deg1_speeds_full[1:] / deg1_speeds_full[:-1]
             motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div[-n_jerk_preds:].flatten()
+            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = 1.0 / disp_mag_div[-n_jerk_preds:].flatten()
 
             unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
             unit_vels_deg2 = pm.safelyNormalizeArray(deg2_vels, deg2_speeds_full)
@@ -444,11 +457,12 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.CIRC_ACC] = circ_accs
             motion_data[MOTION_DATA.CIRC_ANG_ACC] = circ_ang_accs[-n_jerk_preds:]
 
-            motion_data[MOTION_DATA.CIRC_SPEED_CIRC_ACC_RATIO] = circ_speeds / circ_accs
-            motion_data[MOTION_DATA.CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO] = \
-                circ_ang_speeds_subset / circ_ang_accs[-n_jerk_preds:]
+            motion_data[MOTION_DATA.CIRC_ACC_CIRC_SPEED_RATIO] = circ_accs / circ_speeds
+            motion_data[MOTION_DATA.CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO] = \
+                circ_ang_accs[-n_jerk_preds:] / circ_ang_speeds_subset
             c_ang_ratio = cma.second_angles / cma.first_angles
             motion_data[MOTION_DATA.CIRC_ANG_RATIO] = c_ang_ratio[-n_jerk_preds:]
+            motion_data[MOTION_DATA.INV_CIRC_ANG_RATIO] = 1.0 / c_ang_ratio[-n_jerk_preds:]
             
 
             motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
@@ -495,6 +509,13 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.BOUNCE_ANGLE_2_SUM] = \
                 bounce_ang_pair_sums[-n_jerk_preds:]
             motion_data[MOTION_DATA.VEL_DOT] = t_diff_dots[-n_jerk_preds:]
+
+            motion_data[MOTION_DATA.ACC_VEL_DEG1_DOT] = pm.einsumDot(
+                deg2_accs, deg1_vels[1:]
+            )[-n_jerk_preds:]
+            motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = pm.einsumDot(
+                deg2_accs, deg2_vels
+            )[-n_jerk_preds:]
 
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
@@ -675,8 +696,9 @@ class CalcsForVideo:
 
             motion_data[a_v2_mag_k] = acc_vel_deg2_mag[-n_jerk_preds:]
             motion_data[a_v2_mag_k_bidir] = np.abs(acc_vel_deg2_mag[-n_jerk_preds:])
-            acc_vel_deg2_angs = np.arcsin(np.clip(sin_vel_deg2_acc_angs, -1.0, 1.0))
-            acc_vel_deg2_ang_subset = acc_vel_deg2_angs[-n_jerk_preds:].flatten()
+            acc_vel_deg2_ang_subset = pm.anglesBetweenVecs(
+                unit_vels_deg2, unit_accs
+            )[-n_jerk_preds:].flatten()
             motion_data[a_v2_ang_k] = acc_vel_deg2_ang_subset
             motion_data[a_v2_ang_k_bidir] = pm.getAcuteAngles(acc_vel_deg2_ang_subset)
 
