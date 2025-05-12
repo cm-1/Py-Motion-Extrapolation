@@ -889,7 +889,6 @@ plt.show()
 
 #%%
 
-from keras import layers ########################################jljlklijlij
 def getUntrainedNNC():
     dropout_rate = 0.2
     nodes_per_layer = 128
@@ -898,19 +897,19 @@ def getUntrainedNNC():
     input_layer = keras.Input(shape=(len(nonco_col_nums),))
 
     def build_branch():
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(input_layer)
-        x = layers.Dropout(dropout_rate)(x)
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
-        x = layers.Dropout(dropout_rate)(x)
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
-        x = layers.Dense(1)(x)  # Output a single float
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(input_layer)
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = keras.layers.Dense(1)(x)  # Output a single float
         return x
 
     # Build 3 branches
     branch_outputs = [build_branch() for _ in range(3)]
 
     # Concatenate the three outputs
-    output = layers.Concatenate()(branch_outputs)
+    output = keras.layers.Concatenate()(branch_outputs)
 
     model = keras.Model(inputs=input_layer, outputs=output)
     model.summary()
@@ -939,19 +938,19 @@ def getUntrainedNNSplit(input_shape1, input_shape2, input_shape3):
     input3 = keras.Input(shape=(input_shape3,), name='input3')
 
     def build_branch(inp):
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(inp)
-        x = layers.Dropout(dropout_rate)(x)
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
-        x = layers.Dropout(dropout_rate)(x)
-        x = layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
-        x = layers.Dense(1)(x)
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(inp)
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(x)
+        x = keras.layers.Dense(1)(x)
         return x
 
     out1 = build_branch(input1)
     out2 = build_branch(input2)
     out3 = build_branch(input3)
 
-    output = layers.Concatenate()([out1, out2, out3])
+    output = keras.layers.Concatenate()([out1, out2, out3])
 
     model = keras.Model(inputs=[input1, input2, input3], outputs=output)
     model.compile(loss=poseLossJAV, optimizer='adam')
@@ -1116,10 +1115,19 @@ def plot_column(idx):
     for i in range(3):
         axs[i].cla()  # clear the axes
         for j in range(3):
-            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_gt[j][:, i], alpha=0.6, label="skip" + str(j))
+            bsd = bcot_sub_data[j][:, idx]
+            bsd_na = (bsd == ERR_NA_VAL)
+            if np.any(bsd_na):
+                sub_inds = ~bsd_na
+                axs[i].scatter(bsd[sub_inds], bcot_sub_gt[j][:, i][sub_inds], alpha=0.6, label="skip" + str(j))
+            else:
+                axs[i].scatter(bsd, bcot_sub_gt[j][:, i], alpha=0.6, label="skip" + str(j))
         # axs[i].scatter(p_sub_data[:, idx], p_sub_gt[:, i], alpha=0.6, label="Pauwels")
-        # for j in range(3):
-        #     axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_nn[j][:, i], alpha=0.6, label="NN" + str(j))
+        for j in range(3):
+            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_nn[j][:, i], alpha=0.6, label="NN" + str(j))
+
+        axs[i].set_ylim(-2, 2)
+
         axs[i].set_xlabel(gtc.truncateName(feature_names[idx], 33))
         
     axs[0].legend()
