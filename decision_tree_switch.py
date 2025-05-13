@@ -1037,43 +1037,48 @@ bcotjav.getScoresTrain(gt_bcot)
 tjav.getScoresTrain(gt_tudl)
 
 #%%
-def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbose=False):
-    '''
-    [[speed, acc_x, jerk_x],       [vel_multiplier,
-     [0,     acc_y, jerk_y],     x  acc_multiplier,
-     [0,     0,     jerk_z]]        jerk_multiplier]
-    '''
-    muls_to_pt_mats = np.zeros((len(y_true), 3, 6))
-    muls_to_pt_mats[:, 0, :2] = y_true[:, :2]
-    muls_to_pt_mats[:, 0, 3] = y_true[:, 3]
-    muls_to_pt_mats[:, 1, 2] = y_true[:, 2]
-    muls_to_pt_mats[:, 1, 4] = y_true[:, 4]
-    muls_to_pt_mats[:, 2, 5] = y_true[:, 5]
+def myGetClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray):
+    norm_sq = pm.einsumDot(normals, normals)
+    pn = None
+    if points.ndim > 1 and len(points) > 1:
+        pn = pm.einsumDot(normals, points)
+    else: 
+        pn = normals @ points.flatten()
+    scalar = (scaled_plane_offsets - pn) / norm_sq
+    disps = pm.scalarsVecsMul(scalar, normals)
+    return points + disps
+
+def testClosest(normals, offsets, pts):
+    closest = myGetClosestPoint(normals, offsets, pts)
+    assert np.allclose(pm.einsumDot(closest, normals), offsets)
+    diffs = pts - closest
+    diff_norms = np.linalg.norm(diffs, axis=-1)
+    unit_diffs = pm.safelyNormalizeArray(diffs, diff_norms[..., np.newaxis])
+    unit_norms = pm.normalizeAll(normals)
+    dot_diffs = np.abs(pm.einsumDot(unit_diffs, unit_norms)) - 1.0
+    dots_good = dot_diffs < 0.0001
+    norms_good = diff_norms < 0.0001
+    assert (np.all(dots_good | norms_good))
+    return closest
+#%%
+def my_gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
     
-    n = len(y_true)
-    res = np.empty((n, 6))
-    n_digs = 0
-    status_template = "Done iter {}/" + str(n) + " ({:0.2f})."
-    if verbose:
-        n_digs = int(np.ceil(np.log10(n)))
-        status_template = status_template + (" " * n_digs)
-        print(status_template.format(0, 0), end='')
+    j_o = y_true[:, 8] / y_true[:, 5]
 
-    for i in range(n):
-        lsq_res = lsq_linear(
-            muls_to_pt_mats[i], y_true[i, 6:9], bounds, tol=tol, 
-            max_iter=max_iter
-        )
-        res[i] = lsq_res.x
-        if verbose and ((i + 1) % 1000 == 0 or i == n - 1):
-            print("\r" + status_template.format((i + 1), (i + 1)/n), end = '')
-    if verbose:
-        print()
-    return res
+    flat = baseline_m6.flatten()
+    a_a, j_a = getClosestPoint(
+        y_true[:, [2, 4]], y_true[:, 7], flat[[2, 4]]
+    ).transpose()
 
-bounds = (-2,2)
-gt_bcot = gtMultipliers6(bcotjav.jav_train, bounds, verbose=True)
-gt_tudl = gtMultipliers6(tjav.jav_train, bounds, verbose=True)
+    v_v, a_v, j_v = getClosestPoint(
+        y_true[:, [0, 1, 3]], y_true[:, 6], flat[[0, 1, 3]]
+    ).transpose()
+
+    return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
+
+base = np.array([[1.0, 1.0, 1.0, 0.0, 0.0, 0.0]])
+gt_bcot = my_gtMultipliers6(bcotjav.jav_train, base)
+gt_tudl = my_gtMultipliers6(tjav.jav_train, bounds, verbose=True)
 
 bcotjav.getScoresTrain(gt_bcot)
 tjav.getScoresTrain(gt_tudl)
@@ -1105,27 +1110,107 @@ for s in skis:
     bcot_sub_nn.append(bcs_pred_tr[s][bcot_sub_inds])
 # p_sub_data, p_sub_gt = getRandSubset(pdog.concat_train_data, gt_p, 1000)
 
-sb = dog.skip_train_inds_dict['skip2']
+
+# The below function was written by Copilot/Claude but then modified by me.
+# E.g., I added the "superbin_radius", median calc, etc.
+def calculate_interval_means(x, y, lb, ub, n, superbin_radius):
+    """
+    Calculate means of y values corresponding to x values in n equally spaced intervals between lb and ub.
+    
+    Parameters:
+    -----------
+    x : np.ndarray
+        Input array of values to be binned
+    y : np.ndarray
+        Array of values whose means will be calculated for each bin
+    lb : float
+        Lower bound of the interval
+    ub : float
+        Upper bound of the interval
+    n : int
+        Number of intervals to create
+    
+    Returns:
+    --------
+    tuple:
+        - bin_centres: array of bin centres (length n)
+        - means: array of means for each interval (length n)
+        - medians: array of medians for each interval (length n)
+    """
+    # Create bin edges
+    bin_edges = np.linspace(lb, ub, n + 1)
+    
+    # Use np.digitize to find which bin each x value belongs to
+    # Subtract 1 from bin indices because np.digitize starts counting from 1
+    bin_indices = np.digitize(x, bin_edges) - 1
+    
+    # Create mask for values within the bounds
+    mask = (x >= lb) & (x <= ub)
+    
+    # Initialize arrays to store results
+    means = np.zeros(n)
+    medians = np.zeros(n)
+
+    # Calculate means for each bin
+    for i in range(n):
+        bin_mask = (bin_indices >= i - superbin_radius) 
+        bin_mask = bin_mask & (bin_indices <= i + superbin_radius)
+        bin_mask = bin_mask & mask
+        if np.any(bin_mask):
+            bin_data = y[bin_mask]
+            means[i] = np.mean(bin_data)
+            medians[i] = np.median(bin_data)
+        else:
+            means[i] = np.nan
+            medians[i] = np.nan
+
+    bin_centres = (bin_edges[1:] + bin_edges[:-1])/2.0
+    return bin_centres, means, medians
+
+
 def plot_column(idx):
     fig.suptitle(f'(BCOT) Column: {feature_names[idx]} (#{idx})')
+    
+    all_column_data = np.concatenate(
+        [bcot_sub_data[j][:, idx] for j in range(3)], axis=0
+    )
+    val_min = np.min(all_column_data)
+    val_max = np.max(all_column_data)
+    quants = np.quantile(all_column_data, (0.1, 0.9))
+
+    na_inds = (all_column_data == ERR_NA_VAL)
+    if np.any(na_inds):
+        n_na_vals = all_column_data[~na_inds]
+        val_min = np.min(n_na_vals)
+        val_max = np.max(n_na_vals)
+
+    xlims = (val_min, val_max)
+    if (val_max - val_min)/(quants[1] - quants[0]) > 1.5:
+        xlims = (quants)
+
+    colours = ['blue', 'orange', 'green']
     for i in range(3):
         axs[i].cla()  # clear the axes
-        for j in range(3):
+        for j in range(2,-1,-1): #3):
+            c = colours[j]
             bsd = bcot_sub_data[j][:, idx]
-            bsd_na = (bsd == ERR_NA_VAL)
-            if np.any(bsd_na):
-                sub_inds = ~bsd_na
-                axs[i].scatter(bsd[sub_inds], bcot_sub_gt[j][:, i][sub_inds], alpha=0.6, label="skip" + str(j))
-            else:
-                axs[i].scatter(bsd, bcot_sub_gt[j][:, i], alpha=0.6, label="skip" + str(j))
+            label = "skip" + str(j)
+            axs[i].scatter(bsd, bcot_sub_gt[j][:, i], alpha=0.01, color=c)
+            inter_data = calculate_interval_means(
+                bsd, bcot_sub_gt[j][:, i], *xlims, 100, 2
+            )
+            axs[i].plot(inter_data[0], inter_data[1], color=c, ls="dashed", label=label)
+            axs[i].plot(inter_data[0], inter_data[2], color=c, ls="dotted")
         # axs[i].scatter(p_sub_data[:, idx], p_sub_gt[:, i], alpha=0.6, label="Pauwels")
-        for j in range(3):
-            axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_nn[j][:, i], alpha=0.6, label="NN" + str(j))
+        # for j in range(3):
+        #     axs[i].scatter(bcot_sub_data[j][:, idx], bcot_sub_nn[j][:, i], alpha=0.6, label="NN" + str(j))
 
-        axs[i].set_ylim(-2, 2)
+
+        axs[i].set_ylim(-0.1, 1.1) #-2, 2)
 
         axs[i].set_xlabel(gtc.truncateName(feature_names[idx], 33))
-        
+        axs[i].set_xlim(*xlims)
+    axs[0].set_ylim(0.8, 1.2)
     axs[0].legend()
     axs[0].set_ylabel("Multiplier")
     axs[0].set_title("Vel")
@@ -1150,25 +1235,150 @@ fig.canvas.mpl_connect('key_press_event', on_key)
 plt.show()
 # %%
 
-# Figure out what are the best constant vel, acc, jerk multipliers out of the
-# "physics-based" options.
-acc_opts = [0.0, 0.5, 1.0] # 1.0 means deg2 velocity calculation
-jerk_opts = [0.0, 1/6, 1/3, 1/2, 2/3, 5/6, 1.0]
+def testAllDiscreteJAV(aj_combos = None):
+    # Figure out what are the best constant vel, acc, jerk multipliers out of the
+    # "physics-based" options.
+    acc_opts = [0.0, 0.5, 1.0] # 1.0 means deg2 velocity calculation
+    
+    # When you look at the degree-3 lagrange interpolating polynomial and its 
+    # derivatives at "x=3", and letting v' represent the degree-1 velocity and 
+    # letting a' represent degree-2 velocity, one can see that degree-3 
+    # acceleration is (a' + j), and one can see that degree-3 velocity is 
+    # (v' + a'/2 + j/3). So if we use jerk in no calculations, the total jerk
+    # multiplier is 0. If we use it just in the jerk calculation, the total jerk
+    # multipliers is 1/6. If we use it in just the jerk and accel calculations,
+    # but not velocity, the total is (1/2 * 1) + (1/6 * 1) = 2/3. Finally, if
+    # we use it in all calculations, the total is 1.0.
+    # So the "most sensible" options for the jerk multiplier are 
+    # [0, 1/6, 2/3, 1]. However, if we allow more "odd" combinations, like
+    # using it for the velocity and jerk but not acceleration, we can have
+    # all of the below 1/6 multiples:
+    jerk_opts = [0.0, 1/6, 1/3, 1/2, 2/3, 5/6, 1.0]
 
-aj_combos = []
-for a0 in range(3):
-    for a1 in range(3):
-        for j0 in range(7):
-            for j1 in range(7):
-                for j2 in range(7):
-                    aj_combos.append((
-                        acc_opts[a0], acc_opts[a1], 
-                        jerk_opts[j0], jerk_opts[j1], jerk_opts[j2]
-                    ))
+    if aj_combos is None:
+        aj_combos = []
+        for a0 in range(3):
+            for a1 in range(3):
+                for j0 in range(7):
+                    for j1 in range(7):
+                        for j2 in range(7):
+                            aj_combos.append((
+                                1.0, acc_opts[a0], acc_opts[a1], 
+                                jerk_opts[j0], jerk_opts[j1], jerk_opts[j2]
+                            ))
 
-ajnp = np.empty((len(aj_combos), len(skip_keys)))
-for i, ajc in enumerate(aj_combos):
-    ajscore = bcotjav.getScoresTrain(np.array([[1.0, *ajc]]), False)
-    for j, sk in enumerate(skip_keys):
-        ajnp[i, j] = ajscore[sk]
+    ajnp = np.empty((len(aj_combos), len(skip_keys)))
+    for i, ajc in enumerate(aj_combos):
+        ajscore = bcotjav.getScoresTrain(np.array([[*ajc]]), False)
+        for j, sk in enumerate(skip_keys):
+            ajnp[i, j] = ajscore[sk]
+    return ajnp
+#%%
+# Finds closest points on hyperplanes with the given normals and offsets.
+# The below function is the result of me feeding my original getClosestPoint()
+# function through Copilot/Claude to accomodate multiple points per hyperplane.
+# TODO: Need to manually verify logic and clean things up a bit.
+def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray, return_dists: bool = False):
+    """
+    Parameters:
+        normals: shape (m, k) where m is number of hyperplanes, k is dimensionality
+        scaled_plane_offsets: shape (m,) offset for each hyperplane
+        points: shape (n, k) points to find closest hyperplane points for
+        return_dists: whether to return distances along with closest points
+    """
+    # Reshape for broadcasting:
+    # normals: (m, k, 1)
+    # scaled_plane_offsets: (m, 1)
+    # points: (1, k, n)
+    normals_exp = normals.reshape(normals.shape[0], normals.shape[1], 1)
+    offsets_exp = scaled_plane_offsets.reshape(-1, 1)
+    points_exp = points.T.reshape(1, points.shape[1], points.shape[0])
+    
+    # Calculate dot products: (m, 1, n)
+    norm_sq = pm.einsumDot(normals, normals).reshape(-1, 1, 1)
+    pn = np.sum(normals_exp * points_exp, axis=1, keepdims=True)  # (m, 1, n)
+    
+    # Calculate scalars: (m, 1, n)
+    scalar = (offsets_exp.reshape(-1, 1, 1) - pn) / norm_sq
+    
+    # Calculate displacements: (m, k, n)
+    disps = scalar * normals_exp
+    
+    # Calculate closest points: (m, k, n)
+    closest = points_exp + disps
+    
+    if return_dists:
+        # Calculate distances: (m, n)
+        distances = np.sqrt(np.sum(disps * disps, axis=1))
+        return (closest.transpose(2, 1, 0),  # (n, k, m)
+                distances.T)                  # (n, m)
+    return closest.transpose(2, 1, 0)        # (n, k, m)
 
+# The below function is the result of me feeding my original gtMultipliers6()
+# function through Copilot/Claude to accomodate multiple baseline_m6 values.
+# TODO: Need to manually verify logic and clean things up a bit.
+def gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
+    """
+    Parameters:
+        y_true: shape (m, 15) where m is number of data points
+        baseline_m6: shape (n, 6) where n is number of baseline points to consider
+    """
+    # Calculate j_o directly as it doesn't depend on baseline_m6
+    j_o = y_true[:, 8] / y_true[:, 5]
+    
+    # First hyperplane (a and j components)
+    points_aj = baseline_m6[:, [2, 4]]  # Shape: (n, 2)
+    closest_points_aj, dists_aj = getClosestPoint(
+        y_true[:, [2, 4]], y_true[:, 7], points_aj, return_dists=True
+    )
+    # For each hyperplane (each row in y_true), find the closest among n points
+    min_indices_aj = np.argmin(dists_aj, axis=0)  # Shape: (m,)
+    # Get the closest points using the indices
+    # closest_points_aj shape is (n, 2, m), we want to select best n for each m
+    a_a = closest_points_aj[min_indices_aj, 0, range(len(y_true))]
+    j_a = closest_points_aj[min_indices_aj, 1, range(len(y_true))]
+    
+    # Second hyperplane (v, a, and j components)
+    points_vaj = baseline_m6[:, [0, 1, 3]]  # Shape: (n, 3)
+    closest_points_vaj, dists_vaj = getClosestPoint(
+        y_true[:, [0, 1, 3]], y_true[:, 6], points_vaj, return_dists=True
+    )
+    # For each hyperplane, find the closest among n points
+    min_indices_vaj = np.argmin(dists_vaj, axis=0)  # Shape: (m,)
+    # Get the closest points using the indices
+    # closest_points_vaj shape is (n, 3, m), we want to select best n for each m
+    v_v = closest_points_vaj[min_indices_vaj, 0, range(len(y_true))]
+    a_v = closest_points_vaj[min_indices_vaj, 1, range(len(y_true))]
+    j_v = closest_points_vaj[min_indices_vaj, 2, range(len(y_true))]
+    
+    return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
+
+
+base2 = []
+base_a_opts = [0.0, 0.5, 1.0]
+# See other commenting on how these possible multiplier totals are found
+# when looking at the lagrange polynomial derivatives.
+base_j_opts = [0, 1/6, 2/3, 1.0]
+for a1_ind, a1 in enumerate(base_a_opts):
+    j_end_ind = a1_ind if a1_ind < 2 else 3
+    for a0_ind, a0 in enumerate(base_a_opts[:(a1_ind + 1)]):
+        for j2_ind, j2 in enumerate(base_j_opts[:(j_end_ind + 1)]):
+            for j1_ind, j1 in enumerate(base_j_opts[:(j2_ind + 1)]):
+                j_end_from_a0 = a0_ind if a0_ind < 2 else 3
+                jv_end_ind = min(j2_ind, j_end_from_a0)
+                for j0 in base_j_opts[:(jv_end_ind + 1)]:
+                    base2.append([1.0, a0, a1, j0, j1, j2])
+gt_bcot = gtMultipliers6(bcotjav.jav_train, np.asarray(base2))
+
+#%%
+all_base_errs = np.empty((len(bcotjav.jav_train), len(base2)))
+for i, b in enumerate(base2):
+    all_base_errs[:, i] = poseLossJAV(bcotjav.jav_train, np.asarray(b).reshape(1, -1))
+
+min_base_errs = np.min(all_base_errs, axis=-1)
+for k, v in dog.skip_train_inds_dict.items():
+    print(k, ":", np.mean(min_base_errs[v]))
+
+argmin_base_errs = np.argmin(all_base_errs, axis=-1)
+plt.bar(*np.unique(argmin_base_errs, return_counts=True))
+plt.show()
