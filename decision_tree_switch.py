@@ -499,50 +499,46 @@ class DataForJAV:
             precalc_per_combo=self.jav_per_combo
         )
 
-        jav_tr_append = self.sineThing(True)
-        jav_te_append = self.sineThing(False)
 
-        self.jav_train = np.concatenate(
-            (partial_jav_train, jav_tr_append), axis=-1
-        )
-        self.jav_test = np.concatenate(
-            (partial_jav_test, jav_te_append), axis=-1
-        )
+        # self.jav_train = np.concatenate(
+        #     (partial_jav_train, jav_tr_append), axis=-1
+        # )
+        # self.jav_test = np.concatenate(
+        #     (partial_jav_test, jav_te_append), axis=-1
+        # )
 
-
-    def sineThing(self, is_train: bool):
+        self.jav_train = partial_jav_train
+        self.jav_test = partial_jav_test
         
-        data = self.data_organizer.concat_train_data if is_train else self.data_organizer.concat_test_data
-        res = np.zeros((len(data), 6))
-        res[:, 0] = 1
-        avd1 = data[:, AVD2_DATA_IND]
-        res[:, 1] = 0.5 * np.sin(2 * avd1)
-        res[:, 2] = 0.5 * (1.0 - np.cos(2 * avd1))
-        return res
-
-        
-    def printScoresTrain(self, predictions: typing.Optional[NDArray] = None):
+    def getScoresTrain(self, predictions: typing.Optional[NDArray] = None, 
+                       should_print=True):
         if predictions is None:
             predictions = bcs_model.predict(self.data_organizer.col_subset_train)
-        self._printHelper(
-            predictions, self.jav_train, self.data_organizer.skip_train_inds_dict
+        return self._scoreHelper(
+            predictions, self.jav_train,
+            self.data_organizer.skip_train_inds_dict, should_print
         )
 
-    def printScoresTest(self, predictions: typing.Optional[NDArray] = None):
+    def getScoresTest(self, predictions: typing.Optional[NDArray] = None,
+                      should_print=True):
         if predictions is None:
             predictions = bcs_model.predict(self.data_organizer.col_subset_test)
-        self._printHelper(
-            predictions, self.jav_test, self.data_organizer.skip_inds_dict
+        return self._scoreHelper(
+            predictions, self.jav_test, 
+            self.data_organizer.skip_inds_dict, should_print
         )
 
     @staticmethod
-    def _printHelper(preds: NDArray, jav_vals: NDArray, inds: typing.Dict):
+    def _scoreHelper(preds: NDArray, jav_vals: NDArray, inds: typing.Dict,
+                     should_print):
         errs: NDArray = poseLossJAV(jav_vals, preds).numpy()
         # Print scores on test data.
         scores = {k: np.mean(errs[v]) for k, v in inds.items()}
-        for k, v in scores.items():
-            print(k + ":", v)
-
+        if should_print:
+            for k, v in scores.items():
+                print(k + ":", v)
+        return scores
+    
 bcotjav = DataForJAV(dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, True)
 
 
@@ -834,7 +830,7 @@ tjav = DataForJAV(tdog, tudl_loaders, bcs_scaler, nonco_cols, JAV_order)
 #%%
 
 tjavps = bcs_model.predict(tdog.col_subset_test)
-tjav.printScoresTest(tjavps)
+tjav.getScoresTest(tjavps)
 #%%
 ajnn = getUntrainedNN()
 
@@ -849,8 +845,8 @@ bcot_ajnn_pred = ajnn.predict(dog.col_subset_train, batch_size=1024)
 
 tudl_ajnn_pred = ajnn.predict(tdog.col_subset_train, batch_size=1024)
 
-bcotjav.printScoresTrain(bcot_ajnn_pred)
-tjav.printScoresTrain(tudl_ajnn_pred)
+bcotjav.getScoresTrain(bcot_ajnn_pred)
+tjav.getScoresTrain(tudl_ajnn_pred)
 #%%
 ax = plt.figure().add_subplot(projection='3d')
 
@@ -922,7 +918,7 @@ ajnnC.fit(bt_train, bt_jav, epochs=32, shuffle=True)
 
 #%%
 ajnnC_pred = ajnnC.predict(tdog.col_subset_train)
-tjav.printScoresTrain(ajnnC_pred)
+tjav.getScoresTrain(ajnnC_pred)
 
 # ajnnC_loss = poseLossJAV(bcs_test, ajnnC_pred)
 # print({k: np.mean(ajnnC_loss[v]) for k, v in dog.skip_inds_dict.items()})
@@ -962,7 +958,7 @@ split_nn = getUntrainedNNSplit(lnccn, lnccn - 1, lnccn - 2)
 split_nn.fit([dog.col_subset_test, dog.col_subset_test[:, :-1], dog.col_subset_test[:, :-2]], bcotjav.jav_test, epochs=33, batch_size=128, shuffle=True)
 
 #%%
-tjav.printScoresTest(split_nn.predict([tdog.col_subset_test, tdog.col_subset_test[:, :-1], tdog.col_subset_test[:, :-2]]))
+tjav.getScoresTest(split_nn.predict([tdog.col_subset_test, tdog.col_subset_test[:, :-1], tdog.col_subset_test[:, :-2]]))
 
 #%%
 from scipy.optimize import lsq_linear
@@ -1037,8 +1033,8 @@ def gtScaledVelAligned(y_true, bounds = None):
 gt_bcot = gtScaledVelAligned(bcotjav.jav_train, bounds)
 gt_tudl = gtScaledVelAligned(tjav.jav_train, bounds)
 
-bcotjav.printScoresTrain(gt_bcot)
-tjav.printScoresTrain(gt_tudl)
+bcotjav.getScoresTrain(gt_bcot)
+tjav.getScoresTrain(gt_tudl)
 
 #%%
 def gtMultipliers6(y_true, bounds, tol: float = 0.001, max_iter: int = 32, verbose=False):
@@ -1079,8 +1075,8 @@ bounds = (-2,2)
 gt_bcot = gtMultipliers6(bcotjav.jav_train, bounds, verbose=True)
 gt_tudl = gtMultipliers6(tjav.jav_train, bounds, verbose=True)
 
-bcotjav.printScoresTrain(gt_bcot)
-tjav.printScoresTrain(gt_tudl)
+bcotjav.getScoresTrain(gt_bcot)
+tjav.getScoresTrain(gt_tudl)
 
 #%%
 bcs_pred_tr = bcs_model.predict(dog.col_subset_train, batch_size=1024)
@@ -1154,9 +1150,25 @@ fig.canvas.mpl_connect('key_press_event', on_key)
 plt.show()
 # %%
 
-if JAV_order[0] != JAV.VELOCITY or JAV_order[1] != JAV.ACCELERATION:
-    raise Exception("Below hardcoded indices will be wrong!")
+# Figure out what are the best constant vel, acc, jerk multipliers out of the
+# "physics-based" options.
+acc_opts = [0.0, 0.5, 1.0] # 1.0 means deg2 velocity calculation
+jerk_opts = [0.0, 1/6, 1/3, 1/2, 2/3, 5/6, 1.0]
 
-    
-st = bcotjav.sineThing(True)
-bcotjav.printScoresTrain(st)
+aj_combos = []
+for a0 in range(3):
+    for a1 in range(3):
+        for j0 in range(7):
+            for j1 in range(7):
+                for j2 in range(7):
+                    aj_combos.append((
+                        acc_opts[a0], acc_opts[a1], 
+                        jerk_opts[j0], jerk_opts[j1], jerk_opts[j2]
+                    ))
+
+ajnp = np.empty((len(aj_combos), len(skip_keys)))
+for i, ajc in enumerate(aj_combos):
+    ajscore = bcotjav.getScoresTrain(np.array([[1.0, *ajc]]), False)
+    for j, sk in enumerate(skip_keys):
+        ajnp[i, j] = ajscore[sk]
+
