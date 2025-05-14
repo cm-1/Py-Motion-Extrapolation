@@ -140,28 +140,28 @@ def einsumDot(vecs0: np.ndarray, vecs1: np.ndarray) -> np.ndarray:
 
     return np.einsum('...ij,...ij->...i', vecs0, vecs1)
 
-def einsumMatVecMul(mats: np.ndarray, vecs: np.ndarray):
+def einsumMatVecMul(mats: np.ndarray, vecs: np.ndarray) -> np.ndarray:
     '''
     Multiply each vector in an array of vectors by the corresponding matrix
     from an array of matrices using np.einsum.
     '''
     return np.einsum('bij,bj->bi', mats, vecs)
 
-def einsumMatMatMul(mats0: np.ndarray, mats1: np.ndarray):
+def einsumMatMatMul(mats0: np.ndarray, mats1: np.ndarray) -> np.ndarray:
     '''
     Multiply each matrix in an array of matrices with the corresponding matrix
     from a second such array using np.einsum.
     '''
     return np.einsum("bij,bjk->bik", mats0, mats1)
 
-def scalarsVecsMul(scalars: np.ndarray, vecs: np.ndarray):
+def scalarsVecsMul(scalars: np.ndarray, vecs: np.ndarray) -> np.ndarray:
     '''
     Multiply each vector in an array of vectors by the corresponding scalar
     from an array of scalars using np.einsum.
     '''
     return np.einsum('b,bi->bi', scalars, vecs)
 
-def scalarsMatsMul(scalars, mats):
+def scalarsMatsMul(scalars, mats) -> np.ndarray:
     return np.einsum('b,bij->bij', scalars, mats)
 
 def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):

@@ -1,4 +1,6 @@
 {
-    "dataset_directory": "~/BCOT/BCOT_Dataset",
-    "result_directory": "D:\\BCOT\\srt3d_results_bcot"
+    "bcot_dataset_directory": "~/BCOT/BCOT_Dataset",
+    "bcot_result_directory": "D:\\BCOT\\srt3d_results_bcot",
+    "tudl_dataset_directory": "...",
+    "pauwels_dataset_directory": "..."
 }

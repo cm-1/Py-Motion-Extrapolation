@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 import posemath as pm # Small "library" I wrote for vector operations.
@@ -30,58 +30,6 @@ motion_kinds = [
 ]
 # motion_kinds_plus = motion_kinds + ["all"]
 
-def getAllCombos():
-    '''
-    Generate the following tuples that represent each video:
-        
-        (sequence_name, body_name, motion_kind)
-    
-    The first two tuple elements uniquely identify a video, while the third is
-    redundant (it's part of each sequence name) but might be used for more
-    convenient filtering of videos.
-
-    ---
-    In the BCOT dataset, videos are categorized first by the "sequence" type 
-    (which is motion/lighting/background), and then by the object ("body") 
-    featured in the video. Each "combo" of a sequence and body thus represents
-    a distinct video.
-    '''
-    combos = []
-    for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
-        k = ""
-        # For now, using a for loop, not regex, to get motion kind from seq name.
-        for k_opt in motion_kinds:
-            if k_opt in s_val:
-                k = k_opt
-                break
-        for b in range(len(gtc.BCOT_BODY_NAMES)):
-            # Some sequence-body pairs do not have videos, and some have two videos
-            # with identical motion but a different camera. So we first check that 
-            # a video exists and has unique motion.
-            if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
-                combos.append((b, s, k))
-    return combos
-
-# Filter out combos based on the 3D object ("body") subset chosen. 
-def combosByBod(bods, combos):
-    return [c for c in combos if c[0] in bods]
-
-def getTrainTestCombos(all_combos, test_ratio=0.2, random_seed=0):
-    '''
-    We'll split our data into train/test sets where the vids for a single body
-    will either all be train vids or all be test vids. This way (a) we are
-    guaranteed to have every motion "class" in our train and test sets, and (b)
-    we'll know how well the models generalize to new 3D objects not trained on.
-    '''
-    bod_arange = np.arange(len(gtc.BCOT_BODY_NAMES), dtype=int)
-    train_bodies, test_bodies = train_test_split(
-        bod_arange, test_size=test_ratio, random_state=random_seed
-    )
-
-    train_combos = combosByBod(train_bodies, all_combos)
-    test_combos = combosByBod(test_bodies, all_combos)  
-
-    return train_combos, test_combos
 
 # For type hint. Seems that sklearn's "Scalers" don't have a single superclass
 # that has a transform() method, unless I'm missing something. So I'm doing a
@@ -115,8 +63,8 @@ class JAV(Enum):
     ACCELERATION = 2
     JERK = 3
 
-ComboList = typing.List[gtc.Combo]
-PerComboJAV = typing.List[typing.Dict[gtc.Combo, typing.Dict[str, NDArray]]]
+ComboList = typing.List[gtc.VidBCOT]
+PerComboJAV = typing.List[typing.Dict[gtc.VidBCOT, typing.Dict[str, NDArray]]]
 OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 
@@ -147,8 +95,8 @@ def dataForCombosJAV(combos: ComboList, vec_order: OrderForJAV,
     
     skip_end = 3#1 if onlySkip0 else 3
     for c in combos:
-        calc_obj = BCOT_Data_Calculator(c.body_ind, c.seq_ind, 0)
-        curr_translations = calc_obj.getTranslationsGTNP(False)
+        calc_obj = PoseLoaderBCOT(c.body_ind, c.seq_ind, 0)
+        curr_translations = calc_obj.getTranslationsGTNP()
         for skip in range(skip_end):
             step = skip + 1
             translations = curr_translations[::step]

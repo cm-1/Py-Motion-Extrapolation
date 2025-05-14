@@ -14,7 +14,6 @@ import gtCommon as gtc
 # Functions to get RNN "windows" and velocity-aligned frame data, respectively.
 from data_by_combo_functions import rnnDataWindows, dataForCombosJAV
 # Functions to get all combos and to split combos into train/test sets:
-from data_by_combo_functions import getAllCombos, getTrainTestCombos
 from data_by_combo_functions import JAV # Enum
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
@@ -24,14 +23,14 @@ WIN_SIZE = 4
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
 
-combos = getAllCombos()
+combos = gtc.PoseLoaderBCOT.getAllIDs()
 
 # From the combo 3-tuples, construct nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-nametup_combos = [gtc.Combo(*c[:2]) for c in combos]
+nametup_combos = [gtc.VidBCOT(*c[:2]) for c in combos]
 
 print("Getting train-test split.")
-train_combos, test_combos = getTrainTestCombos(combos, test_ratio=0.2, random_seed=0)
+train_combos, test_combos = gtc.PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
 
 #%%
 ################################################################################

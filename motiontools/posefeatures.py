@@ -1,7 +1,9 @@
 from enum import Enum
 import typing
+import copy
+
 from dataclasses import dataclass
-from math import ceil, floor
+from math import floor
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,7 +15,6 @@ import posemath as pm
 import poseextrapolation as pex
 import minjerk as mj
 
-from gtCommon import BCOT_Data_Calculator
 import gtCommon as gtc
 
 DEFAULT_OBJ_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -98,8 +99,8 @@ class MOTION_DATA(Enum):
     SPEED_JERK_RATIO = 43
     ACC_JERK_RATIO = 44
     SPEED_ORTHO_ACC_RATIO = 45
-    CIRC_SPEED_CIRC_ACC_RATIO = 46
-    CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO = 47
+    CIRC_ACC_CIRC_SPEED_RATIO = 46
+    CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO = 47
     CIRC_ANG_RATIO = 48
 
     BOUNCE_ANGLE_2_SUM = 49
@@ -111,6 +112,14 @@ class MOTION_DATA(Enum):
     DIST_FROM_CIRCLE = 52
     RATIO_FROM_CIRCLE = 53
 
+    ACC_VEL_DEG1_DOT = 54
+    ACC_VEL_DEG2_DOT = 55
+    VEL_DEG2_MAG_DIFF = 56
+    VEL_DEG2_MAG_DIFF_TIMESCALED = 57
+
+    INV_DISP_MAG_RATIO = 58
+    INV_VEL_BCS_RATIOS = 59
+    INV_CIRC_ANG_RATIO = 60
 
 
 class RELATIVE_AXIS(Enum):
@@ -188,6 +197,7 @@ class Vec3Data:
                 # MAYBE setting unit dir to 0 is a workaround if this happens?
 
 MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
+PoseLoaderList = typing.List[gtc.PoseLoader]
 
 def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         missing_keys: typing.List[MOTION_DATA] = []
@@ -211,15 +221,15 @@ def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         return missing_keys
 
 @dataclass
-class FeaturesAndResultsForCombo:
+class FeaturesAndResultsForVid:
     motion_data: typing.List[typing.Dict[MOTION_DATA_KEY_TYPE, NDArray]]
     err_norms: typing.List[typing.Dict[MOTION_MODEL, NDArray]]
     min_norm_labels: typing.List[NDArray]
     min_norm_vecs: typing.List[NDArray]
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
-class CalcsForCombo:
-    def __init__(self, combos: typing.List[gtc.Combo],
+class CalcsForVideo:
+    def __init__(self, 
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: float = FLOAT_32_MAX,
@@ -233,8 +243,6 @@ class CalcsForCombo:
         self.split_min_jerk_opt_iter_lim = split_min_jerk_opt_iter_lim
         self.err_radius_ratio_thresh = err_radius_ratio_thresh
         self.err_na_val = err_na_val
-
-        self.combos = combos
 
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
@@ -256,16 +264,21 @@ class CalcsForCombo:
         self._joblib_1_3_supported = joblib_1_3_supported
         # End of constructor.
         
-    def getAll(self, num_procs: int = -1, max_threads_per_proc = 2):
+    def getAll(self, pose_loaders: PoseLoaderList, num_procs: int = -1,
+               max_threads_per_proc = 2):
+        
         results = None
 
         # For the 1st combo, check to make sure all keys are there.
         # This way we can stop a lot sooner if we are missing a key.
-        result_for_1st_combo = self.getInputFeatures(self.combos[0], True)[1]
-        remaining_combos = self.combos[1:]
+        result_for_1st = self.getInputFeatures(
+            pose_loaders[0], True
+        )[1]
+
+        remaining_loaders = pose_loaders[1:]
 
         if num_procs == 1:
-            results = dict(map(self.getInputFeatures, remaining_combos))
+            results = dict(map(self.getInputFeatures, remaining_loaders))
         else: 
             cpu_count = joblib.cpu_count()
             # If caller did not specify how many children processes...
@@ -293,30 +306,31 @@ class CalcsForCombo:
                 with joblib.parallel_config(backend="loky", inner_max_num_threads=per):
                     results_list = Parallel(n_jobs=num_procs)(
                         delayed(self.getInputFeatures)(c)
-                        for c in remaining_combos
+                        for c in remaining_loaders
                     )
                     results = dict(results_list)
             else:
                 print("Running {} processes.".format(num_procs))
                 results_list = Parallel(n_jobs=num_procs)(
-                    delayed(self.getInputFeatures)(c) for c in remaining_combos
+                    delayed(self.getInputFeatures)(c) for c in remaining_loaders
                 )
                 results = dict(results_list)
-        results[self.combos[0]] = result_for_1st_combo
+        results[pose_loaders[0].getVidID()] = result_for_1st
 
         self.all_motion_data = [dict() for _ in range(3)]
         self.min_norm_labels = [dict() for _ in range(3)]
         self.err_norm_lists = [dict() for _ in range(3)]
         self.min_norm_vecs = [dict() for _ in range(3)]
+        combos = [pl.getVidID() for pl in pose_loaders]
         for i in range(3):
-            for combo in self.combos:
+            for combo in combos:
                 res = results[combo]
                 self.all_motion_data[i][combo] = res.motion_data[i]
                 self.err_norm_lists[i][combo] = res.err_norms[i]
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
                 self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
-    def getInputFeatures(self, combo: gtc.Combo,
+    def getInputFeatures(self, pose_loader: gtc.PoseLoader,
                          check_key_completeness: bool = False):
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
         # shorter aliases might be helpful.
@@ -327,11 +341,10 @@ class CalcsForCombo:
         V3D = Vec3Data
 
         
-        calculator = BCOT_Data_Calculator(combo.body_ind, combo.seq_ind, 0)
-        all_translations = calculator.getTranslationsGTNP(False)
-        aa_rotations = calculator.getRotationsGTNP(False)
+        all_translations = pose_loader.getTranslationsGTNP()
+        aa_rotations = pose_loader.getRotationsGTNP()
         all_quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
-        all_rotation_mats = calculator.getRotationMatsGTNP(False)
+        all_rotation_mats = pose_loader.getRotationMatsGTNP()
 
         motion_datas = []
         all_err_norms = []
@@ -412,12 +425,17 @@ class CalcsForCombo:
             )
             vel_bcs_ratios = vel_dots / (deg1_speeds[-n_jerk_preds:]**2)
             motion_data[MOTION_DATA.VEL_BCS_RATIOS] = vel_bcs_ratios
+            motion_data[MOTION_DATA.INV_VEL_BCS_RATIOS] = 1.0 / vel_bcs_ratios
 
             disp_mag_diffs = np.diff(deg1_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
             motion_data[MOTION_DATA.DISP_MAG_DIFF] = disp_mag_diffs
             motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] = disp_mag_diffs / step
+            speed_deg2_diffs = np.diff(deg2_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
+            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF] = speed_deg2_diffs
+            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF_TIMESCALED] = speed_deg2_diffs / step
             disp_mag_div = deg1_speeds_full[1:] / deg1_speeds_full[:-1]
             motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div[-n_jerk_preds:].flatten()
+            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = 1.0 / disp_mag_div[-n_jerk_preds:].flatten()
 
             unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
             unit_vels_deg2 = pm.safelyNormalizeArray(deg2_vels, deg2_speeds_full)
@@ -439,11 +457,12 @@ class CalcsForCombo:
             motion_data[MOTION_DATA.CIRC_ACC] = circ_accs
             motion_data[MOTION_DATA.CIRC_ANG_ACC] = circ_ang_accs[-n_jerk_preds:]
 
-            motion_data[MOTION_DATA.CIRC_SPEED_CIRC_ACC_RATIO] = circ_speeds / circ_accs
-            motion_data[MOTION_DATA.CIRC_ANG_SPEED_CIRC_ANG_ACC_RATIO] = \
-                circ_ang_speeds_subset / circ_ang_accs[-n_jerk_preds:]
+            motion_data[MOTION_DATA.CIRC_ACC_CIRC_SPEED_RATIO] = circ_accs / circ_speeds
+            motion_data[MOTION_DATA.CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO] = \
+                circ_ang_accs[-n_jerk_preds:] / circ_ang_speeds_subset
             c_ang_ratio = cma.second_angles / cma.first_angles
             motion_data[MOTION_DATA.CIRC_ANG_RATIO] = c_ang_ratio[-n_jerk_preds:]
+            motion_data[MOTION_DATA.INV_CIRC_ANG_RATIO] = 1.0 / c_ang_ratio[-n_jerk_preds:]
             
 
             motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
@@ -490,6 +509,13 @@ class CalcsForCombo:
             motion_data[MOTION_DATA.BOUNCE_ANGLE_2_SUM] = \
                 bounce_ang_pair_sums[-n_jerk_preds:]
             motion_data[MOTION_DATA.VEL_DOT] = t_diff_dots[-n_jerk_preds:]
+
+            motion_data[MOTION_DATA.ACC_VEL_DEG1_DOT] = pm.einsumDot(
+                deg2_accs, deg1_vels[1:]
+            )[-n_jerk_preds:]
+            motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = pm.einsumDot(
+                deg2_accs, deg2_vels
+            )[-n_jerk_preds:]
 
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
@@ -670,8 +696,9 @@ class CalcsForCombo:
 
             motion_data[a_v2_mag_k] = acc_vel_deg2_mag[-n_jerk_preds:]
             motion_data[a_v2_mag_k_bidir] = np.abs(acc_vel_deg2_mag[-n_jerk_preds:])
-            acc_vel_deg2_angs = np.arcsin(np.clip(sin_vel_deg2_acc_angs, -1.0, 1.0))
-            acc_vel_deg2_ang_subset = acc_vel_deg2_angs[-n_jerk_preds:].flatten()
+            acc_vel_deg2_ang_subset = pm.anglesBetweenVecs(
+                unit_vels_deg2, unit_accs
+            )[-n_jerk_preds:].flatten()
             motion_data[a_v2_ang_k] = acc_vel_deg2_ang_subset
             motion_data[a_v2_ang_k_bidir] = pm.getAcuteAngles(acc_vel_deg2_ang_subset)
 
@@ -703,7 +730,7 @@ class CalcsForCombo:
                 motion_data[SMD(md_k, RA.ITSELF, AM.MAG, False, False)] = v3s.norms
 
 
-            rel_axes_dict: typing.Dict[RELATIVE_AXIS, np.ndarray] = {
+            rel_axes_dict: typing.Dict[RELATIVE_AXIS, NDArray] = {
                 RA.VEL_DEG1: unit_vels_deg1, RA.VEL_DEG2: unit_vels_deg2,
                 RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG2: unit_acc_ortho_deg2_vecs,
                 RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes
@@ -784,7 +811,7 @@ class CalcsForCombo:
             all_err_norms.append(curr_err_norms_dict)
             min_err_vecs.append(curr_min_norm_vecs)
 
-        return (combo, FeaturesAndResultsForCombo(
+        return (pose_loader.getVidID(), FeaturesAndResultsForVid(
             motion_datas, all_err_norms, min_err_labels, min_err_vecs
         ))
         # all_motion_data[skip_amt][c2] = motion_data
@@ -792,5 +819,124 @@ class CalcsForCombo:
         # # err3D_lists[skip_amt][c2] = curr_errs_3D
         # min_norm_labels[skip_amt][c2] = curr_min_norm_labels[1:]
         
+class JAV(Enum):
+    VELOCITY = 1
+    ACCELERATION = 2
+    JERK = 3
 
+NumpyForSkipAndID = typing.List[typing.Dict[typing.Any, NDArray]]
+OrderForJAV = typing.Tuple[JAV, JAV, JAV]
+
+
+def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
+                     return_world2locals: bool = False, 
+                     return_translations: bool = False):
+    '''
+    For each frame of video, we consider a coordinate frame where one axis is
+    aligned with the object's velocity and another is aligned with the
+    acceleration (or, at least, the part of it orthogonal to velocity).
+    We then calculate and return the speed, acceleration, and jerk for the current
+    time and the position at the next time in this frame.
+    Returns a List[Dict[Combo, NDArray]] that again separates things
+    by frame skip amount and by combo.
+    '''
+
+    # Empty dict for each skip amount.
+    all_data: NumpyForSkipAndID = [dict() for _ in range(3)]
+    all_world2local_mats: NumpyForSkipAndID = [dict() for _ in range(3)]
+    all_translations: NumpyForSkipAndID = [dict() for _ in range(3)]
+    
+    if vec_order is None:
+        vec_order = (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
+    if len(vec_order) != 3 or {v.value for v in vec_order} != {1, 2, 3}:
+        raise ValueError("Vector order must be a permutation of (velocity, acceleration, jerk)!")
+    
+    skip_end = 3#1 if onlySkip0 else 3
+    for calc_obj in pose_loaders:
+        c = calc_obj.getVidID()
+        curr_translations = calc_obj.getTranslationsGTNP()
+        for skip in range(skip_end):
+            step = skip + 1
+            translations = curr_translations[::step]
+            vels = np.diff(translations, axis=0)
+            # We need a velocity for the last timestep, but not an acceleration,
+            # because we need the vectors that take each current position to
+            # the next when calculating the "ground truth" for displacement
+            # predictions. This is the velocity vector; acceleration vectors
+            # are not needed for this; we only need "current" acceleration.
+            accs = np.diff(vels[:-1], axis=0)
+            jerks = np.diff(accs, axis=0)
+
+            # Here we specify which order in which we orthonormalize our
+            # velocity, acceleration, and jerk vectors into orthonormal frames.
+            # The first-chosen of these gets aligned exactly with an axis, while
+            # the others only get orthogonal components aligned with an axis.
+            
+            # To only calculate as much as we need, we clip the arrays' fronts
+            # off when we can.
+            default_ordered = (vels[2:-1], accs[1:], jerks)
+            ordered = copy.copy(default_ordered)
+            if vec_order is not None:
+                ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
+
+            mags0 = np.linalg.norm(ordered[0], axis=-1)
+            unit_vecs0 = pm.safelyNormalizeArray(
+                ordered[0], mags0[:, np.newaxis]
+            )
+            # Find the magnitude of the second vector that is parallel to and
+            # orthogonal to the first.
+            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
+            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
+            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
+            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
+
+            unit_vecs1 = pm.safelyNormalizeArray(
+                vecs_o1, mags_o1[:, np.newaxis]
+            )
+
+            mags_p20 = pm.einsumDot(ordered[2], unit_vecs0) # Parallel magnitude
+            vecs_p20 = pm.scalarsVecsMul(mags_p20, unit_vecs0)
+            mags_p21 = pm.einsumDot(ordered[2], unit_vecs1)
+            vecs_p21 = pm.scalarsVecsMul(mags_p21, unit_vecs1)
+            vecs_o2 = ordered[2] - (vecs_p20 + vecs_p21)
+            mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
+
+            unit_vecs2 = pm.safelyNormalizeArray(
+                vecs_o2, mags_o2[:, np.newaxis]
+            )
+
+            # We now have matrices to convert vectors in world space into
+            # these local vector-aligned frames.
+            mats = np.stack([unit_vecs0, unit_vecs1, unit_vecs2], axis=1)
+
+            # Transform each third vector and to-next-frame displacement into
+            # this frame via matmul.
+            # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
+            local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+
+            # We'll now return all of the data needed to convert velocity,
+            # acceleration, and jerk multipliers into local vectors in these
+            # new frames. To do this, we don't need to return the coordinate
+            # frames themselves: we just need to know the velocity in this
+            # frame (a vector [speed, 0, 0]), the acceleration in this frame
+            # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
+            # we can just return the following:
+            c_res = (
+                mags0, mags_p1, mags_o1, mags_p20, mags_p21, mags_o2,
+                *(local_diffs.T)
+            )
+
+            all_data[skip][c] = np.stack(c_res, axis=-1)
+            if return_world2locals:
+                all_world2local_mats[skip][c] = mats
+            if return_translations:
+                all_translations[skip][c] = translations
+    if return_world2locals or return_translations:
+        res = (all_data, )
+        if return_world2locals:
+            res += (all_world2local_mats, )
+        if return_translations:
+            res += (all_translations, )
+        return res
+    return all_data
 

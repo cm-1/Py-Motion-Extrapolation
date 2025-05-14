@@ -13,11 +13,10 @@ from sklearn.preprocessing import MinMaxScaler
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 # Functions to get RNN "windows".
 from data_by_combo_functions import rnnDataWindows
 # Functions to get all combos and to split combos into train/test sets:
-from data_by_combo_functions import getAllCombos, getTrainTestCombos
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
 
@@ -27,10 +26,10 @@ WIN_SIZE = 4
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
 
-combos = getAllCombos()
+combos = PoseLoaderBCOT.getAllIDs()
 
 print("Getting train-test split.")
-train_combos, test_combos = getTrainTestCombos(combos, test_ratio=0.2, random_seed=0)
+train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
 
 #%%
 ################################################################################
@@ -44,8 +43,8 @@ all_translations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 # all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 # all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
-    all_translations[combo[:2]] = calculator.getTranslationsGTNP(False)
+    calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
+    all_translations[combo[:2]] = calculator.getTranslationsGTNP()
     # aa_rotations = calculator.getRotationsGTNP(False)
     # quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
     # all_rotations[combo[:2]] = quats
@@ -57,7 +56,7 @@ all_translations_concat = np.concatenate(
 translation_scaler = MinMaxScaler(feature_range=(0,1))
 translation_scaler.fit(all_translations_concat)
 # Scale all 3 axes by uniform amount and centre to 0 for later simplicity
-translation_scaler.scale_[-3:] = translation_scaler.scale_[-1]
+translation_scaler.scale_[-3:] = 10 * np.max(translation_scaler.scale_) #[-1]
 translation_scaler.min_[-3:] = 0.0
 
 #%%
