@@ -456,7 +456,7 @@ class ImportanceLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
-def getUntrainedNN(use_resid_loss: bool = False, use_resid_data: bool = False):
+def getUntrainedNN(loss = None, use_resid_data: bool = False):
 
     dropout_rate = 0.2
     nodes_per_layer = 128
@@ -472,13 +472,12 @@ def getUntrainedNN(use_resid_loss: bool = False, use_resid_data: bool = False):
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
         keras.layers.Dense(6)
     ])
+    if loss is None:
+        loss = poseLossJAV
 
     model.summary()
     optim = 'adam'
-    if use_resid_loss:
-        model.compile(loss=poseLossResidualJAV, optimizer=optim)
-    else:
-        model.compile(loss=poseLossJAV, optimizer=optim)
+    model.compile(loss=loss, optimizer=optim)
     return model
 bcs_model = getUntrainedNN()
 # %%
@@ -1439,7 +1438,7 @@ for k, v in base2_pred_res.items():
 
 #%%
 
-class_resid_nn = getUntrainedNN(False, True)
+class_resid_nn = getUntrainedNN(None, True)
 
 cl_start_pt = np.empty((len(dog.concat_train_data), 6))
 
