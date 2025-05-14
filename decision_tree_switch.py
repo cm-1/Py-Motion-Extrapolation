@@ -357,6 +357,23 @@ def poseLossJAV(y_true, y_pred):
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
 
+def poseLossResidualJAV(y_true, y_pred):
+
+    y_pred2 = y_pred + y_true[:, 9:15]
+
+    pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
+        + y_true[:, 3] * y_pred2[:, 3]
+    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4]
+    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5]
+
+    pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
+    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
+
+    true_disp = y_true[:, 6:9]
+
+    err_vec3 = true_disp - pred_disp
+    return tf.norm(err_vec3, axis=-1)
+
 def getVelFrameDisplacements(y_true, y_pred):
     disp = np.empty((len(y_true), 3))
 
@@ -439,13 +456,14 @@ class ImportanceLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
-def getUntrainedNN():
+def getUntrainedNN(use_resid_loss: bool = False, use_resid_data: bool = False):
 
     dropout_rate = 0.2
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
+    in_shape = len(nonco_col_nums) + (6 if use_resid_data else 0)
     model = keras.Sequential([
-        keras.layers.Input((len(nonco_col_nums),)),
+        keras.layers.Input((in_shape,)),
         # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
         keras.layers.Dropout(dropout_rate),
@@ -456,7 +474,11 @@ def getUntrainedNN():
     ])
 
     model.summary()
-    model.compile(loss=poseLossJAV, optimizer='adam')
+    optim = 'adam'
+    if use_resid_loss:
+        model.compile(loss=poseLossResidualJAV, optimizer=optim)
+    else:
+        model.compile(loss=poseLossJAV, optimizer=optim)
     return model
 bcs_model = getUntrainedNN()
 # %%
@@ -750,7 +772,7 @@ tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
 adam = keras.optimizers.Adam(0.01)
 
 tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
-tfmodel.fit(
+nn_class_hist = tfmodel.fit(
     dog.concat_train_data, dog.concat_train_class_errs, epochs=5, shuffle=True
 )
 #%%
@@ -1382,3 +1404,79 @@ for k, v in dog.skip_train_inds_dict.items():
 argmin_base_errs = np.argmin(all_base_errs, axis=-1)
 plt.bar(*np.unique(argmin_base_errs, return_counts=True))
 plt.show()
+
+#%%
+mcb = WeightedErrorCriterion(1, np.array([len(base2)], dtype=np.intp))
+base_errs_reshape = all_base_errs.reshape((all_base_errs.shape[0], 1, all_base_errs.shape[1]))
+mcb.set_y_errs(base_errs_reshape)
+
+
+dumb_labels = np.zeros(len(dog.concat_train_data))
+dumb_labels[:len(base2)] = np.arange(len(base2))
+
+#%%
+base2_tree = sk_tree.DecisionTreeClassifier(max_depth=8, criterion=mcb)
+start_time = time.time()
+base2_tree = base2_tree.fit(dog.concat_train_data, dumb_labels)
+print("Done!")
+print("Time spent:", time.time() - start_time)
+
+#%%
+from motiontools.dataorg import motionClassScores
+
+test_base_errs = np.empty((len(bcotjav.jav_test), len(base2)))
+for i, b in enumerate(base2):
+    test_base_errs[:, i] = poseLossJAV(bcotjav.jav_test, np.asarray(b).reshape(1, -1))
+
+#%%
+base2_pred = base2_tree.predict(dog.concat_test_data)
+base2_pred_res = motionClassScores(
+    test_base_errs, base2_pred.astype(int), dog.skip_inds_dict
+)
+
+for k, v in base2_pred_res.items():
+    print(k, ":", v)
+
+#%%
+
+class_resid_nn = getUntrainedNN(False, True)
+
+cl_start_pt = np.empty((len(dog.concat_train_data), 6))
+
+cl_start_tree = trim_to_depth(base2_tree, 4)
+base2_tr_pred = cl_start_tree.predict(dog.concat_train_data).astype(int)
+
+for i, cl_start_val in enumerate(base2_tr_pred):
+    cl_start_pt[i] = base2[cl_start_val]
+
+class_resid_nn.fit(
+    np.concatenate((dog.col_subset_train, cl_start_pt), axis=-1),
+    bcotjav.jav_train, # np.concatenate((bcotjav.jav_train, cl_start_pt), axis=-1),
+    epochs=32, shuffle=True
+)
+
+#%%
+
+
+cl_start_pt_test = np.empty((len(dog.concat_test_data), 6))
+
+base2_te_pred = cl_start_tree.predict(dog.concat_test_data).astype(int)
+
+for i, cl_start_val in enumerate(base2_te_pred):
+    cl_start_pt_test[i] = base2[cl_start_val]
+
+class_resid_test = class_resid_nn.predict(
+    np.concatenate((dog.col_subset_test, cl_start_pt_test), axis=-1)
+)
+
+# class_resid_losses = poseLossResidualJAV(
+#     np.concatenate((bcotjav.jav_test, cl_start_pt_test), axis=-1), class_resid_test
+# )
+
+
+class_resid_losses = poseLossJAV(
+    bcotjav.jav_test, class_resid_test
+)
+
+for k, v in dog.skip_inds_dict.items():
+    print(k, np.mean(class_resid_losses[v]))
