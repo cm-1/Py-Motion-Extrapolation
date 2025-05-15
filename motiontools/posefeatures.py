@@ -626,15 +626,14 @@ class CalcsForVideo:
             avd2m = pm.einsumDot(deg2_accs, deg2_vels)
             motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = avd2m[-n_jerk_preds:] 
 
-            motion_data[MOTION_DATA.JERK_VEL_DEG1_DOT] = pm.einsumDot(
-                t_jerk_amt, deg1_vels[2:]
-            )
+            scaled_jerks = t_jerk_amt / (step ** 3)
+            jvd1m = pm.einsumDot(scaled_jerks, deg1_vels[2:])
+            motion_data[MOTION_DATA.JERK_VEL_DEG1_DOT] = jvd1m
             motion_data[MOTION_DATA.JERK_VEL_DEG2_DOT] = pm.einsumDot(
-                t_jerk_amt, deg2_vels[1:]
+                scaled_jerks, deg2_vels[1:]
             )
-            motion_data[MOTION_DATA.JERK_ACC_DOT] = pm.einsumDot(
-                t_jerk_amt, deg2_accs[1:]
-            )
+            ja_m = pm.einsumDot(scaled_jerks, deg2_accs[1:])
+            motion_data[MOTION_DATA.JERK_ACC_DOT] = ja_m
 
 
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
@@ -782,7 +781,7 @@ class CalcsForVideo:
             prev_jerk_err_mags = curr_err_norms[jerk_ind][:-1]
             prev_jerk_err_mags[0] = 0
             
-            acc_vel_deg1_mag = pm.einsumDot(deg2_accs, unit_vels_deg1[1:])
+            acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
             acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
             
             acc_ortho_deg1_vecs = deg2_accs - acc_vel_deg1_parallel
@@ -800,22 +799,55 @@ class CalcsForVideo:
                 vel_deg2_acc_cross, axis=-1, keepdims=True
             )
 
-
-            precalced_mags = [
-                deg1_speeds_full, deg2_speeds_full, acc_mags_full,
-                sin_vel_deg2_acc_angs
-            ]
-            for mags in precalced_mags:
-                if mags[0] == 0.0:
-                    raise ValueError("Relative axes cannot have a norm of 0.0!")
-
             acc_vel_deg2_mag = avd2m / deg2_speeds_full.flatten()
+            flat_accs = acc_mags.flatten()
             self._addDotsAndAngs(
                 motion_data, MD.ACC_VEC3, RA.VEL_DEG2, False,
-                acc_vel_deg2_mag[-n_jerk_preds:], acc_mags.flatten()
+                acc_vel_deg2_mag[-n_jerk_preds:], flat_accs
+            )
+            
+            jerk_norms = np.linalg.norm(scaled_jerks, axis=-1)
+
+            jerk_vel_deg1_mags = jvd1m / deg1_speeds
+            
+            jerk_acc_ortho_mags = pm.einsumDot(
+                scaled_jerks, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+            )
+            
+            jerk_vel_vecs = pm.scalarsVecsMul(
+                jerk_vel_deg1_mags, unit_vels_deg1[-n_jerk_preds:]
+            )
+            jerk_acc_vecs = pm.scalarsVecsMul(
+                jerk_acc_ortho_mags, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+            )
+            jerk_ortho_vecs = scaled_jerks - (jerk_vel_vecs + jerk_acc_vecs)
+            jerk_ortho_norms = np.linalg.norm(
+                jerk_ortho_vecs, axis=-1, keepdims=True
             )
 
             
+            vec3_precalc_keys = [
+                (MD.ACC_VEC3, RA.VEL_DEG1), (MD.ACC_VEC3, RA.VEL_DEG2),
+                (MD.JERK_VEC3, RA.VEL_DEG1), (MD.JERK_VEC3, RA.ACC_ORTHO_DEG1),
+                (MD.JERK_VEC3, RA.PLANE_ORTHO)
+            ]
+
+            precalced_mags = [
+                deg1_speeds_full, deg2_speeds_full, acc_mags_full,
+                sin_vel_deg2_acc_angs, jerk_ortho_norms
+            ]
+            for mags in precalced_mags:
+                mags_0 = mags[0]
+                mags_0_v = mags_0 if np.isscalar(mags_0) else mags_0[0]
+                if mags_0_v == 0.0:
+                    raise ValueError("Relative axes cannot have a norm of 0.0!")
+            
+            # NOTE: We *could* use the orthogonal component of jerk to set the
+            # sign/direction of the plane normals instead of just using the sign
+            # of the cross product. However, for whatever reason, using the
+            # cross product gives a better neural network score.
+            # So I'm going to keep using the cross product unless I can make a
+            # big improvement somewhere else so that this stops mattering. 
             ortho_dirs = pm.safelyNormalizeArray(vel_deg2_acc_cross, sin_vel_deg2_acc_angs)
 
             plane_dots = pm.einsumDot(
@@ -827,7 +859,8 @@ class CalcsForVideo:
             rot_v3d = Vec3Data(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
             vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
                 MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags),
-                MD.JERK_VEC3: V3D(t_jerk_amt / step**3), MD.ROTATION_VEC3: rot_v3d,
+                MD.JERK_VEC3: V3D(scaled_jerks, None, jerk_norms),
+                MD.ROTATION_VEC3: rot_v3d,
                 MD.CIRC_VEL_DEG1_ERR_VEC3: V3D(
                     prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
                 ),
@@ -882,15 +915,39 @@ class CalcsForVideo:
                     for ra_row, ra_k in enumerate(curr_ra_keys):
 
                         # Skipping values that were already derived+stored earlier.
-                        if md_k == MD.ACC_VEC3 and ra_k == RA.VEL_DEG2 and not shiftRel:
-                            continue 
+                        if not shiftRel:
+                            key_precalced = False
+                            for md_kp, ra_kp in vec3_precalc_keys:
+                                if md_kp == md_k and ra_kp == ra_k:
+                                    key_precalced = True
+                                    break
+                            if key_precalced:
+                                continue
 
                         self._addDotsAndAngs(
                             motion_data, md_k, ra_k, shiftRel,
                             ra_dots[-n_jerk_preds:, ra_row], v3s.norms[-n_jerk_preds:]
                         )
                         
-            
+            self._addDotsAndAngs(
+                motion_data, MD.ACC_VEC3, RA.VEL_DEG1, False,
+                acc_vel_deg1_mag[-n_jerk_preds:], flat_accs
+            )
+
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.VEL_DEG1, False,
+                jerk_vel_deg1_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
+            )
+
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.ACC_ORTHO_DEG1, False,
+                jerk_acc_ortho_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
+            )
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.PLANE_ORTHO, False,
+                jerk_ortho_norms.flatten(), jerk_norms.flatten()
+            )
+
             jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
             acc_jerk_ratio = acc_mags / jerk_mags
             motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds / jerk_mags
