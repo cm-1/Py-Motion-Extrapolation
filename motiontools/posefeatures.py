@@ -121,12 +121,12 @@ class MOTION_DATA(Enum):
     INV_VEL_BCS_RATIOS = 59
     INV_CIRC_ANG_RATIO = 60
 
-    # GT0 = 61
-    # GT1 = 62
-    # GT2 = 63
-    # GT3 = 64
-    # GT4 = 65
-    # GT5 = 66
+    GT0 = 61
+    GT1 = 62
+    GT2 = 63
+    GT3 = 64
+    GT4 = 65
+    GT5 = 66
 
     JERK_VEL_DEG1_DOT = 67
     JERK_VEL_DEG2_DOT = 68
@@ -249,6 +249,19 @@ def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDA
                 distances.T)                  # (n, m)
     return closest.transpose(2, 1, 0)        # (n, k, m)
 
+def getBaselineJAV6(acc_multiplier_options, jerk_multiplier_options):
+    base = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+    for a1_ind, a1 in enumerate(acc_multiplier_options):
+        j_end_ind = a1_ind if a1_ind < 2 else 3
+        for a0_ind, a0 in enumerate(acc_multiplier_options[:(a1_ind + 1)]):
+            for j2_ind, j2 in enumerate(jerk_multiplier_options[:(j_end_ind + 1)]):
+                for j1_ind, j1 in enumerate(jerk_multiplier_options[:(j2_ind + 1)]):
+                    j_end_from_a0 = a0_ind if a0_ind < 2 else 3
+                    jv_end_ind = min(j2_ind, j_end_from_a0)
+                    for j0 in jerk_multiplier_options[:(jv_end_ind + 1)]:
+                        base.append([1.0, a0, a1, j0, j1, j2])
+    return np.asarray(base)
+
 # The below function is the result of me feeding my original gtMultipliers6()
 # function through Copilot/Claude to accomodate multiple baseline_m6 values.
 # TODO: Need to manually verify logic and clean things up a bit.
@@ -337,6 +350,14 @@ class CalcsForVideo:
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
         ]
+
+        base_a_opts = [0.0, 0.5, 1.0]
+        # See other commenting on how these possible multiplier totals are found
+        # when looking at the lagrange polynomial derivatives.
+        base_j_opts = [0, 1/6, 2/3, 1.0]
+
+        self.base_JAV6 = getBaselineJAV6(base_a_opts, base_j_opts)
+
 
         # I had to accomodate a venv where I have Python 3.7 for running
         # tensorflow-gpu on Windows. Unfortunately, newer joblib versions 
@@ -521,16 +542,17 @@ class CalcsForVideo:
             deg1_speeds = deg1_speeds_full[-n_jerk_preds:].flatten()
             deg2_speeds_full = np.linalg.norm(deg2_vels, axis=-1, keepdims=True)
             deg2_speeds = deg2_speeds_full[-n_jerk_preds:]
-            timescaled_speeds = deg2_speeds.flatten() / step
-            motion_data[MOTION_DATA.SPEED_DEG1] = deg1_speeds / step
-            motion_data[MOTION_DATA.SPEED_DEG2] = timescaled_speeds
+            timescaled_speeds_deg2 = deg2_speeds.flatten() / step
+            timescaled_speeds_deg1 = deg1_speeds / step
+            motion_data[MOTION_DATA.SPEED_DEG1] = timescaled_speeds_deg1
+            motion_data[MOTION_DATA.SPEED_DEG2] = timescaled_speeds_deg2
 
 
             deg2_accs = deg1_vel_diffs / step_sq
             acc_mags_full = np.linalg.norm(deg2_accs, axis=-1, keepdims=True)
             acc_mags = acc_mags_full[-n_jerk_preds:].flatten()
 
-            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds / acc_mags
+            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds_deg2 / acc_mags
             vel_dots = pm.einsumDot(
                 deg1_vels[-n_jerk_preds:], deg1_vels[-(n_jerk_preds + 1):-1]
             )
@@ -821,9 +843,7 @@ class CalcsForVideo:
                 jerk_acc_ortho_mags, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
             )
             jerk_ortho_vecs = scaled_jerks - (jerk_vel_vecs + jerk_acc_vecs)
-            jerk_ortho_norms = np.linalg.norm(
-                jerk_ortho_vecs, axis=-1, keepdims=True
-            )
+            jerk_ortho_norms = np.linalg.norm(jerk_ortho_vecs, axis=-1, keepdims=True)
 
             
             vec3_precalc_keys = [
@@ -950,12 +970,42 @@ class CalcsForVideo:
 
             jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
             acc_jerk_ratio = acc_mags / jerk_mags
-            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds / jerk_mags
+            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds_deg2 / jerk_mags
             motion_data[MOTION_DATA.ACC_JERK_RATIO] = acc_jerk_ratio
             motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = \
-                timescaled_speeds / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
+                timescaled_speeds_deg2 / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
 
             motion_data[MOTION_DATA.ACC_VEL_DEG2_ERR_RATIO] = acc_jerk_ratio / step
+
+            gt_calc_jav_input = np.empty((n_jerk_preds, 9))
+
+            gt_calc_jav_input[:, 0] = timescaled_speeds_deg1
+            gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:]
+            gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0]
+            gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags
+            gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags
+            gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten()
+            
+            jav_mats = np.stack([
+                unit_vels_deg1[-n_jerk_preds:],
+                unit_acc_ortho_deg1_vecs[-n_jerk_preds:],
+                pm.safelyNormalizeArray(jerk_ortho_vecs, jerk_ortho_norms)
+            ], axis=1)
+
+            gt_calc_jav_input[:, 6:9] = pm.einsumMatVecMul(
+                jav_mats, translation_diffs[-n_jerk_preds:]
+            )
+
+            gt_jav6 = gtMultipliers6(gt_calc_jav_input, self.base_JAV6)
+
+            motion_data[MOTION_DATA.GT0] = gt_jav6[:, 0]
+            motion_data[MOTION_DATA.GT1] = gt_jav6[:, 1]
+            motion_data[MOTION_DATA.GT2] = gt_jav6[:, 2]
+            motion_data[MOTION_DATA.GT3] = gt_jav6[:, 3]
+            motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
+            motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
+
+
 
             keys_to_check_for_completeness = motion_data.keys()
             if check_key_completeness:

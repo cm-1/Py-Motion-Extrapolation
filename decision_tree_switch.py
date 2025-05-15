@@ -26,7 +26,7 @@ from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
 from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
-from motiontools.posefeatures import gtMultipliers6
+from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
 from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
 
 from motiontools.dataorg import DataOrganizer, concatForComboSubset
@@ -1298,20 +1298,12 @@ def testAllDiscreteJAV(aj_combos = None):
 #%%
 
 
-base2 = []
 base_a_opts = [0.0, 0.5, 1.0]
 # See other commenting on how these possible multiplier totals are found
 # when looking at the lagrange polynomial derivatives.
 base_j_opts = [0, 1/6, 2/3, 1.0]
-for a1_ind, a1 in enumerate(base_a_opts):
-    j_end_ind = a1_ind if a1_ind < 2 else 3
-    for a0_ind, a0 in enumerate(base_a_opts[:(a1_ind + 1)]):
-        for j2_ind, j2 in enumerate(base_j_opts[:(j_end_ind + 1)]):
-            for j1_ind, j1 in enumerate(base_j_opts[:(j2_ind + 1)]):
-                j_end_from_a0 = a0_ind if a0_ind < 2 else 3
-                jv_end_ind = min(j2_ind, j_end_from_a0)
-                for j0 in base_j_opts[:(jv_end_ind + 1)]:
-                    base2.append([1.0, a0, a1, j0, j1, j2])
+
+base2 = getBaselineJAV6(base_a_opts, base_j_opts)
 gt_bcot = gtMultipliers6(bcotjav.jav_train, np.asarray(base2))
 
 #%%
