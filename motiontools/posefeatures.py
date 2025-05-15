@@ -979,12 +979,12 @@ class CalcsForVideo:
 
             gt_calc_jav_input = np.empty((n_jerk_preds, 9))
 
-            gt_calc_jav_input[:, 0] = timescaled_speeds_deg1
-            gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:]
-            gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0]
-            gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags
-            gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags
-            gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten()
+            gt_calc_jav_input[:, 0] = deg1_speeds
+            gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:] * step_sq
+            gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0] * step_sq
+            gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags * (step**3)
+            gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags * (step**3)
+            gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten() * (step**3)
             
             jav_mats = np.stack([
                 unit_vels_deg1[-n_jerk_preds:],
@@ -992,8 +992,9 @@ class CalcsForVideo:
                 pm.safelyNormalizeArray(jerk_ortho_vecs, jerk_ortho_norms)
             ], axis=1)
 
+            prev_start = -(n_jerk_preds + 1)
             gt_calc_jav_input[:, 6:9] = pm.einsumMatVecMul(
-                jav_mats, translation_diffs[-n_jerk_preds:]
+                jav_mats, translation_diffs[prev_start:-1]
             )
 
             gt_jav6 = gtMultipliers6(gt_calc_jav_input, self.base_JAV6)
