@@ -63,9 +63,7 @@ class CircularMotionAnalysis:
             # Numpy cross products of 2D vecs treat them like 3D vecs and return 
             # only the z-coordinate of the result (since the rest are 0). We'll look
             # at the sign to determine rotation direction about the circle axis.
-            # TODO: Because np.cross of 2D vecs is deprecated, do the cross
-            # product myself.
-            c_crosses = np.cross(
+            c_crosses = pm.cross2D(
                 self.diffs_from_centres[j], self.diffs_from_centres[j + 1]
             )
             flips = (c_crosses < 0.0)

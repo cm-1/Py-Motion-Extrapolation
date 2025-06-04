@@ -1034,4 +1034,19 @@ def non_collinear_features(X: np.ndarray, threshold: float = 0.99):
     
     return to_keep, upper_tri
 
+def cross2D(vecs0, vecs1):
+    '''
+    Perform the cross-product of two arrays of 2D vectors. What this means is
+    treating them as 3D vectors in the xy plane and returning the z component
+    of the cross product (since the x and y would be zero).
+
+    This could currently be done by np.cross(...), but its support of 2D inputs
+    is deprecated; this function is a future-proof replacement.
+    '''
+    x0 = vecs0[..., 0]
+    y0 = vecs0[..., 1]
+    x1 = vecs1[..., 0]
+    y1 = vecs1[..., 1]
+
+    return (x0 * y1) - (x1 * y0)
 
