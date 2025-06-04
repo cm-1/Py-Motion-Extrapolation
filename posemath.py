@@ -206,7 +206,7 @@ def getPlaneAxes(roughAxes0, roughAxes1):
     dots01 = einsumDot(nax0, roughAxes1)
     ax1 = roughAxes1 - scalarsVecsMul(dots01, nax0)
     ax1_norms = np.linalg.norm(ax1, axis=-1, keepdims=True)
-    # TODO: Maybe I want non-nan behaviour for zero norms here.
+    # Reusability-TODO: Maybe I want non-nan behaviour for zero norms here.
     nax1  = ax1 / ax1_norms
     return (nax0, nax1)
 
@@ -377,8 +377,8 @@ def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
     ortho_dirs = np.empty(diffs_1m0.shape)
     ortho_dirs[:, 0] = diffs_1m0[:, 1]
     ortho_dirs[:, 1] = -diffs_1m0[:, 0]
-    # TODO: Need a check for when dot(ortho_dirs, x_2 - x_1) == 0, as then
-    # there is no circle going through the points (only a line).
+    # Reusability-TODO: Need a check for when dot(ortho_dirs, x_2 - x_1) == 0,
+    # as then there is no circle going through the points (only a line).
 
     numerator_dot = einsumDot(pts2D_2 - pts2D_0, diffs_2m1)
     t_vals = numerator_dot / einsumDot(ortho_dirs, diffs_2m1)
@@ -642,17 +642,17 @@ def matsFromScaledAxisAngleArray(scaledAxisAngles):
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
 def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
-    # TODO: I think the only parts of the code below that do not yet support
+    # Reusability-TODO: I think the only parts of the code below that do not yet support
     # more than 3 dimensions are the handling of axes for angles of zero.
     # There may not yet be a *benefit* to full support, but noting just in case.
     if matrixArray.ndim > 3:
         raise Exception("Input array of matrices must have (n,3,3) shape!")
 
-    # TODO: Replace instances of np.stack(...), np.concat(...), and similar with
-    # np.empty(...) followed by assigning to slices. I'm guessing it'd be more
-    # efficient? Less allocating/freeing of memory, right?
-    # TODO: Last I checked (2024-10-19), it's fine, but if changed since, see if
-    # supporting a arrays with more dims than shape (n,3,3) leads to any 
+    # Speed-TODO: Replace instances of np.stack(...), np.concat(...), and
+    # similar with np.empty(...) followed by assigning to slices. I'm guessing
+    # it'd be more efficient? Less allocating/freeing of memory, right?
+    # Reusability-TODO: Last I checked (2024-10-19), it's fine, but if changed
+    # since, see if supporting arrays with more dims than (n,3,3) leads to any 
     # inefficiency; if so, remove, or use an "if" to switch to better "flat"
     # version, because I don't know of a practical purpose off-hand for
     # supporting more dims than that. In fact, it'd possibly hinder multicore 
@@ -758,9 +758,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     halfAngles = np.arccos(acosInput)
     angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
 
-    # TODO: Remove this test:
-    if np.any(angles < 0):
-        raise Exception("I was wrong about all pos angles at this step!")
+    # if np.any(angles < 0):
+    #     raise Exception("I was wrong about all pos angles at this step!")
 
     # --------------------------------------------------------------------------
     # "Corrections" Proceeding Shepperd's Algorithm
@@ -898,12 +897,9 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
     angles[..., 1:] -= angle_corrections
 
-    # TODO: Remove this after sufficient testing!
-    if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
-        raise Exception("Numpification of AA code resulted in angle diff > pi!")
-        
-    print("Reminder to remove Exception checks and look @ other TODOs.")
-        
+    # if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
+    #     raise Exception("Numpification of AA code resulted in angle diff > pi!")
+                
     # Now we combine the angles and unit axes into a final array of vec3s.
     return np.einsum('...i,...ij->...ij', angles, unitAxes)
 

@@ -67,7 +67,7 @@ for combo in combos:
 
     
     # Converts quaternions to axis-angle, then corrects jumps.
-    # TODO: Document better, maybe find way to combine with mat->AA code?
+    # Cleanup-TODO: Document, maybe find way to combine with mat->AA code?
     unitAxes, angles = pm.axisAnglesFromQuats(r_slerp_preds)
     angles = angles.flatten()
 
@@ -143,8 +143,8 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 t_spline_preds = all_spline_preds[:, :3]
                 r_aa_spline_preds = all_spline_preds[:, 3:]
 
-                # TODO: Remove this; for now, it's just to verify results
-                # against code that (as far as I can tell) works.
+                # Cleanup-TODO: Remove this; for now, it's just to verify
+                # results against code that (as far as I can tell) works.
                 if mode == SplinePredictionMode.EXTRAPOLATE and (deg == 2):
                     t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
                     t_vel_pred = pd.translations[deg - 1] + t_diff

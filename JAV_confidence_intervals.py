@@ -205,7 +205,7 @@ class StatsJSONEncoder(json.JSONEncoder):
             return obj.tolist()
         elif isinstance(obj, es.ErrStats):
             ...
-            # TODO: handle namedtuple
+            # Reusability-TODO: handle namedtuple
         return super().default(obj)
     
 # print(json.dumps(local_stats_struct, cls=StatsJSONEncoder, indent=2))

@@ -35,5 +35,3 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
     plt.show()
 
 plotGTvsCalc(calculator.getRotationsGTNP(), calculator.getRotationsCalcNP(), False)
-
-print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)

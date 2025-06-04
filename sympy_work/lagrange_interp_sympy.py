@@ -57,7 +57,7 @@ constAccelForDeg(4)
 # last positions. Of course, when initialized this way, the velocities will just
 # lie on a line, but my plan was to investigate what happens when the 
 # initialization result gets altered by a process like Kalman filtering.
-# Didn't write the code for all that yet; TODO, I guess.
+# Didn't write the code for all that yet; eventual-TODO, I guess.
 display(simplify(Derivative(lag3, x).subs({x:4})))
 
 lag2p_integ = sp.integrate(lag2p, (x, 2, 3))

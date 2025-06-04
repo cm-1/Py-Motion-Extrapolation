@@ -227,7 +227,6 @@ plt.legend()
 plt.ylabel("Test Set Error")# (normed to [0,1])")
 plt.xlabel("Max decision tree depth")
 plt.show()
-print("TODO: Add single 'limit' legend entry!")
 
 #%%
 # Again, we'll replace old code with a trimming of our main tree.
@@ -514,8 +513,6 @@ class DataForJAV:
             self.w2ls_JAV = None
             self.translations_JAV = None
 
-        # TODO: Currently we calculate both train and test while only printing one.
-        # Need a small refactor to fix this.
         partial_jav_train, partial_jav_test = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
             precalc_per_combo=self.jav_per_combo

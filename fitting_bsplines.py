@@ -1,5 +1,3 @@
-# TODO: Look at https://matplotlib.org/stable/gallery/widgets/menu.html#sphx-glr-gallery-widgets-menu-py
-
 from dataclasses import dataclass, field
 import typing
 
@@ -90,7 +88,7 @@ class ObjSeqData:
             self.y_window[0], self.y_window[1]
         ]
     # data_col_keys: typing.Any = field(default_factory=list)
-    # needs_reset: bool = True # TODO: Make "False" have an affect.
+    # needs_reset: bool = True # Refactor-TODO: Make "False" have an affect.
 
 
 axLinesDict = dict()
@@ -274,8 +272,9 @@ def updatePredictionData(objSeqDataInfo):
     lastKnownSplineIndex = max(lastKnownSplineIndex, SPLINE_DEGREE)
 
     lastKnownVelIndex = min(objSeqDataInfo.lastKnownPtIndex, len(ptsData) - 2)
-    lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel.
-    # TODO: Might need to change this if using different limits for accel index:
+    lastKnownVelIndex = max(lastKnownVelIndex, 2)
+    # TODO: ^ Make diff for accel.
+    #       v Might need to change this if using different limits for acc index:
     objSeqDataInfo.lastKnownPtIndex = lastKnownVelIndex 
 
     startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
@@ -399,8 +398,8 @@ def update(val):
             else:
                 axLineK.true_line.set_ydata(objPts.y_vals[:, i])
 
-            # TODO: Is it worth checking if an x_shift occurred, and if not,
-            # then only shifting the y_data?
+            # Speed-TODO: Is it worth checking if an x_shift occurred, and if
+            # not, then only shifting the y_data?
             axLineK.spline_line.set_data([
                 objPreds.x_spline, objPreds.y_spline[:, i]
             ])
