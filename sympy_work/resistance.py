@@ -1,3 +1,5 @@
+import re
+
 import sympy as sp
 from sympy import simplify
 import matplotlib.pyplot as plt
@@ -74,3 +76,32 @@ def deplot(f, t_f, a0_val, v0_val, c_val):
     ts = np.linspace(0.001, t_f, 100)
     plt.plot(ts, fnp(ts))
     plt.show()
+
+def geogebraStrFromStr(f_str):
+    '''NOTE: Cannot handle nested parentheses well! Would need non-re fix!'''
+    # Geogebra's order of operations will look at something like "a/c**2" and
+    # graph (a/c)**2, whereas sympy means a/(c**2). So we need to be explicit.
+    # ---
+    # Below, we first look for division, since so far, that's the only thing
+    # that's caused an order of operations problem with the exponents. Then
+    # we check for either a variable or something in "(...)" being raised to
+    # a different variable or something in "(...)".
+    pattern = re.compile(
+        r"(<?/\s*)(\b[\w\d]+|\([^)(]+\))\s*\*\*\s*([\w\d]+\b|\([^)(]+\))"
+    )
+    for find in pattern.finditer(f_str):
+        f_str = f_str.replace(find.group(), "/(" + find.group()[1:] + ")")
+    return f_str
+
+
+def geogebraStrFromSymb(f, zero_x0 = True):
+    global t
+    global x0
+    '''Get a string for Geogebra plots (or similar, like Wolfram):'''
+    x_symb = sp.symbols("x", real=True)
+    sub_dict = {t: x_symb}
+    if zero_x0:
+        sub_dict[x0] = 0
+    f_str = str(f.subs(sub_dict))
+    return geogebraStrFromStr(f_str)
+
