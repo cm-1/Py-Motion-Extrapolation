@@ -132,6 +132,10 @@ class MOTION_DATA(Enum):
     JERK_VEL_DEG2_DOT = 68
     JERK_ACC_DOT = 69
 
+    CURVATURE = 70
+    LAST_CURVATURE = 71
+
+
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
     VEL_DEG2 = 2
@@ -1006,6 +1010,18 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
             motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
 
+            ck_denom = deg1_speeds_full.flatten()[1:]**(3/2)
+            ck_num_terms = []
+            vel_vecs = deg1_vels[1:]
+            for exc_i in range(3):
+                exc_ip = (exc_i + 1) % 3
+                ck_num_term = deg1_vel_diffs[:, exc_i] * vel_vecs[:, exc_ip]
+                ck_num_term -= deg1_vel_diffs[:, exc_ip] * vel_vecs[:, exc_i]
+                ck_num_terms.append(ck_num_term**2)
+            ck_num = np.sqrt(np.sum(ck_num_terms, axis=0))
+            curvatures = ck_num / ck_denom
+            motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
+            motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
 
 
             keys_to_check_for_completeness = motion_data.keys()
