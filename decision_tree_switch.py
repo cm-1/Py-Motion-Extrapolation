@@ -40,7 +40,7 @@ MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
 ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 #%%
-combos = PoseLoaderBCOT.getAllIDs()
+combos = PoseLoaderBCOT.getAllIDs(True)
 
 #%%
 
@@ -837,7 +837,7 @@ plt.show()
 #%%
 from gtCommon import PoseLoaderTUDL
 
-tudl_ids = PoseLoaderTUDL.getAllIDs()
+tudl_ids = PoseLoaderTUDL.getAllIDs(True)
 tudl_loaders = [PoseLoaderTUDL(*t) for t in tudl_ids]
 
 cfc.getAll(tudl_loaders)

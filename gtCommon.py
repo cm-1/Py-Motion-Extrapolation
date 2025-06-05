@@ -413,8 +413,8 @@ class PoseLoaderBCOT(PoseLoader):
         self._bod = BCOT_BODY_NAMES[self._bod_index]
         self._cvFrameSkipForLoad = cvFrameSkipForLoad
         
-        self.posePathGT = PoseLoaderBCOT._DATASET_DIR / self._seq \
-            / self._bod / "pose.txt"
+        self.poseDirGT = PoseLoaderBCOT._DATASET_DIR / self._seq / self._bod
+        self.posePathGT = self.poseDirGT / "pose.txt"
         
         calcFName = "cvOnly_skip" + str(self._cvFrameSkipForLoad) + "_poses_" \
             + self._seq + "_" + self._bod +".txt"
@@ -425,7 +425,7 @@ class PoseLoaderBCOT(PoseLoader):
         return (self._bod_index, self._seq_index)
 
     @classmethod
-    def getAllIDs(cls):
+    def getAllIDs(cls, exclude_cam2: bool = True):
         '''
         Generate the following tuples that represent each video:
             
@@ -454,7 +454,7 @@ class PoseLoaderBCOT(PoseLoader):
                 # Some sequence-body pairs do not have videos, and some have two videos
                 # with identical motion but a different camera. So we first check that 
                 # a video exists and has unique motion.
-                if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
+                if PoseLoaderBCOT.isBodySeqPairValid(b, s, exclude_cam2):
                     combos.append((b, s, k))
         return combos
 
@@ -516,7 +516,7 @@ class PoseLoaderBCOT(PoseLoader):
         return (gtMatData, calcMatData)
 
     @staticmethod
-    def isBodySeqPairValid(bodyIndex, seqIndex, exclude_cam2 = False):
+    def isBodySeqPairValid(bodyIndex: int, seqIndex: int, exclude_cam2: bool = False):
         PoseLoaderBCOT._setupPosePaths()
 
         seq = BCOT_SEQ_NAMES[seqIndex]
