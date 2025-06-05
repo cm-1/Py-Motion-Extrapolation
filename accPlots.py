@@ -1,4 +1,3 @@
-# TODO: Look at https://matplotlib.org/stable/gallery/widgets/menu.html#sphx-glr-gallery-widgets-menu-py
 
 from dataclasses import dataclass, field
 import typing

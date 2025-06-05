@@ -89,10 +89,10 @@ class ButtonGrid:
         
         row_is_inner = (row > 0) or (not self.row_labels) 
         if row_is_inner and col > 0:            
-            # Regular button click; need to ignore the header col/row, as they will 
-            # not appear in the state itself.
-            # TODO: Add option on whether or not to create buttons for the headers 
-            # or to just create text instead!
+            # Regular button click; need to ignore the header col/row, as they
+            # will not appear in the state itself.
+            # Reusability-TODO: Add option on whether or not to create buttons
+            # for the headers or to just create text instead!
             state_row, state_col = row - 1, col - 1
             if not self.row_labels:
                 state_row = 0
@@ -109,7 +109,7 @@ class ButtonGrid:
             if self._toggle_callback:
                 self._toggle_callback(state_row, state_col, new_state)
         else:
-            # TODO: Handle clicks to header buttons
+            # Feature-TODO: Handle clicks to header buttons
             ...
 
     def _create_grid(self):

@@ -1,4 +1,4 @@
-# Notes and possible TODO items:
+# Notes and possible reusability-TODO/speed-TODO items:
 # - I did not have missing values in my training data, and so I did not bother
 #   to override and adapt the code in init_missing() where self.sum_missing was 
 #   updated; for this criterion to correctly handle missing values, that must
@@ -58,9 +58,9 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         since it seems that __cinit__ parameters cannot be changed from the
         base class's when subclassing in the same way that one can override
         a Python class's __init__ with new parameters.
-        TODO: Maybe one can write an __init__ with different parameters that
-        then calls the base class __cinit__? Not sure and don't have time to
-        research or experiment right now.
+        Design-TODO: Maybe one can write an __init__ with different parameters
+        that then calls the base class __cinit__? Not sure and don't have time
+        to research or experiment right now.
 
         Parameters
         ----------
@@ -337,8 +337,8 @@ cdef class WeightedErrorCriterion(ClassificationCriterion):
         We want average error because the function for calculating proxy
         improvement will multiply left and right child impurities by the
         respective left and right sample counts.
-        A possible TODO in the future could be to override that as well, so that
-        the cancelled-out multiply and divide is omitted.
+        A possible speed-TODO in the future could be to override that as well,
+        so that the cancelled-out multiply and divide is omitted.
 
         Because higher impurity is considered worse, we will represent impurity
         with the total positive error. Whereas self.sum_total had to be negative

@@ -106,5 +106,3 @@ def plotGTvsCalc(gt, calc, showOnlyGT = False):
 calculator.loadData()
 # calculator.replaceDataWithHelix(False)
 plotGTvsCalc(calculator.getTranslationsGTNP(), calculator.getTranslationsCalcNP(), False)
-
-print("Issue frames for pose path", calculator.posePathGT, "are:", calculator.issueFrames)
