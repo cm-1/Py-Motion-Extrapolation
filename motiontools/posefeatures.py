@@ -1106,36 +1106,9 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             if vec_order is not None:
                 ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
 
-            mags0 = np.linalg.norm(ordered[0], axis=-1)
-            unit_vecs0 = pm.safelyNormalizeArray(
-                ordered[0], mags0[:, np.newaxis]
-            )
-            # Find the magnitude of the second vector that is parallel to and
-            # orthogonal to the first.
-            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
-            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
-            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
-            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-            unit_vecs1 = pm.safelyNormalizeArray(
-                vecs_o1, mags_o1[:, np.newaxis]
-            )
-
-            mags_p20 = pm.einsumDot(ordered[2], unit_vecs0) # Parallel magnitude
-            vecs_p20 = pm.scalarsVecsMul(mags_p20, unit_vecs0)
-            mags_p21 = pm.einsumDot(ordered[2], unit_vecs1)
-            vecs_p21 = pm.scalarsVecsMul(mags_p21, unit_vecs1)
-            vecs_o2 = ordered[2] - (vecs_p20 + vecs_p21)
-            mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
-
-            unit_vecs2 = pm.safelyNormalizeArray(
-                vecs_o2, mags_o2[:, np.newaxis]
-            )
-
-            # We now have matrices to convert vectors in world space into
-            # these local vector-aligned frames.
-            mats = np.stack([unit_vecs0, unit_vecs1, unit_vecs2], axis=1)
-
+            all_mags, mats = pm.getOrthonormalFrames(True, *ordered, False)
+                        
             # Transform each third vector and to-next-frame displacement into
             # this frame via matmul.
             # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
@@ -1148,10 +1121,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # frame (a vector [speed, 0, 0]), the acceleration in this frame
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
-            c_res = (
-                mags0, mags_p1, mags_o1, mags_p20, mags_p21, mags_o2,
-                *(local_diffs.T)
-            )
+            c_res = (*all_mags, *(local_diffs.T))
 
             all_data[skip][c] = np.stack(c_res, axis=-1)
             if return_world2locals:
