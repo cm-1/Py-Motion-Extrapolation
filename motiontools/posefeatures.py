@@ -135,6 +135,13 @@ class MOTION_DATA(Enum):
     CURVATURE = 70
     LAST_CURVATURE = 71
 
+    # CURVATURE_V = 72
+    # CURVATURE_A = 73
+    # CURVATURE_J = 74
+    # LAST_CURVATURE_V = 75
+    # LAST_CURVATURE_A = 76
+    # LAST_CURVATURE_J = 77
+
 
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
@@ -1022,6 +1029,34 @@ class CalcsForVideo:
             curvatures = ck_num / ck_denom
             motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
             motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
+
+            '''
+            Slower curvature thing that didn't improve accuracy
+            _, jav_frames = pm.getOrthonormalFrames(
+                True, deg1_vels[2:], deg1_vel_diffs[1:], t_jerk_amt
+            )
+
+            curve_keys = (
+                MOTION_DATA.CURVATURE_V, MOTION_DATA.CURVATURE_A,
+                MOTION_DATA.CURVATURE_J
+            )
+            last_curve_keys = (
+                MOTION_DATA.LAST_CURVATURE_V, MOTION_DATA.LAST_CURVATURE_A,
+                MOTION_DATA.LAST_CURVATURE_J
+            )
+
+            for fn, frame in enumerate(jav_frames):
+                t_jav_vecs = frame @ translations[fn:(fn + 3)]
+                v_jav_vecs = np.diff(t_jav_vecs, 1, axis=0)
+                a_jav_vecs = np.diff(v_jav_vecs, 1, axis=0)
+                curvatures = np.abs(a_jav_vecs) / ((1 + v_jav_vecs[-2:]**2)**(3/2))
+                for c, (ck, lck) in enumerate(zip(curve_keys, last_curve_keys)):
+                    if fn == 0:
+                        motion_data[ck] = np.empty(n_jerk_preds)
+                        motion_data[lck] = np.empty(n_jerk_preds)
+                    motion_data[ck][fn] = curvatures[-1, c]
+                    motion_data[lck][fn] = curvatures[0, c]
+            '''
 
 
             keys_to_check_for_completeness = motion_data.keys()
