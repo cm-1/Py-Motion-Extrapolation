@@ -23,7 +23,8 @@ import gtCommon as gtc
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
 from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import SpecifiedMotionData, OneHotMotionData
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
 from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
@@ -402,12 +403,15 @@ nonco_cols, co_mat = pm.non_collinear_features(
     dog.concat_train_data, colin_thresh
 )
 
-last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
+onehot_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, OneHotMotionData)
+]
 
 nonco_cols[:] = True
-nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
+nonco_cols[onehot_inds] = True # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
 

@@ -42,7 +42,7 @@ class MOTION_DATA(Enum):
     SPEED_DEG1 = 1
     SPEED_DEG2 = 2
     ACC_VEC3 = 3
-    LAST_BEST_LABEL = 4
+    LAST_BEST_LABEL_ONEHOT = 4
     TIMESTEP = 5
 
     JERK_VEC3 = 6
@@ -217,7 +217,22 @@ class Vec3Data:
                 self.unit_vecs[0] = 0.0
                 # MAYBE setting unit dir to 0 is a workaround if this happens?
 
-MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
+class OneHotMotionData(typing.NamedTuple):
+    base_cat: MOTION_DATA
+    cat_num: int
+
+    @property
+    def name(self):
+        bn = self.base_cat.name 
+        last_underscore_ind = bn.rfind("_")
+        if bn[last_underscore_ind:] != "_ONEHOT":
+            raise ValueError("No \"ONEHOT\" found in base type {}!".format(bn))
+        
+        return bn[:(last_underscore_ind + 1)] + "CAT" + str(self.cat_num) 
+
+MOTION_DATA_KEY_TYPE = typing.Union[
+    MOTION_DATA, SpecifiedMotionData, OneHotMotionData
+]
 PoseLoaderList = typing.List[gtc.PoseLoader]
 
 # Finds closest points on hyperplanes with the given normals and offsets.
@@ -321,6 +336,9 @@ def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
                 if isinstance(k, MOTION_DATA):
                     md_kind_present = md_kind_present or k == motion_data_kind
                 elif isinstance(k, SpecifiedMotionData):
+                    base_cat_eq = k.base_cat == motion_data_kind
+                    md_kind_present = md_kind_present or base_cat_eq
+                elif isinstance(k, OneHotMotionData):
                     base_cat_eq = k.base_cat == motion_data_kind
                     md_kind_present = md_kind_present or base_cat_eq
                 else:
@@ -781,7 +799,10 @@ class CalcsForVideo:
 
                 curr_err_norms_dict[motion_mod] = curr_err_norms[i, 1:]
             curr_min_norm_labels = np.argmin(curr_err_norms, axis=0).flatten()
-            motion_data[MOTION_DATA.LAST_BEST_LABEL] = curr_min_norm_labels[:-1]
+            for mn in range(len(self.motion_mod_keys)):
+                motion_data[
+                    OneHotMotionData(MOTION_DATA.LAST_BEST_LABEL_ONEHOT, mn)
+                ] = (curr_min_norm_labels[:-1] == mn)
 
             curr_min_keys = [
                 self.motion_mod_keys[i] for i in curr_min_norm_labels[1:]

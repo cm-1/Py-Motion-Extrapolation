@@ -3,7 +3,8 @@ import typing
 import numpy as np
 from numpy.typing import NDArray
 
-from motiontools.posefeatures import MOTION_MODEL, MOTION_DATA, MOTION_DATA_KEY_TYPE
+from motiontools.posefeatures import MOTION_MODEL, MOTION_DATA
+from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
 
 # We frequently work with data sequences that have the following type: 
 #     List[Dict[Combo, (Dict|NDArray)]]
@@ -183,6 +184,14 @@ class DataOrganizer:
             self.untransformed_col_subset_test = self.col_subset_test
             self.col_subset_train = transformer.transform(self.col_subset_train)
             self.col_subset_test = transformer.transform(self.col_subset_test)
+            # Make sure OneHot columns are not scaled/shifted!
+            column_nums = columns
+            if columns.dtype == bool:
+                column_nums, = np.nonzero(columns)
+            for new_i, orig_i in enumerate(column_nums):
+                if isinstance(self.motion_data_keys[orig_i], OneHotMotionData):
+                    self.col_subset_train[:, new_i] = self.concat_train_data[:, orig_i]
+                    self.col_subset_test[:, new_i] = self.concat_test_data[:, orig_i]
         return
     
     def getClassErrsTrain(self, pred_labels):
