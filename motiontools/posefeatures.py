@@ -1150,7 +1150,9 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             accs = np.diff(vels[:-1], axis=0)
             jerks = np.diff(accs, axis=0)
             snaps = np.diff(jerks, axis=0)
+            crackles = np.diff(snaps, axis=0)
             snaps = np.insert(snaps, 0, np.zeros(3), axis=0)
+            crackles = np.concatenate((np.zeros((2, 3)), crackles), axis=0)
 
             # Here we specify which order in which we orthonormalize our
             # velocity, acceleration, and jerk vectors into orthonormal frames.
@@ -1172,6 +1174,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
             local_snaps = pm.einsumMatVecMul(mats, snaps)
+            local_crackles = pm.einsumMatVecMul(mats, crackles)
 
             # We'll now return all of the data needed to convert velocity,
             # acceleration, and jerk multipliers into local vectors in these
@@ -1180,7 +1183,10 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # frame (a vector [speed, 0, 0]), the acceleration in this frame
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
-            c_res = (*all_mags, *(local_snaps.T), *(local_diffs.T))
+            c_res = (
+                *all_mags, *(local_snaps.T), *(local_crackles.T),
+                *(local_diffs.T)
+            )
 
             all_data[skip][c] = np.stack(c_res, axis=-1)
             if return_world2locals:
