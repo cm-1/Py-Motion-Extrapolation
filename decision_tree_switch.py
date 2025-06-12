@@ -346,31 +346,33 @@ def poseLossJAV(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
 
     pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 5]
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
     # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
-    true_disp = y_true[:, 6:9]
+    true_disp = y_true[:, 9:12] #6:9]
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
 
 def poseLossResidualJAV(y_true, y_pred):
 
-    y_pred2 = y_pred + y_true[:, 9:15]
+    y_pred2 = y_pred + y_true[:, 12:21] #9:15]
 
     pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
-        + y_true[:, 3] * y_pred2[:, 3]
-    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4]
-    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5]
+        + y_true[:, 3] * y_pred2[:, 3] + y_true[:, 6] * y_pred2[:, 6]
+    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4] \
+        + y_true[:, 7] * y_pred2[:, 7]
+    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5] + y_true[:, 8] * y_pred2[:, 8]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
     # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
-    true_disp = y_true[:, 6:9]
+    true_disp = y_true[:, 9:12] #6:9]
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
@@ -381,9 +383,11 @@ def getVelFrameDisplacements(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
     disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3]
-    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
-    disp[:, 2] = y_true[:, 5] * y_pred[:, 5]
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8]
+
     return disp
 
 def getWorldFrameDisplacements(y_true, y_pred, world2locals):
@@ -474,7 +478,7 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
         keras.layers.Dropout(dropout_rate),
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dense(6)
+        keras.layers.Dense(9) #6)
     ])
     if loss is None:
         loss = poseLossJAV
@@ -1019,7 +1023,7 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     if bounds is None:
         inv_mats = np.linalg.inv(muls_to_pt_mats)
-        return pm.einsumMatVecMul(inv_mats, y_true[:, 6:9])
+        return pm.einsumMatVecMul(inv_mats, y_true[:, 9:12]) #6:9])
     
     n = len(y_true)
     res = np.empty((n, 3))
@@ -1032,8 +1036,8 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     for i in range(n):
         lsq_res = lsq_linear(
-            muls_to_pt_mats[i], y_true[i, 6:9], bounds, tol=tol, 
-            max_iter=max_iter
+            muls_to_pt_mats[i], y_true[i, 9:12], #6:9],
+            bounds, tol=tol, max_iter=max_iter
         )
         res[i] = lsq_res.x
         if (verbose and (i + 1) % 1000 == 0) or i == (n - 1):
