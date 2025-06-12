@@ -174,12 +174,73 @@ def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
     orthos = vectors - parallels
     return (parallels, orthos)
 
+def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
+                         vecs1: typing.Optional[np.ndarray] = None,
+                         vecs2: typing.Optional[np.ndarray] = None, 
+                         vecs0_are_unit_len: bool = False):
+    vecs1_na = (vecs1 is None)
+    vecs2_na = (vecs2 is None)
+
+    assert vecs2_na or (not vecs1_na), "Shouldn't specify vecs2 but not vecs1!"
+
+    mags0 = \
+        np.asarray(1.0) if vecs0_are_unit_len \
+        else np.linalg.norm(vecs0, axis=-1)
+    
+    ret_mags = (mags0,)
+    
+    unit_vecs0 = vecs0 if vecs0_are_unit_len else safelyNormalizeArray(
+        vecs0, mags0[:, np.newaxis]
+    )
+
+    if vecs1_na:
+        vecs1 = np.ones_like(vecs0)
+
+    # Find the magnitude of the second vector that is parallel to and
+    # orthogonal to the first.
+    mags_p1 = einsumDot(vecs1, unit_vecs0) # Parallel magnitude
+    vecs_p1 = scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
+    vecs_o1 = vecs1 - vecs_p1 # Orthogonal vec3
+    mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
+
+    unit_vecs1 = safelyNormalizeArray(
+        vecs_o1, mags_o1[:, np.newaxis]
+    )
+
+    if not vecs1_na:
+        ret_mags += (mags_p1, mags_o1)
+
+    unit_vecs2: np.ndarray
+    if vecs2_na:
+        unit_vecs2= np.cross(unit_vecs0, unit_vecs1)
+    else:
+        mags_p20 = einsumDot(vecs2, unit_vecs0) # Parallel magnitude
+        vecs_p20 = scalarsVecsMul(mags_p20, unit_vecs0)
+        mags_p21 = einsumDot(vecs2, unit_vecs1)
+        vecs_p21 = scalarsVecsMul(mags_p21, unit_vecs1)
+        vecs_o2 = vecs2 - (vecs_p20 + vecs_p21)
+        mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
+
+        unit_vecs2 = safelyNormalizeArray(
+            vecs_o2, mags_o2[:, np.newaxis]
+        )
+
+        ret_mags += (mags_p20, mags_p21, mags_o2)
+
+    stack_ax = 1 if returned_mats_are_world2vecs else 2
+    mats = np.stack((unit_vecs0, unit_vecs1, unit_vecs2), axis=stack_ax)
+
+    return ret_mags, mats
+
+
+   
+
 def getPlaneAxes(roughAxes0, roughAxes1):
     nax0 = normalizeAll(roughAxes0)
     dots01 = einsumDot(nax0, roughAxes1)
     ax1 = roughAxes1 - scalarsVecsMul(dots01, nax0)
     ax1_norms = np.linalg.norm(ax1, axis=-1, keepdims=True)
-    # TODO: Maybe I want non-nan behaviour for zero norms here.
+    # Reusability-TODO: Maybe I want non-nan behaviour for zero norms here.
     nax1  = ax1 / ax1_norms
     return (nax0, nax1)
 
@@ -223,8 +284,8 @@ def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
     ortho_dirs = np.empty(diffs_1m0.shape)
     ortho_dirs[:, 0] = diffs_1m0[:, 1]
     ortho_dirs[:, 1] = -diffs_1m0[:, 0]
-    # TODO: Need a check for when dot(ortho_dirs, x_2 - x_1) == 0, as then
-    # there is no circle going through the points (only a line).
+    # Reusability-TODO: Need a check for when dot(ortho_dirs, x_2 - x_1) == 0,
+    # as then there is no circle going through the points (only a line).
 
     numerator_dot = einsumDot(pts2D_2 - pts2D_0, diffs_2m1)
     t_vals = numerator_dot / einsumDot(ortho_dirs, diffs_2m1)
@@ -358,17 +419,17 @@ def multiplyQuatLists(q0, q1):
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
 def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
-    # TODO: I think the only parts of the code below that do not yet support
+    # Reusability-TODO: I think the only parts of the code below that do not yet support
     # more than 3 dimensions are the handling of axes for angles of zero.
     # There may not yet be a *benefit* to full support, but noting just in case.
     if matrixArray.ndim > 3:
         raise Exception("Input array of matrices must have (n,3,3) shape!")
 
-    # TODO: Replace instances of np.stack(...), np.concat(...), and similar with
-    # np.empty(...) followed by assigning to slices. I'm guessing it'd be more
-    # efficient? Less allocating/freeing of memory, right?
-    # TODO: Last I checked (2024-10-19), it's fine, but if changed since, see if
-    # supporting a arrays with more dims than shape (n,3,3) leads to any 
+    # Speed-TODO: Replace instances of np.stack(...), np.concat(...), and
+    # similar with np.empty(...) followed by assigning to slices. I'm guessing
+    # it'd be more efficient? Less allocating/freeing of memory, right?
+    # Reusability-TODO: Last I checked (2024-10-19), it's fine, but if changed
+    # since, see if supporting arrays with more dims than (n,3,3) leads to any 
     # inefficiency; if so, remove, or use an "if" to switch to better "flat"
     # version, because I don't know of a practical purpose off-hand for
     # supporting more dims than that. In fact, it'd possibly hinder multicore 
@@ -474,9 +535,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     halfAngles = np.arccos(acosInput)
     angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
 
-    # TODO: Remove this test:
-    if np.any(angles < 0):
-        raise Exception("I was wrong about all pos angles at this step!")
+    # if np.any(angles < 0):
+    #     raise Exception("I was wrong about all pos angles at this step!")
 
     # --------------------------------------------------------------------------
     # "Corrections" Proceeding Shepperd's Algorithm
@@ -614,12 +674,9 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
     angles[..., 1:] -= angle_corrections
 
-    # TODO: Remove this after sufficient testing!
-    if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
-        raise Exception("Numpification of AA code resulted in angle diff > pi!")
-        
-    # print("Reminder to remove Exception checks and look @ other TODOs.")
-        
+    # if np.any(np.greater(np.abs(np.diff(angles)), np.pi + 0.00001)):
+    #     raise Exception("Numpification of AA code resulted in angle diff > pi!")
+                
     # Now we combine the angles and unit axes into a final array of vec3s.
     return np.einsum('...i,...ij->...ij', angles, unitAxes)
 
@@ -714,4 +771,19 @@ def non_collinear_features(X: np.ndarray, threshold: float = 0.99):
     
     return to_keep, upper_tri
 
+def cross2D(vecs0, vecs1):
+    '''
+    Perform the cross-product of two arrays of 2D vectors. What this means is
+    treating them as 3D vectors in the xy plane and returning the z component
+    of the cross product (since the x and y would be zero).
+
+    This could currently be done by np.cross(...), but its support of 2D inputs
+    is deprecated; this function is a future-proof replacement.
+    '''
+    x0 = vecs0[..., 0]
+    y0 = vecs0[..., 1]
+    x1 = vecs1[..., 0]
+    y1 = vecs1[..., 1]
+
+    return (x0 * y1) - (x1 * y0)
 

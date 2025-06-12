@@ -23,9 +23,11 @@ import gtCommon as gtc
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
 from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import SpecifiedMotionData, OneHotMotionData
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
+from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
 from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
 
 from motiontools.dataorg import DataOrganizer, concatForComboSubset
@@ -226,7 +228,6 @@ plt.legend()
 plt.ylabel("Test Set Error")# (normed to [0,1])")
 plt.xlabel("Max decision tree depth")
 plt.show()
-print("TODO: Add single 'limit' legend entry!")
 
 #%%
 # Again, we'll replace old code with a trimming of our main tree.
@@ -345,14 +346,37 @@ def poseLossJAV(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
 
     pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 5]
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
+        + y_true[:, 9] * y_pred[:, 9]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
+        + y_true[:, 11] * y_pred[:, 11]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
     # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
-    true_disp = y_true[:, 6:9]
+    true_disp = y_true[:, 12:15] #6:9]
+
+    err_vec3 = true_disp - pred_disp
+    return tf.norm(err_vec3, axis=-1)
+
+def poseLossResidualJAV(y_true, y_pred):
+
+    y_pred2 = y_pred + y_true[:, 15:27] #9:15]
+
+    pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
+        + y_true[:, 3] * y_pred2[:, 3] + y_true[:, 6] * y_pred2[:, 6] \
+        + y_true[:, 9] * y_pred2[:, 9]
+    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4] \
+        + y_true[:, 7] * y_pred2[:, 7] + y_true[:, 10] * y_pred2[:, 10]
+    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5] + y_true[:, 8] * y_pred2[:, 8] \
+        + y_true[:, 11] * y_pred2[:, 11]
+
+    pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
+    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
+
+    true_disp = y_true[:, 12:15] #6:9]
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
@@ -363,9 +387,13 @@ def getVelFrameDisplacements(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
     disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3]
-    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4]
-    disp[:, 2] = y_true[:, 5] * y_pred[:, 5]
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
+        + y_true[:, 9] * y_pred[:, 9]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
+        + y_true[:, 11] * y_pred[:, 11]
+
     return disp
 
 def getWorldFrameDisplacements(y_true, y_pred, world2locals):
@@ -385,12 +413,15 @@ nonco_cols, co_mat = pm.non_collinear_features(
     dog.concat_train_data, colin_thresh
 )
 
-last_best_ind = dog.motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
+onehot_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, OneHotMotionData)
+]
 
 nonco_cols[:] = True
-nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
+nonco_cols[onehot_inds] = True # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
 
@@ -439,24 +470,28 @@ class ImportanceLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
-def getUntrainedNN():
+def getUntrainedNN(loss = None, use_resid_data: bool = False):
 
     dropout_rate = 0.2
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
+    in_shape = len(nonco_col_nums) + (6 if use_resid_data else 0)
     model = keras.Sequential([
-        keras.layers.Input((len(nonco_col_nums),)),
+        keras.layers.Input((in_shape,)),
         # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
         keras.layers.Dropout(dropout_rate),
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
         keras.layers.Dropout(dropout_rate),
         keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dense(6)
+        keras.layers.Dense(12) #6)
     ])
+    if loss is None:
+        loss = poseLossJAV
 
     model.summary()
-    model.compile(loss=poseLossJAV, optimizer='adam')
+    optim = 'adam'
+    model.compile(loss=loss, optimizer=optim)
     return model
 bcs_model = getUntrainedNN()
 # %%
@@ -492,8 +527,6 @@ class DataForJAV:
             self.w2ls_JAV = None
             self.translations_JAV = None
 
-        # TODO: Currently we calculate both train and test while only printing one.
-        # Need a small refactor to fix this.
         partial_jav_train, partial_jav_test = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
             precalc_per_combo=self.jav_per_combo
@@ -750,7 +783,7 @@ tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
 adam = keras.optimizers.Adam(0.01)
 
 tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
-tfmodel.fit(
+nn_class_hist = tfmodel.fit(
     dog.concat_train_data, dog.concat_train_class_errs, epochs=5, shuffle=True
 )
 #%%
@@ -996,7 +1029,7 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     if bounds is None:
         inv_mats = np.linalg.inv(muls_to_pt_mats)
-        return pm.einsumMatVecMul(inv_mats, y_true[:, 6:9])
+        return pm.einsumMatVecMul(inv_mats, y_true[:, 12:15]) #6:9])
     
     n = len(y_true)
     res = np.empty((n, 3))
@@ -1009,8 +1042,8 @@ def gtMultipliersJAV(y_true, bounds = None, tol: float = 0.001, max_iter: int = 
 
     for i in range(n):
         lsq_res = lsq_linear(
-            muls_to_pt_mats[i], y_true[i, 6:9], bounds, tol=tol, 
-            max_iter=max_iter
+            muls_to_pt_mats[i], y_true[i, 12:15], #6:9],
+            bounds, tol=tol, max_iter=max_iter
         )
         res[i] = lsq_res.x
         if (verbose and (i + 1) % 1000 == 0) or i == (n - 1):
@@ -1066,11 +1099,11 @@ def my_gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
     j_o = y_true[:, 8] / y_true[:, 5]
 
     flat = baseline_m6.flatten()
-    a_a, j_a = getClosestPoint(
+    a_a, j_a = myGetClosestPoint(
         y_true[:, [2, 4]], y_true[:, 7], flat[[2, 4]]
     ).transpose()
 
-    v_v, a_v, j_v = getClosestPoint(
+    v_v, a_v, j_v = myGetClosestPoint(
         y_true[:, [0, 1, 3]], y_true[:, 6], flat[[0, 1, 3]]
     ).transpose()
 
@@ -1274,100 +1307,14 @@ def testAllDiscreteJAV(aj_combos = None):
             ajnp[i, j] = ajscore[sk]
     return ajnp
 #%%
-# Finds closest points on hyperplanes with the given normals and offsets.
-# The below function is the result of me feeding my original getClosestPoint()
-# function through Copilot/Claude to accomodate multiple points per hyperplane.
-# TODO: Need to manually verify logic and clean things up a bit.
-def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray, return_dists: bool = False):
-    """
-    Parameters:
-        normals: shape (m, k) where m is number of hyperplanes, k is dimensionality
-        scaled_plane_offsets: shape (m,) offset for each hyperplane
-        points: shape (n, k) points to find closest hyperplane points for
-        return_dists: whether to return distances along with closest points
-    """
-    # Reshape for broadcasting:
-    # normals: (m, k, 1)
-    # scaled_plane_offsets: (m, 1)
-    # points: (1, k, n)
-    normals_exp = normals.reshape(normals.shape[0], normals.shape[1], 1)
-    offsets_exp = scaled_plane_offsets.reshape(-1, 1)
-    points_exp = points.T.reshape(1, points.shape[1], points.shape[0])
-    
-    # Calculate dot products: (m, 1, n)
-    norm_sq = pm.einsumDot(normals, normals).reshape(-1, 1, 1)
-    pn = np.sum(normals_exp * points_exp, axis=1, keepdims=True)  # (m, 1, n)
-    
-    # Calculate scalars: (m, 1, n)
-    scalar = (offsets_exp.reshape(-1, 1, 1) - pn) / norm_sq
-    
-    # Calculate displacements: (m, k, n)
-    disps = scalar * normals_exp
-    
-    # Calculate closest points: (m, k, n)
-    closest = points_exp + disps
-    
-    if return_dists:
-        # Calculate distances: (m, n)
-        distances = np.sqrt(np.sum(disps * disps, axis=1))
-        return (closest.transpose(2, 1, 0),  # (n, k, m)
-                distances.T)                  # (n, m)
-    return closest.transpose(2, 1, 0)        # (n, k, m)
-
-# The below function is the result of me feeding my original gtMultipliers6()
-# function through Copilot/Claude to accomodate multiple baseline_m6 values.
-# TODO: Need to manually verify logic and clean things up a bit.
-def gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
-    """
-    Parameters:
-        y_true: shape (m, 15) where m is number of data points
-        baseline_m6: shape (n, 6) where n is number of baseline points to consider
-    """
-    # Calculate j_o directly as it doesn't depend on baseline_m6
-    j_o = y_true[:, 8] / y_true[:, 5]
-    
-    # First hyperplane (a and j components)
-    points_aj = baseline_m6[:, [2, 4]]  # Shape: (n, 2)
-    closest_points_aj, dists_aj = getClosestPoint(
-        y_true[:, [2, 4]], y_true[:, 7], points_aj, return_dists=True
-    )
-    # For each hyperplane (each row in y_true), find the closest among n points
-    min_indices_aj = np.argmin(dists_aj, axis=0)  # Shape: (m,)
-    # Get the closest points using the indices
-    # closest_points_aj shape is (n, 2, m), we want to select best n for each m
-    a_a = closest_points_aj[min_indices_aj, 0, range(len(y_true))]
-    j_a = closest_points_aj[min_indices_aj, 1, range(len(y_true))]
-    
-    # Second hyperplane (v, a, and j components)
-    points_vaj = baseline_m6[:, [0, 1, 3]]  # Shape: (n, 3)
-    closest_points_vaj, dists_vaj = getClosestPoint(
-        y_true[:, [0, 1, 3]], y_true[:, 6], points_vaj, return_dists=True
-    )
-    # For each hyperplane, find the closest among n points
-    min_indices_vaj = np.argmin(dists_vaj, axis=0)  # Shape: (m,)
-    # Get the closest points using the indices
-    # closest_points_vaj shape is (n, 3, m), we want to select best n for each m
-    v_v = closest_points_vaj[min_indices_vaj, 0, range(len(y_true))]
-    a_v = closest_points_vaj[min_indices_vaj, 1, range(len(y_true))]
-    j_v = closest_points_vaj[min_indices_vaj, 2, range(len(y_true))]
-    
-    return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
 
 
-base2 = []
 base_a_opts = [0.0, 0.5, 1.0]
 # See other commenting on how these possible multiplier totals are found
 # when looking at the lagrange polynomial derivatives.
 base_j_opts = [0, 1/6, 2/3, 1.0]
-for a1_ind, a1 in enumerate(base_a_opts):
-    j_end_ind = a1_ind if a1_ind < 2 else 3
-    for a0_ind, a0 in enumerate(base_a_opts[:(a1_ind + 1)]):
-        for j2_ind, j2 in enumerate(base_j_opts[:(j_end_ind + 1)]):
-            for j1_ind, j1 in enumerate(base_j_opts[:(j2_ind + 1)]):
-                j_end_from_a0 = a0_ind if a0_ind < 2 else 3
-                jv_end_ind = min(j2_ind, j_end_from_a0)
-                for j0 in base_j_opts[:(jv_end_ind + 1)]:
-                    base2.append([1.0, a0, a1, j0, j1, j2])
+
+base2 = getBaselineJAV6(base_a_opts, base_j_opts)
 gt_bcot = gtMultipliers6(bcotjav.jav_train, np.asarray(base2))
 
 #%%
@@ -1382,3 +1329,79 @@ for k, v in dog.skip_train_inds_dict.items():
 argmin_base_errs = np.argmin(all_base_errs, axis=-1)
 plt.bar(*np.unique(argmin_base_errs, return_counts=True))
 plt.show()
+
+#%%
+mcb = WeightedErrorCriterion(1, np.array([len(base2)], dtype=np.intp))
+base_errs_reshape = all_base_errs.reshape((all_base_errs.shape[0], 1, all_base_errs.shape[1]))
+mcb.set_y_errs(base_errs_reshape)
+
+
+dumb_labels = np.zeros(len(dog.concat_train_data))
+dumb_labels[:len(base2)] = np.arange(len(base2))
+
+#%%
+base2_tree = sk_tree.DecisionTreeClassifier(max_depth=8, criterion=mcb)
+start_time = time.time()
+base2_tree = base2_tree.fit(dog.concat_train_data, dumb_labels)
+print("Done!")
+print("Time spent:", time.time() - start_time)
+
+#%%
+from motiontools.dataorg import motionClassScores
+
+test_base_errs = np.empty((len(bcotjav.jav_test), len(base2)))
+for i, b in enumerate(base2):
+    test_base_errs[:, i] = poseLossJAV(bcotjav.jav_test, np.asarray(b).reshape(1, -1))
+
+#%%
+base2_pred = base2_tree.predict(dog.concat_test_data)
+base2_pred_res = motionClassScores(
+    test_base_errs, base2_pred.astype(int), dog.skip_inds_dict
+)
+
+for k, v in base2_pred_res.items():
+    print(k, ":", v)
+
+#%%
+
+class_resid_nn = getUntrainedNN(None, True)
+
+cl_start_pt = np.empty((len(dog.concat_train_data), 6))
+
+cl_start_tree = trim_to_depth(base2_tree, 4)
+base2_tr_pred = cl_start_tree.predict(dog.concat_train_data).astype(int)
+
+for i, cl_start_val in enumerate(base2_tr_pred):
+    cl_start_pt[i] = base2[cl_start_val]
+
+class_resid_nn.fit(
+    np.concatenate((dog.col_subset_train, cl_start_pt), axis=-1),
+    bcotjav.jav_train, # np.concatenate((bcotjav.jav_train, cl_start_pt), axis=-1),
+    epochs=32, shuffle=True
+)
+
+#%%
+
+
+cl_start_pt_test = np.empty((len(dog.concat_test_data), 6))
+
+base2_te_pred = cl_start_tree.predict(dog.concat_test_data).astype(int)
+
+for i, cl_start_val in enumerate(base2_te_pred):
+    cl_start_pt_test[i] = base2[cl_start_val]
+
+class_resid_test = class_resid_nn.predict(
+    np.concatenate((dog.col_subset_test, cl_start_pt_test), axis=-1)
+)
+
+# class_resid_losses = poseLossResidualJAV(
+#     np.concatenate((bcotjav.jav_test, cl_start_pt_test), axis=-1), class_resid_test
+# )
+
+
+class_resid_losses = poseLossJAV(
+    bcotjav.jav_test, class_resid_test
+)
+
+for k, v in dog.skip_inds_dict.items():
+    print(k, np.mean(class_resid_losses[v]))

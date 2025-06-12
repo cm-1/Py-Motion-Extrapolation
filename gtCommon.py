@@ -66,8 +66,6 @@ class PoseLoader(ABC):
     def __init__(self):
         self._setupPosePaths()
         
-        self.issueFrames = []
-
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._translationsCalcNP = np.zeros((0,3), dtype=np.float64)
 
@@ -188,22 +186,38 @@ class PoseLoader(ABC):
             self._translationsCalcNP = calcMatData[1]
             self._rotationsCalcNP = pm.axisAngleFromMatArray(calcMatData[0])
 
-        # TODO: In the past, I had a test to make sure the axis-angle rotations
-        # did not have sharp flips between consecutive axes. This test was
-        # a bit misguided, because consecutive axes [+epsilon, 0, 0] and 
-        # [-epsilon, 0, 0] would be totally fine. But I'm keeping it this way
-        # for consistency's sake for now to make sure other code areas didn't
-        # break. But SOON, I should either remove this or look at euclidean
-        # distance between vectors instead!
-        for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
-            flipPlaces = pm.einsumDot(rotArr[1:], rotArr[:-1]) <= 0
-            if np.any(flipPlaces):
-                self.issueFrames = 1 + np.argwhere(flipPlaces)
-                # self.issueFrames = np.hstack((
-                #     flipInds, rotArr[flipInds], rotArr[flipInds - 1]
-                # ))
-                # print("Issue frames:", self.issueFrames)
-        self._dataLoaded = True
+        # This was a test for "bad" flips in the axis angle creation from
+        # matrix arrays. I say "bad" flips because "small" flips from, say,
+        # [+epsilon, 0, 0] to [-epsilon, 0, 0] would be totally fine. So one
+        # also needs to test for the magnitude of the difference vector.
+        # for rotArr in [self._rotationsGTNP, self._rotationsCalcNP]:
+        #     flipPlaces = pm.einsumDot(rotArr[1:], rotArr[:-1]) <= 0
+        #     if np.any(flipPlaces):
+        #         eucDists = np.linalg.norm(rotArr[1:][flipPlaces], axis=-1)
+        #         eucDists += np.linalg.norm(rotArr[:-1][flipPlaces], axis=-1)
+        #         if np.any(eucDists > np.pi):
+        #     # Also, testing for big jumps in non-flipping cases.
+        #     jumps = np.linalg.norm(np.diff(rotArr, 1, axis=0), axis=-1)
+        #     big_jumps = jumps > np.pi
+        #     if np.any(big_jumps):
+        #         tau = 2 * np.pi
+        #         where_jump,  = np.nonzero(big_jumps)
+        #         unexplained_jumps = []
+        #         for wj in where_jump:
+        #             jump_vec0 = rotArr[wj]
+        #             jump_vec1 = rotArr[wj + 1]
+        #             jv1_dir = jump_vec1 / np.linalg.norm(jump_vec1)
+        #             wj_unexplained = False
+        #             for fix_dir in [-1, 1]:
+        #                 jump_vec1_new = jump_vec1 + (tau * fix_dir) * jv1_dir
+        #                 new_dist = np.linalg.norm(jump_vec1_new - jump_vec0)
+        #                 if new_dist < jumps[wj]:
+        #                     wj_unexplained = True
+        #             if wj_unexplained:
+        #                 unexplained_jumps.append(wj)
+        #         if len(unexplained_jumps) > 0:
+            self._dataLoaded = True
+        
 
     # Returns (rotation mat data, translation data) tuple, where each element is
     # a numpy array, the former with shape (n,3,3), the latter with shape (n,3).

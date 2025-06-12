@@ -42,7 +42,7 @@ class MOTION_DATA(Enum):
     SPEED_DEG1 = 1
     SPEED_DEG2 = 2
     ACC_VEC3 = 3
-    LAST_BEST_LABEL = 4
+    LAST_BEST_LABEL_ONEHOT = 4
     TIMESTEP = 5
 
     JERK_VEC3 = 6
@@ -121,12 +121,33 @@ class MOTION_DATA(Enum):
     INV_VEL_BCS_RATIOS = 59
     INV_CIRC_ANG_RATIO = 60
 
+    GT0 = 61
+    GT1 = 62
+    GT2 = 63
+    GT3 = 64
+    GT4 = 65
+    GT5 = 66
+
+    JERK_VEL_DEG1_DOT = 67
+    JERK_VEL_DEG2_DOT = 68
+    JERK_ACC_DOT = 69
+
+    CURVATURE = 70
+    LAST_CURVATURE = 71
+
+    # CURVATURE_V = 72
+    # CURVATURE_A = 73
+    # CURVATURE_J = 74
+    # LAST_CURVATURE_V = 75
+    # LAST_CURVATURE_A = 76
+    # LAST_CURVATURE_J = 77
+
 
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
     VEL_DEG2 = 2
     ACC_FULL = 3
-    ACC_ORTHO_DEG2 = 4
+    ACC_ORTHO_DEG1 = 4
     PLANE_ORTHO = 5
     ROTATION = 6
     ITSELF = 7
@@ -196,8 +217,116 @@ class Vec3Data:
                 self.unit_vecs[0] = 0.0
                 # MAYBE setting unit dir to 0 is a workaround if this happens?
 
-MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
+class OneHotMotionData(typing.NamedTuple):
+    base_cat: MOTION_DATA
+    cat_num: int
+
+    @property
+    def name(self):
+        bn = self.base_cat.name 
+        last_underscore_ind = bn.rfind("_")
+        if bn[last_underscore_ind:] != "_ONEHOT":
+            raise ValueError("No \"ONEHOT\" found in base type {}!".format(bn))
+        
+        return bn[:(last_underscore_ind + 1)] + "CAT" + str(self.cat_num) 
+
+MOTION_DATA_KEY_TYPE = typing.Union[
+    MOTION_DATA, SpecifiedMotionData, OneHotMotionData
+]
 PoseLoaderList = typing.List[gtc.PoseLoader]
+
+# Finds closest points on hyperplanes with the given normals and offsets.
+# The below function is the result of me feeding my original getClosestPoint()
+# function through Copilot/Claude to accomodate multiple points per hyperplane.
+# TODO: Need to manually verify logic and clean things up a bit.
+def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray, return_dists: bool = False):
+    """
+    Parameters:
+        normals: shape (m, k) where m is number of hyperplanes, k is dimensionality
+        scaled_plane_offsets: shape (m,) offset for each hyperplane
+        points: shape (n, k) points to find closest hyperplane points for
+        return_dists: whether to return distances along with closest points
+    """
+    # Reshape for broadcasting:
+    # normals: (m, k, 1)
+    # scaled_plane_offsets: (m, 1)
+    # points: (1, k, n)
+    normals_exp = normals.reshape(normals.shape[0], normals.shape[1], 1)
+    offsets_exp = scaled_plane_offsets.reshape(-1, 1)
+    points_exp = points.T.reshape(1, points.shape[1], points.shape[0])
+    
+    # Calculate dot products: (m, 1, n)
+    norm_sq = pm.einsumDot(normals, normals).reshape(-1, 1, 1)
+    pn = np.sum(normals_exp * points_exp, axis=1, keepdims=True)  # (m, 1, n)
+    
+    # Calculate scalars: (m, 1, n)
+    scalar = (offsets_exp.reshape(-1, 1, 1) - pn) / norm_sq
+    
+    # Calculate displacements: (m, k, n)
+    disps = scalar * normals_exp
+    
+    # Calculate closest points: (m, k, n)
+    closest = points_exp + disps
+    
+    if return_dists:
+        # Calculate distances: (m, n)
+        distances = np.sqrt(np.sum(disps * disps, axis=1))
+        return (closest.transpose(2, 1, 0),  # (n, k, m)
+                distances.T)                  # (n, m)
+    return closest.transpose(2, 1, 0)        # (n, k, m)
+
+def getBaselineJAV6(acc_multiplier_options, jerk_multiplier_options):
+    base = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+    for a1_ind, a1 in enumerate(acc_multiplier_options):
+        j_end_ind = a1_ind if a1_ind < 2 else 3
+        for a0_ind, a0 in enumerate(acc_multiplier_options[:(a1_ind + 1)]):
+            for j2_ind, j2 in enumerate(jerk_multiplier_options[:(j_end_ind + 1)]):
+                for j1_ind, j1 in enumerate(jerk_multiplier_options[:(j2_ind + 1)]):
+                    j_end_from_a0 = a0_ind if a0_ind < 2 else 3
+                    jv_end_ind = min(j2_ind, j_end_from_a0)
+                    for j0 in jerk_multiplier_options[:(jv_end_ind + 1)]:
+                        base.append([1.0, a0, a1, j0, j1, j2])
+    return np.asarray(base)
+
+# The below function is the result of me feeding my original gtMultipliers6()
+# function through Copilot/Claude to accomodate multiple baseline_m6 values.
+# TODO: Need to manually verify logic and clean things up a bit.
+def gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
+    """
+    Parameters:
+        y_true: shape (m, 15) where m is number of data points
+        baseline_m6: shape (n, 6) where n is number of baseline points to consider
+    """
+    # Calculate j_o directly as it doesn't depend on baseline_m6
+    j_o = y_true[:, 8] / y_true[:, 5]
+    
+    # First hyperplane (a and j components)
+    points_aj = baseline_m6[:, [2, 4]]  # Shape: (n, 2)
+    closest_points_aj, dists_aj = getClosestPoint(
+        y_true[:, [2, 4]], y_true[:, 7], points_aj, return_dists=True
+    )
+    # For each hyperplane (each row in y_true), find the closest among n points
+    min_indices_aj = np.argmin(dists_aj, axis=0)  # Shape: (m,)
+    # Get the closest points using the indices
+    # closest_points_aj shape is (n, 2, m), we want to select best n for each m
+    a_a = closest_points_aj[min_indices_aj, 0, range(len(y_true))]
+    j_a = closest_points_aj[min_indices_aj, 1, range(len(y_true))]
+    
+    # Second hyperplane (v, a, and j components)
+    points_vaj = baseline_m6[:, [0, 1, 3]]  # Shape: (n, 3)
+    closest_points_vaj, dists_vaj = getClosestPoint(
+        y_true[:, [0, 1, 3]], y_true[:, 6], points_vaj, return_dists=True
+    )
+    # For each hyperplane, find the closest among n points
+    min_indices_vaj = np.argmin(dists_vaj, axis=0)  # Shape: (m,)
+    # Get the closest points using the indices
+    # closest_points_vaj shape is (n, 3, m), we want to select best n for each m
+    v_v = closest_points_vaj[min_indices_vaj, 0, range(len(y_true))]
+    a_v = closest_points_vaj[min_indices_vaj, 1, range(len(y_true))]
+    j_v = closest_points_vaj[min_indices_vaj, 2, range(len(y_true))]
+    
+    return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
+
 
 def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         missing_keys: typing.List[MOTION_DATA] = []
@@ -207,6 +336,9 @@ def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
                 if isinstance(k, MOTION_DATA):
                     md_kind_present = md_kind_present or k == motion_data_kind
                 elif isinstance(k, SpecifiedMotionData):
+                    base_cat_eq = k.base_cat == motion_data_kind
+                    md_kind_present = md_kind_present or base_cat_eq
+                elif isinstance(k, OneHotMotionData):
                     base_cat_eq = k.base_cat == motion_data_kind
                     md_kind_present = md_kind_present or base_cat_eq
                 else:
@@ -247,6 +379,14 @@ class CalcsForVideo:
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
         ]
+
+        base_a_opts = [0.0, 0.5, 1.0]
+        # See other commenting on how these possible multiplier totals are found
+        # when looking at the lagrange polynomial derivatives.
+        base_j_opts = [0, 1/6, 2/3, 1.0]
+
+        self.base_JAV6 = getBaselineJAV6(base_a_opts, base_j_opts)
+
 
         # I had to accomodate a venv where I have Python 3.7 for running
         # tensorflow-gpu on Windows. Unfortunately, newer joblib versions 
@@ -330,6 +470,27 @@ class CalcsForVideo:
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
                 self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
+    @staticmethod
+    def _addDotsAndAngs(dict_to_update: typing.Dict[MOTION_DATA_KEY_TYPE, NDArray],
+               motion_data_base_key: MOTION_DATA, relative_axis: RELATIVE_AXIS,
+               shift: bool, dots_with_unit_axis: NDArray, vec_norms: NDArray):
+        SMD = SpecifiedMotionData
+        AM = ANG_OR_MAG
+        km      = SMD(motion_data_base_key, relative_axis, AM.MAG, False, shift)
+        kmbidir = SMD(motion_data_base_key, relative_axis, AM.MAG, True, shift)
+        ka      = SMD(motion_data_base_key, relative_axis, AM.ANG, False, shift)
+        kabidir = SMD(motion_data_base_key, relative_axis, AM.ANG, True, shift)
+
+        dict_to_update[km] = dots_with_unit_axis
+        dict_to_update[kmbidir] = np.abs(dots_with_unit_axis)
+        
+        curr_angs = np.arccos(np.clip(dots_with_unit_axis / vec_norms, -1, 1))
+        if vec_norms[0] == 0.0:
+            curr_angs[0] = 0.0
+        dict_to_update[ka] = curr_angs
+        dict_to_update[kabidir] = pm.getAcuteAngles(curr_angs)
+
+
     def getInputFeatures(self, pose_loader: gtc.PoseLoader,
                          check_key_completeness: bool = False):
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
@@ -410,16 +571,17 @@ class CalcsForVideo:
             deg1_speeds = deg1_speeds_full[-n_jerk_preds:].flatten()
             deg2_speeds_full = np.linalg.norm(deg2_vels, axis=-1, keepdims=True)
             deg2_speeds = deg2_speeds_full[-n_jerk_preds:]
-            timescaled_speeds = deg2_speeds.flatten() / step
-            motion_data[MOTION_DATA.SPEED_DEG1] = deg1_speeds / step
-            motion_data[MOTION_DATA.SPEED_DEG2] = timescaled_speeds
+            timescaled_speeds_deg2 = deg2_speeds.flatten() / step
+            timescaled_speeds_deg1 = deg1_speeds / step
+            motion_data[MOTION_DATA.SPEED_DEG1] = timescaled_speeds_deg1
+            motion_data[MOTION_DATA.SPEED_DEG2] = timescaled_speeds_deg2
 
 
             deg2_accs = deg1_vel_diffs / step_sq
             acc_mags_full = np.linalg.norm(deg2_accs, axis=-1, keepdims=True)
             acc_mags = acc_mags_full[-n_jerk_preds:].flatten()
 
-            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds / acc_mags
+            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds_deg2 / acc_mags
             vel_dots = pm.einsumDot(
                 deg1_vels[-n_jerk_preds:], deg1_vels[-(n_jerk_preds + 1):-1]
             )
@@ -510,12 +672,20 @@ class CalcsForVideo:
                 bounce_ang_pair_sums[-n_jerk_preds:]
             motion_data[MOTION_DATA.VEL_DOT] = t_diff_dots[-n_jerk_preds:]
 
-            motion_data[MOTION_DATA.ACC_VEL_DEG1_DOT] = pm.einsumDot(
-                deg2_accs, deg1_vels[1:]
-            )[-n_jerk_preds:]
-            motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = pm.einsumDot(
-                deg2_accs, deg2_vels
-            )[-n_jerk_preds:]
+            avd1m = pm.einsumDot(deg2_accs, deg1_vels[1:])
+            motion_data[MOTION_DATA.ACC_VEL_DEG1_DOT] = avd1m[-n_jerk_preds:]
+            avd2m = pm.einsumDot(deg2_accs, deg2_vels)
+            motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = avd2m[-n_jerk_preds:] 
+
+            scaled_jerks = t_jerk_amt / (step ** 3)
+            jvd1m = pm.einsumDot(scaled_jerks, deg1_vels[2:])
+            motion_data[MOTION_DATA.JERK_VEL_DEG1_DOT] = jvd1m
+            motion_data[MOTION_DATA.JERK_VEL_DEG2_DOT] = pm.einsumDot(
+                scaled_jerks, deg2_vels[1:]
+            )
+            ja_m = pm.einsumDot(scaled_jerks, deg2_accs[1:])
+            motion_data[MOTION_DATA.JERK_ACC_DOT] = ja_m
+
 
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
@@ -629,7 +799,10 @@ class CalcsForVideo:
 
                 curr_err_norms_dict[motion_mod] = curr_err_norms[i, 1:]
             curr_min_norm_labels = np.argmin(curr_err_norms, axis=0).flatten()
-            motion_data[MOTION_DATA.LAST_BEST_LABEL] = curr_min_norm_labels[:-1]
+            for mn in range(len(self.motion_mod_keys)):
+                motion_data[
+                    OneHotMotionData(MOTION_DATA.LAST_BEST_LABEL_ONEHOT, mn)
+                ] = (curr_min_norm_labels[:-1] == mn)
 
             curr_min_keys = [
                 self.motion_mod_keys[i] for i in curr_min_norm_labels[1:]
@@ -662,46 +835,71 @@ class CalcsForVideo:
             prev_jerk_err_mags = curr_err_norms[jerk_ind][:-1]
             prev_jerk_err_mags[0] = 0
             
-            acc_vel_deg2_mag = pm.einsumDot(deg2_accs, unit_vels_deg2)
-            acc_vel_deg2_parallel = pm.scalarsVecsMul(acc_vel_deg2_mag, unit_vels_deg2)
+            acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
+            acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
             
-            acc_ortho_deg2_vecs = deg2_accs - acc_vel_deg2_parallel
-            acc_ortho_deg2_mags = np.linalg.norm(
-                acc_ortho_deg2_vecs, axis=-1, keepdims=True
+            acc_ortho_deg1_vecs = deg2_accs - acc_vel_deg1_parallel
+            acc_ortho_deg1_mags = np.linalg.norm(
+                acc_ortho_deg1_vecs, axis=-1, keepdims=True
             )
             
-            unit_acc_ortho_deg2_vecs = pm.safelyNormalizeArray(
-                acc_ortho_deg2_vecs, acc_ortho_deg2_mags
+            unit_acc_ortho_deg1_vecs = pm.safelyNormalizeArray(
+                acc_ortho_deg1_vecs, acc_ortho_deg1_mags
             )
-            motion_data[MOTION_DATA.ORTHO_ACC_MAG] = acc_ortho_deg2_mags[-n_jerk_preds:].flatten()
+            motion_data[MOTION_DATA.ORTHO_ACC_MAG] = acc_ortho_deg1_mags[-n_jerk_preds:].flatten()
 
             vel_deg2_acc_cross = np.cross(unit_vels_deg2, unit_accs)
             sin_vel_deg2_acc_angs = np.linalg.norm(
                 vel_deg2_acc_cross, axis=-1, keepdims=True
             )
 
+            acc_vel_deg2_mag = avd2m / deg2_speeds_full.flatten()
+            flat_accs = acc_mags.flatten()
+            self._addDotsAndAngs(
+                motion_data, MD.ACC_VEC3, RA.VEL_DEG2, False,
+                acc_vel_deg2_mag[-n_jerk_preds:], flat_accs
+            )
+            
+            jerk_norms = np.linalg.norm(scaled_jerks, axis=-1)
+
+            jerk_vel_deg1_mags = jvd1m / deg1_speeds
+            
+            jerk_acc_ortho_mags = pm.einsumDot(
+                scaled_jerks, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+            )
+            
+            jerk_vel_vecs = pm.scalarsVecsMul(
+                jerk_vel_deg1_mags, unit_vels_deg1[-n_jerk_preds:]
+            )
+            jerk_acc_vecs = pm.scalarsVecsMul(
+                jerk_acc_ortho_mags, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+            )
+            jerk_ortho_vecs = scaled_jerks - (jerk_vel_vecs + jerk_acc_vecs)
+            jerk_ortho_norms = np.linalg.norm(jerk_ortho_vecs, axis=-1, keepdims=True)
+
+            
+            vec3_precalc_keys = [
+                (MD.ACC_VEC3, RA.VEL_DEG1), (MD.ACC_VEC3, RA.VEL_DEG2),
+                (MD.JERK_VEC3, RA.VEL_DEG1), (MD.JERK_VEC3, RA.ACC_ORTHO_DEG1),
+                (MD.JERK_VEC3, RA.PLANE_ORTHO)
+            ]
 
             precalced_mags = [
                 deg1_speeds_full, deg2_speeds_full, acc_mags_full,
-                sin_vel_deg2_acc_angs
+                sin_vel_deg2_acc_angs, jerk_ortho_norms
             ]
             for mags in precalced_mags:
-                if mags[0] == 0.0:
+                mags_0 = mags[0]
+                mags_0_v = mags_0 if np.isscalar(mags_0) else mags_0[0]
+                if mags_0_v == 0.0:
                     raise ValueError("Relative axes cannot have a norm of 0.0!")
-
-            a_v2_mag_k       = SMD(MD.ACC_VEC3, RA.VEL_DEG2, AM.MAG, False, False)
-            a_v2_mag_k_bidir = SMD(MD.ACC_VEC3, RA.VEL_DEG2, AM.MAG, True,  False)
-            a_v2_ang_k       = SMD(MD.ACC_VEC3, RA.VEL_DEG2, AM.ANG, False, False)
-            a_v2_ang_k_bidir = SMD(MD.ACC_VEC3, RA.VEL_DEG2, AM.ANG, True,  False)
-
-            motion_data[a_v2_mag_k] = acc_vel_deg2_mag[-n_jerk_preds:]
-            motion_data[a_v2_mag_k_bidir] = np.abs(acc_vel_deg2_mag[-n_jerk_preds:])
-            acc_vel_deg2_ang_subset = pm.anglesBetweenVecs(
-                unit_vels_deg2, unit_accs
-            )[-n_jerk_preds:].flatten()
-            motion_data[a_v2_ang_k] = acc_vel_deg2_ang_subset
-            motion_data[a_v2_ang_k_bidir] = pm.getAcuteAngles(acc_vel_deg2_ang_subset)
-
+            
+            # NOTE: We *could* use the orthogonal component of jerk to set the
+            # sign/direction of the plane normals instead of just using the sign
+            # of the cross product. However, for whatever reason, using the
+            # cross product gives a better neural network score.
+            # So I'm going to keep using the cross product unless I can make a
+            # big improvement somewhere else so that this stops mattering. 
             ortho_dirs = pm.safelyNormalizeArray(vel_deg2_acc_cross, sin_vel_deg2_acc_angs)
 
             plane_dots = pm.einsumDot(
@@ -710,10 +908,11 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.PLANE_NORMAL_DOT] = plane_dots
             
 
-            rot_v3d = V3D(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
+            rot_v3d = Vec3Data(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
             vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
                 MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags),
-                MD.JERK_VEC3: V3D(t_jerk_amt / step**3), MD.ROTATION_VEC3: rot_v3d,
+                MD.JERK_VEC3: V3D(scaled_jerks, None, jerk_norms),
+                MD.ROTATION_VEC3: rot_v3d,
                 MD.CIRC_VEL_DEG1_ERR_VEC3: V3D(
                     prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
                 ),
@@ -732,7 +931,7 @@ class CalcsForVideo:
 
             rel_axes_dict: typing.Dict[RELATIVE_AXIS, NDArray] = {
                 RA.VEL_DEG1: unit_vels_deg1, RA.VEL_DEG2: unit_vels_deg2,
-                RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG2: unit_acc_ortho_deg2_vecs,
+                RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG1: unit_acc_ortho_deg1_vecs,
                 RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes
             }
 
@@ -768,34 +967,118 @@ class CalcsForVideo:
                     for ra_row, ra_k in enumerate(curr_ra_keys):
 
                         # Skipping values that were already derived+stored earlier.
-                        if md_k == MD.ACC_VEC3 and ra_k == RA.VEL_DEG2 and not shiftRel:
-                            continue 
-                
-                        k_m       = SMD(md_k, ra_k, AM.MAG, False, shiftRel)
-                        k_m_bidir = SMD(md_k, ra_k, AM.MAG, True,  shiftRel)
-                        k_a       = SMD(md_k, ra_k, AM.ANG, False, shiftRel)
-                        k_a_bidir = SMD(md_k, ra_k, AM.ANG, True,  shiftRel)
+                        if not shiftRel:
+                            key_precalced = False
+                            for md_kp, ra_kp in vec3_precalc_keys:
+                                if md_kp == md_k and ra_kp == ra_k:
+                                    key_precalced = True
+                                    break
+                            if key_precalced:
+                                continue
 
-                        motion_data[k_m] = ra_dots[:, ra_row]
-                        motion_data[k_m_bidir] = np.abs(ra_dots[:, ra_row])
-                        
-                        curr_angs = pm.anglesBetweenVecs(
-                            rel_axes_dict[ra_k][ra_start:ra_end],
-                            v3s.unit_vecs[-n_jerk_preds:], False
+                        self._addDotsAndAngs(
+                            motion_data, md_k, ra_k, shiftRel,
+                            ra_dots[-n_jerk_preds:, ra_row], v3s.norms[-n_jerk_preds:]
                         )
-                        if v3s.norms[0] == 0.0:
-                            curr_angs[0] = 0.0
-                        motion_data[k_a] = curr_angs
-                        motion_data[k_a_bidir] = pm.getAcuteAngles(curr_angs)
+                        
+            self._addDotsAndAngs(
+                motion_data, MD.ACC_VEC3, RA.VEL_DEG1, False,
+                acc_vel_deg1_mag[-n_jerk_preds:], flat_accs
+            )
+
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.VEL_DEG1, False,
+                jerk_vel_deg1_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
+            )
+
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.ACC_ORTHO_DEG1, False,
+                jerk_acc_ortho_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
+            )
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, RA.PLANE_ORTHO, False,
+                jerk_ortho_norms.flatten(), jerk_norms.flatten()
+            )
 
             jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
             acc_jerk_ratio = acc_mags / jerk_mags
-            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds / jerk_mags
+            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds_deg2 / jerk_mags
             motion_data[MOTION_DATA.ACC_JERK_RATIO] = acc_jerk_ratio
             motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = \
-                timescaled_speeds / acc_ortho_deg2_mags.flatten()[-n_jerk_preds:]
+                timescaled_speeds_deg2 / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
 
             motion_data[MOTION_DATA.ACC_VEL_DEG2_ERR_RATIO] = acc_jerk_ratio / step
+
+            gt_calc_jav_input = np.empty((n_jerk_preds, 9))
+
+            gt_calc_jav_input[:, 0] = deg1_speeds
+            gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:] * step_sq
+            gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0] * step_sq
+            gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags * (step**3)
+            gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags * (step**3)
+            gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten() * (step**3)
+            
+            jav_mats = np.stack([
+                unit_vels_deg1[-n_jerk_preds:],
+                unit_acc_ortho_deg1_vecs[-n_jerk_preds:],
+                pm.safelyNormalizeArray(jerk_ortho_vecs, jerk_ortho_norms)
+            ], axis=1)
+
+            prev_start = -(n_jerk_preds + 1)
+            gt_calc_jav_input[:, 6:9] = pm.einsumMatVecMul(
+                jav_mats, translation_diffs[prev_start:-1]
+            )
+
+            gt_jav6 = gtMultipliers6(gt_calc_jav_input, self.base_JAV6)
+
+            motion_data[MOTION_DATA.GT0] = gt_jav6[:, 0]
+            motion_data[MOTION_DATA.GT1] = gt_jav6[:, 1]
+            motion_data[MOTION_DATA.GT2] = gt_jav6[:, 2]
+            motion_data[MOTION_DATA.GT3] = gt_jav6[:, 3]
+            motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
+            motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
+
+            ck_denom = deg1_speeds_full.flatten()[1:]**(3/2)
+            ck_num_terms = []
+            vel_vecs = deg1_vels[1:]
+            for exc_i in range(3):
+                exc_ip = (exc_i + 1) % 3
+                ck_num_term = deg1_vel_diffs[:, exc_i] * vel_vecs[:, exc_ip]
+                ck_num_term -= deg1_vel_diffs[:, exc_ip] * vel_vecs[:, exc_i]
+                ck_num_terms.append(ck_num_term**2)
+            ck_num = np.sqrt(np.sum(ck_num_terms, axis=0))
+            curvatures = ck_num / ck_denom
+            motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
+            motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
+
+            '''
+            Slower curvature thing that didn't improve accuracy
+            _, jav_frames = pm.getOrthonormalFrames(
+                True, deg1_vels[2:], deg1_vel_diffs[1:], t_jerk_amt
+            )
+
+            curve_keys = (
+                MOTION_DATA.CURVATURE_V, MOTION_DATA.CURVATURE_A,
+                MOTION_DATA.CURVATURE_J
+            )
+            last_curve_keys = (
+                MOTION_DATA.LAST_CURVATURE_V, MOTION_DATA.LAST_CURVATURE_A,
+                MOTION_DATA.LAST_CURVATURE_J
+            )
+
+            for fn, frame in enumerate(jav_frames):
+                t_jav_vecs = frame @ translations[fn:(fn + 3)]
+                v_jav_vecs = np.diff(t_jav_vecs, 1, axis=0)
+                a_jav_vecs = np.diff(v_jav_vecs, 1, axis=0)
+                curvatures = np.abs(a_jav_vecs) / ((1 + v_jav_vecs[-2:]**2)**(3/2))
+                for c, (ck, lck) in enumerate(zip(curve_keys, last_curve_keys)):
+                    if fn == 0:
+                        motion_data[ck] = np.empty(n_jerk_preds)
+                        motion_data[lck] = np.empty(n_jerk_preds)
+                    motion_data[ck][fn] = curvatures[-1, c]
+                    motion_data[lck][fn] = curvatures[0, c]
+            '''
+
 
             keys_to_check_for_completeness = motion_data.keys()
             if check_key_completeness:
@@ -866,6 +1149,10 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # are not needed for this; we only need "current" acceleration.
             accs = np.diff(vels[:-1], axis=0)
             jerks = np.diff(accs, axis=0)
+            snaps = np.diff(jerks, axis=0)
+            crackles = np.diff(snaps, axis=0)
+            snaps = np.insert(snaps, 0, np.zeros(3), axis=0)
+            crackles = np.concatenate((np.zeros((2, 3)), crackles), axis=0)
 
             # Here we specify which order in which we orthonormalize our
             # velocity, acceleration, and jerk vectors into orthonormal frames.
@@ -879,40 +1166,15 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             if vec_order is not None:
                 ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
 
-            mags0 = np.linalg.norm(ordered[0], axis=-1)
-            unit_vecs0 = pm.safelyNormalizeArray(
-                ordered[0], mags0[:, np.newaxis]
-            )
-            # Find the magnitude of the second vector that is parallel to and
-            # orthogonal to the first.
-            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
-            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
-            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
-            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-            unit_vecs1 = pm.safelyNormalizeArray(
-                vecs_o1, mags_o1[:, np.newaxis]
-            )
-
-            mags_p20 = pm.einsumDot(ordered[2], unit_vecs0) # Parallel magnitude
-            vecs_p20 = pm.scalarsVecsMul(mags_p20, unit_vecs0)
-            mags_p21 = pm.einsumDot(ordered[2], unit_vecs1)
-            vecs_p21 = pm.scalarsVecsMul(mags_p21, unit_vecs1)
-            vecs_o2 = ordered[2] - (vecs_p20 + vecs_p21)
-            mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
-
-            unit_vecs2 = pm.safelyNormalizeArray(
-                vecs_o2, mags_o2[:, np.newaxis]
-            )
-
-            # We now have matrices to convert vectors in world space into
-            # these local vector-aligned frames.
-            mats = np.stack([unit_vecs0, unit_vecs1, unit_vecs2], axis=1)
-
+            all_mags, mats = pm.getOrthonormalFrames(True, *ordered, False)
+                        
             # Transform each third vector and to-next-frame displacement into
             # this frame via matmul.
             # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+            local_snaps = pm.einsumMatVecMul(mats, snaps)
+            local_crackles = pm.einsumMatVecMul(mats, crackles)
 
             # We'll now return all of the data needed to convert velocity,
             # acceleration, and jerk multipliers into local vectors in these
@@ -922,7 +1184,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
             c_res = (
-                mags0, mags_p1, mags_o1, mags_p20, mags_p21, mags_o2,
+                *all_mags, *(local_snaps.T), *(local_crackles.T),
                 *(local_diffs.T)
             )
 
