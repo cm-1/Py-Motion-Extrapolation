@@ -1,41 +1,49 @@
 ################################################################################
-# Velocity-Aligned-Frame LSTM
+# Velocity-Aligned-Frame Networks
 ################################################################################
 import numpy as np
+from numpy.typing import NDArray
 
 import keras
 
 # We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
 from sklearn.preprocessing import MinMaxScaler
 
+import rnn_models as rnnm
+
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
 import gtCommon as gtc
 # Functions to get RNN "windows" and velocity-aligned frame data, respectively.
-from data_by_combo_functions import rnnDataWindows, dataForCombosJAV
+from data_by_combo_functions import rnnDataWindows
+from motiontools.posefeatures import dataForCombosJAV
 # Functions to get all combos and to split combos into train/test sets:
 from data_by_combo_functions import JAV # Enum
+from data_by_combo_functions import getAllCombosAndLoadersBCOT # Loaders
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
-WIN_SIZE = 4
+WIN_SIZE = 6
 
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
 
-combos = gtc.PoseLoaderBCOT.getAllIDs()
-
-# From the combo 3-tuples, construct nametuple versions containing only the
-# uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-nametup_combos = [gtc.VidBCOT(*c[:2]) for c in combos]
+ONE_FRAME_PER_WINDOW: bool = False
 
 print("Getting train-test split.")
-train_combos, test_combos = gtc.PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
+bcot_train_combos, bcot_test_combos = gtc.PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
+train_combos = [c[:2] for c in bcot_train_combos]
+test_combos = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
 
 #%%
 ################################################################################
 # READING/NORMALIZING THE DATA
 ################################################################################
+
+# From the combo 3-tuples, we get nametuple versions containing only the
+# uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
+# We also get a list of pose loaders, one for each BCOT video.
+combos, loaders = getAllCombosAndLoadersBCOT()
 
 print("Reading/normalizing data.")
 # As with the "vanilla" regression network, we'll get our data in a velocity
@@ -44,7 +52,7 @@ print("Reading/normalizing data.")
 # thus, can create our data windows without having a window erroneously overlap
 # two separate videos.
 all_jav = dataForCombosJAV(
-    nametup_combos, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
+    loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
 )
 
 jav_scalers = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
@@ -90,13 +98,6 @@ train_jav_in, train_jav_out = rnnDataWindows(
 # BUILDING THE NETWORK
 ################################################################################
 print("Building the NN.")
-jav_lstm_model = keras.Sequential([
-    # keras.layers.LSTM(128, return_sequences=True),
-    keras.layers.LSTM(50),
-    keras.layers.Dense(3) #num_classes, activation='sigmoid')
-])
-
-jav_lstm_model.summary()
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
@@ -105,14 +106,17 @@ jav_lstm_logger = UnscaledDistanceLogger(
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
 
-jav_lstm_model.compile(optimizer='adam', loss='mse')
 #%%
 ################################################################################
 # TRAINING THE NETWORK
 ################################################################################
 
+adam = keras.optimizers.Adam(0.001)
+# jav_lstm_model = rnnm.get_fcnn_rnn(WIN_SIZE, 3, 3, adam, 'mse')
+jav_lstm_model = rnnm.get_simple_lstm(3, 'adam', 'mse')
+
 jav_lstm_hist = jav_lstm_model.fit(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=32,
+    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=64,
     callbacks=[jav_lstm_logger]
 )
 

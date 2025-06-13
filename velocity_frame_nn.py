@@ -19,7 +19,7 @@ import keras
 # Stuff needed for calculating the input features for the non-RNN models.
 # MOTION_DATA_KEY_TYPE is a class representing input feature column "names",
 # while the MOTION_DATA enum is a "subset" of these.
-from posefeatures import MOTION_DATA, MOTION_DATA_KEY_TYPE
+from motiontools.posefeatures import MOTION_DATA, MOTION_DATA_KEY_TYPE
 
 
 
@@ -71,11 +71,12 @@ colin_thresh = 0.7 # Threshold for collinearity.
 
 nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
 
-last_best_ind = motion_data_keys.index(MOTION_DATA.LAST_BEST_LABEL)
 timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+framenum_ind = motion_data_keys.index(MOTION_DATA.FRAME_NUM)
 
-nonco_cols[last_best_ind] = False # Needs one-hot encoding or similar.
+
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
+nonco_cols[framenum_ind] = False
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
@@ -120,14 +121,21 @@ def poseLossJAV(y_true, y_pred):
     Then after this matrix multiplication, we find the distance between it and
     the correct pose displacement, both vec3s.
     '''
+
+    # y_pred2 = y_pred + y_true[:, 9:15]
+
     pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 2]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 1] + y_true[:, 4] * y_pred[:, 2]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 2]
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
+        + y_true[:, 9] * y_pred[:, 9]
+    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
+    pred_disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
+        + y_true[:, 11] * y_pred[:, 11]
 
     pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
+    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
 
-    true_disp = y_true[:, 6:]
+    true_disp = y_true[:, 12:15] #6:9]
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
@@ -162,21 +170,31 @@ class ImportanceLayer(tf.keras.layers.Layer):
 print("Building the NN.")
 
 
-dropout_rate = 0.2
-nodes_per_layer = 128
-bcs_model = keras.Sequential([
-    keras.layers.Input((nonco_train_data.shape[1],)),
-    # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
-    keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
-    keras.layers.Dropout(dropout_rate),
-    keras.layers.Dense(nodes_per_layer, activation='relu'),
-    keras.layers.Dense(3)
-])
+def getUntrainedNN(loss = None, use_resid_data: bool = False):
 
-bcs_model.summary()
-bcs_model.compile(loss=poseLossJAV, optimizer='adam')
+    dropout_rate = 0.2
+    nodes_per_layer = 128
+    vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
+    in_shape = nonco_train_data.shape[1] + (6 if use_resid_data else 0)
+    model = keras.Sequential([
+        keras.layers.Input((in_shape,)),
+        # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dropout(dropout_rate),
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dropout(dropout_rate),
+        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
+        keras.layers.Dense(12) #6)
+    ])
+    if loss is None:
+        loss = poseLossJAV
+
+    model.summary()
+    optim = 'adam'
+    model.compile(loss=loss, optimizer=optim)
+    return model
+bcs_model = getUntrainedNN()
+
 # %%
 ################################################################################
 # NORMALIZING THE DATA

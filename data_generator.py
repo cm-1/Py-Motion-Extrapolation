@@ -13,18 +13,18 @@ from numpy.typing import NDArray
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
-import gtCommon as gtc
+from gtCommon import PoseLoaderBCOT
 
 # For the velocity-aligned frame data generation, we import some resuable stuff.
-# These are a function for getting all "combos" (video IDs), a function to get
-# velocity-aligned frame data per combo, a function for train/test combo splits,
-# type hints, and an enum.
-from data_by_combo_functions import getAllCombos, dataForCombosJAV, getTrainTestCombos
-from data_by_combo_functions import ComboList, PerComboJAV # Type hints.
-from data_by_combo_functions import JAV # Enum
+# These are the a function to get velocity-aligned frame data per combo and an 
+# enum.
+from motiontools.posefeatures import dataForCombosJAV, JAV
 
 # MOTION_DATA_KEY_TYPE is a class representing input feature column "names".
-from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
+from motiontools.posefeatures import MOTION_DATA_KEY_TYPE, CalcsForVideo
+
+# Functions for getting JAV data and pose loaders for all BCOT videos.
+from data_by_combo_functions import dataForComboSplitJAV, getAllCombosAndLoadersBCOT
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -42,20 +42,19 @@ ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 print("Calculating input data. This may take a minute or two.")
 
-combos = getAllCombos()
-
-# From the combo 3-tuples, construct nametuple versions containing only the
+# From the combo 3-tuples, we get nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-nametup_combos = [gtc.Combo(*c[:2]) for c in combos]
+# We also get a list of pose loaders, one for each BCOT video.
+nametup_combos, bcot_loaders = getAllCombosAndLoadersBCOT()
 
-cfc = CalcsForCombo(
-    nametup_combos, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
+cfc = CalcsForVideo(
+    obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
 )
-results = cfc.getAll()
+cfc.getAll(bcot_loaders)
 
 # Input features like velocity, acceleration, jerk, rotation speed, etc.
 all_motion_data = cfc.all_motion_data
@@ -119,7 +118,9 @@ def get2DArrayFromDataStruct(data: typing.List[typing.Dict[typing.Any, NDArray]]
 
 #%%
 
-train_combos, test_combos = getTrainTestCombos(combos, test_ratio=0.2, random_seed=0)
+train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(
+    test_ratio=0.2, random_seed=0
+)
 
 
 # The below gets the training and test data, but leaves them currently still
@@ -158,45 +159,18 @@ print("Calculating output data.")
 
 
 
-# Function that combines the results of dataForCombosJav(...) into a 2D numpy
-# array.
-def dataForComboSplitJAV(train_combos: ComboList, test_combos: ComboList, *,
-                         combos: typing.Optional[ComboList] = None, 
-                         precalc_per_combo: typing.Optional[PerComboJAV] = None):   
-    if combos is None and precalc_per_combo is None:
-        raise ValueError(
-            "Cannot have combos and precalc_per_combo both be None!"
-        )
-    elif combos is not None and precalc_per_combo is not None:
-        raise ValueError(
-            "Cannot provide values for both  combos and precalc_per_combo!"
-        )
-     
-    all_data = precalc_per_combo
-    if precalc_per_combo is None:
-        all_data = dataForCombosJAV(
-            combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
-        )
-    
-
-    train_res = np.concatenate(
-        concatForComboSubset(all_data, train_combos), axis=0
-    )
-    test_res = np.concatenate(
-        concatForComboSubset(all_data, test_combos), axis=0
-    )
-    return train_res, test_res
-
 # Get local-frame data.
 # The "bcs" in the name is an artifact from some older thing.
 # Will have to eventually rename this and the other instances in other files to
 # something else consistent.
 bcs_per_combo = dataForCombosJAV(
-    nametup_combos, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), False, False
+    bcot_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), False, False
 )
 
+train_combos_c2 = [c[:2] for c in train_combos]
+test_combos_c2 = [c[:2] for c in test_combos] # Get the unique part of each.
 bcs_train, bcs_test = dataForComboSplitJAV(
-    train_combos, test_combos, precalc_per_combo=bcs_per_combo
+    train_combos_c2, test_combos_c2, precalc_per_combo=bcs_per_combo
 )
 
 ################################################################################
