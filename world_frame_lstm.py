@@ -69,7 +69,7 @@ print("Calculating data's sliding \"windows\" for the network.")
 lstm_skip = DATASET_SKIP_FRAMES # "Renaming" var.
 
 train_translations_in, train_translations_out = rnnDataWindows(
-    all_translations, train_combos, WIN_SIZE, translation_scaler, lstm_skip
+    all_translations, train_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
 
 #%%
@@ -112,7 +112,7 @@ lstm_hist = lstm_model.fit(
 ################################################################################
 
 test_translations_in, test_translations_out = rnnDataWindows(
-    all_translations, test_combos, WIN_SIZE, translation_scaler, lstm_skip
+    all_translations, test_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
 
 lstm_test_pred = lstm_model.predict(test_translations_in)

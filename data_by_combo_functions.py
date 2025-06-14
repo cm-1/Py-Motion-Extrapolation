@@ -1,6 +1,5 @@
 import typing
-from enum import Enum
-import copy
+import warnings
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,15 +45,28 @@ ScalerType = typing.Union[
 
 
 def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple], 
-                   window_size: int, scaler: ScalerType, skip: int,
+                   window_size: int, skip: int,
+                   scaler: typing.Optional[ScalerType] = None, 
                    world2local_frames = None, centre_subsets: bool = False):
     '''Function that gets the "windows" of consecutive poses from the data for a 
     subset of combos. '''
     step = skip + 1
     data_in = []
     data_out = []
+    modifying_positions = ((world2local_frames is not None) or centre_subsets)
+    if (scaler is not None) and modifying_positions:
+        warnings.warn((
+            "When creating RNN data windows in rnnDataWindows(), passing in "
+            "both a scaler and parameters for modifying the positions "
+            "(world2local frames or saying to centre data) is not recommended, "
+            "because the data will be scaled after these other "
+            "transformations, which is may yield unexpected data distributions!"
+        ), RuntimeWarning)
+
     for combo in combo_subset:
-        combo_data = scaler.transform(data[combo[:2]][::step])
+        combo_data = data[combo[:2]][::step]
+        if scaler is not None:
+            scaler.transform(combo_data)
         w2l_data = None
         # There might not be frames for the first data points.
         # This should be fine, as there still should be at least one per window
@@ -79,6 +91,19 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
     data_in_np = np.array(data_in)
     data_out_np = np.array(data_out)
     return (data_in_np, data_out_np)
+
+def scaleWindows(data: NDArray, scaler: ScalerType):
+    orig_shape = data.shape
+    data_rs: NDArray
+    if data.ndim == 2:
+        data_rs = data.reshape(-1, 1)
+    elif data.ndim == 3:
+        data_rs = data.reshape((-1,) + data.shape[2:])
+    else:
+        raise NotImplementedError("Unsupported windowed data ndim > 3!")
+    
+    scaled = scaler.transform(data_rs)
+    return scaled.reshape(orig_shape)
 
 # From the combo 3-tuples, construct nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 

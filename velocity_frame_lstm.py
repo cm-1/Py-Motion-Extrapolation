@@ -15,12 +15,12 @@ import rnn_models as rnnm
 # For reading the dataset into numpy arrays:
 import gtCommon as gtc
 # Functions to get RNN "windows" and velocity-aligned frame data, respectively.
-from data_by_combo_functions import rnnDataWindows
 from motiontools.posefeatures import dataForCombosJAV
 # Functions to get all combos and to split combos into train/test sets:
 from data_by_combo_functions import JAV # Enum
 from data_by_combo_functions import getAllCombosAndLoadersBCOT # Loaders
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
+from data_by_combo_functions import rnnDataWindows, scaleWindows
 
 WIN_SIZE = 6
 
@@ -37,7 +37,7 @@ test_combos = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
 
 #%%
 ################################################################################
-# READING/NORMALIZING THE DATA
+# READING THE DATA
 ################################################################################
 
 # From the combo 3-tuples, we get nametuple versions containing only the
@@ -55,30 +55,6 @@ all_jav, w2ls, jav_translations = dataForCombosJAV(
     loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), True, True
 )
 
-jav_scalers = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
-jav_scalers_3 = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
-
-for skip in range(3):
-    # We'll *temporarily* combine the data for all combos into a single numpy
-    # array, but that will just be to fit the Scaler used to normalize the data.
-    all_jav_concat = np.concatenate(
-        [all_jav[skip][c[:2]] for c in combos], axis=0
-    )
-    # Scaler for all data columns.
-    jav_scalers[skip].fit(all_jav_concat)
-    # Scale all 3 axes by uniform amount and centre to 0 for later simplicity
-    jav_scalers[skip].scale_[-3:] = jav_scalers[skip].scale_[-1]
-    jav_scalers[skip].min_[-3:] = 0.0
-
-    # Scaler for just the last three columns, the "displacement" ones.
-    jav_scalers_3[skip].fit(all_jav_concat[:, -3:])
-    # Ensure this scaler matches the other one.
-    jav_scalers_3[skip].scale_[-3:] = jav_scalers[skip].scale_[-1]
-    jav_scalers_3[skip].min_[-3:] = 0.0
-
-    # We no longer need all_jav_concat, and it might take up a fair bit of RAM.
-    del all_jav_concat
-
 #%% 
 ################################################################################
 # CALCULATING THE DATA WINDOWS
@@ -95,24 +71,47 @@ test_jav_out: NDArray
 
 if ONE_FRAME_PER_WINDOW:
     train_jav_in, train_jav_out = rnnDataWindows(
-        jav_translations[jav_lstm_skip], train_combos, WIN_SIZE, jav_scalers_3[jav_lstm_skip],
+        jav_translations[jav_lstm_skip], train_combos, WIN_SIZE,
         0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        w2ls[jav_lstm_skip], True
+        None, w2ls[jav_lstm_skip], True
     )
     test_jav_in, test_jav_out = rnnDataWindows(
-        jav_translations[jav_lstm_skip], test_combos, WIN_SIZE, jav_scalers_3[jav_lstm_skip],
+        jav_translations[jav_lstm_skip], test_combos, WIN_SIZE,
         0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        w2ls[jav_lstm_skip], True
+        None, w2ls[jav_lstm_skip], True
     )
 else:
     train_jav_in, train_jav_out = rnnDataWindows(
-        all_jav[jav_lstm_skip], train_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
-        0 # Always a window "skip" of 0 in this case because the frame is rotating...
+        all_jav[jav_lstm_skip], train_combos, WIN_SIZE, 
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        None
     )
     test_jav_in, test_jav_out = rnnDataWindows(
-        all_jav[jav_lstm_skip], test_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
-        0 # Always a window "skip" of 0 in this case because the frame is rotating...
+        all_jav[jav_lstm_skip], test_combos, WIN_SIZE, 
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        None
     )
+#%%
+################################################################################
+# NORMALIZING THE DATA
+################################################################################
+jav_scalers_3 = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
+
+for skip in range(3):
+    all_train_vec3s = train_jav_in.reshape(-1, 3)
+
+    # Scaler for just the last three columns, the "displacement" ones.
+    jav_scalers_3[skip].fit(all_train_vec3s)
+    # Ensure this scaler matches the other one.
+    jav_scalers_3[skip].scale_[-3:] = jav_scalers_3[skip].scale_[-1]
+    jav_scalers_3[skip].min_[-3:] = 0.0
+
+selected_scaler = jav_scalers_3[jav_lstm_skip]
+train_jav_in = scaleWindows(train_jav_in, selected_scaler)
+test_jav_in = scaleWindows(test_jav_in, selected_scaler)
+
+train_jav_out = selected_scaler.transform(train_jav_out)
+test_jav_out = selected_scaler.transform(test_jav_out)
 
 #%%
 ################################################################################
