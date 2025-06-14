@@ -10,7 +10,10 @@ def _finishBuildingRNN(model, optimizer, loss):
 # Based on Neural Networks and Kalman Filter." Journal of Physics: Conference 
 # Series. Vol. 2029. No. 1. IOP Publishing, 2021.
 def get_fcnn_rnn(win_size: int, vec_dims: int, out_size: int = 3,
-                 optimizer = 'adam', loss = 'mse'):
+                 optimizer = None, loss = 'mse'):
+    if optimizer is None:
+        optimizer = keras.optimizers.Adam(0.0001)
+
     model = keras.Sequential([
         keras.layers.Input((win_size, vec_dims)),
         keras.layers.Flatten(),

@@ -45,8 +45,9 @@ ScalerType = typing.Union[
 ]
 
 
-def rnnDataWindows(data: NDArray, combo_subset: typing.List[typing.Tuple], 
-                   window_size: int, scaler: ScalerType, skip: int):
+def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple], 
+                   window_size: int, scaler: ScalerType, skip: int,
+                   world2local_frames = None, centre_subsets: bool = False):
     '''Function that gets the "windows" of consecutive poses from the data for a 
     subset of combos. '''
     step = skip + 1
@@ -54,9 +55,27 @@ def rnnDataWindows(data: NDArray, combo_subset: typing.List[typing.Tuple],
     data_out = []
     for combo in combo_subset:
         combo_data = scaler.transform(data[combo[:2]][::step])
+        w2l_data = None
+        # There might not be frames for the first data points.
+        # This should be fine, as there still should be at least one per window
+        # (under expected use cases), but we'll need to handle this.
+        w2l_shift = 0 
+        if world2local_frames is not None:
+            w2l_data = world2local_frames[combo[:2]][::step]
+            w2l_shift = len(combo_data) - len(w2l_data)
         for i in range(len(combo_data) - window_size):
-            data_in.append(combo_data[i:(i + window_size)])
-            data_out.append(combo_data[i + window_size])
+            curr_in = combo_data[i:(i + window_size)]
+            curr_out = combo_data[i + window_size]
+            if world2local_frames is not None:
+                curr_frame = w2l_data[i + window_size - 1 - w2l_shift]
+                curr_in = curr_in @ curr_frame.transpose()
+                curr_out = curr_frame @ curr_out
+            if centre_subsets:
+                centre_ref = curr_in[-1]
+                curr_in = curr_in[:-1] - centre_ref
+                curr_out -= centre_ref
+            data_in.append(curr_in)
+            data_out.append(curr_out)
     data_in_np = np.array(data_in)
     data_out_np = np.array(data_out)
     return (data_in_np, data_out_np)

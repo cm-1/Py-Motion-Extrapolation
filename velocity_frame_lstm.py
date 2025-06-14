@@ -28,7 +28,7 @@ WIN_SIZE = 6
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
 
-ONE_FRAME_PER_WINDOW: bool = False
+ONE_FRAME_PER_WINDOW: bool = True
 
 print("Getting train-test split.")
 bcot_train_combos, bcot_test_combos = gtc.PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
@@ -51,8 +51,8 @@ print("Reading/normalizing data.")
 # combo so that we know the starting and ending points for a video's data and,
 # thus, can create our data windows without having a window erroneously overlap
 # two separate videos.
-all_jav = dataForCombosJAV(
-    loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
+all_jav, w2ls, jav_translations = dataForCombosJAV(
+    loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), True, True
 )
 
 jav_scalers = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
@@ -88,16 +88,42 @@ print("Calculating data's sliding \"windows\" for the network.")
 
 jav_lstm_skip = DATASET_SKIP_FRAMES # Renaming var.
 
-train_jav_in, train_jav_out = rnnDataWindows(
-    all_jav[jav_lstm_skip], train_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
-    0 # Always a window "skip" of 0 in this case because the frame is rotating...
-)
+train_jav_in: NDArray
+train_jav_out: NDArray
+test_jav_in: NDArray
+test_jav_out: NDArray
+
+if ONE_FRAME_PER_WINDOW:
+    train_jav_in, train_jav_out = rnnDataWindows(
+        jav_translations[jav_lstm_skip], train_combos, WIN_SIZE, jav_scalers_3[jav_lstm_skip],
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        w2ls[jav_lstm_skip], True
+    )
+    test_jav_in, test_jav_out = rnnDataWindows(
+        jav_translations[jav_lstm_skip], test_combos, WIN_SIZE, jav_scalers_3[jav_lstm_skip],
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        w2ls[jav_lstm_skip], True
+    )
+else:
+    train_jav_in, train_jav_out = rnnDataWindows(
+        all_jav[jav_lstm_skip], train_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
+        0 # Always a window "skip" of 0 in this case because the frame is rotating...
+    )
+    test_jav_in, test_jav_out = rnnDataWindows(
+        all_jav[jav_lstm_skip], test_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
+        0 # Always a window "skip" of 0 in this case because the frame is rotating...
+    )
 
 #%%
 ################################################################################
 # BUILDING THE NETWORK
 ################################################################################
 print("Building the NN.")
+
+
+input_win_len = WIN_SIZE - int(ONE_FRAME_PER_WINDOW)
+jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None, 'mse')
+# jav_lstm_model = rnnm.get_simple_lstm(3, 'adam', 'mse')
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
@@ -111,12 +137,8 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
-adam = keras.optimizers.Adam(0.001)
-# jav_lstm_model = rnnm.get_fcnn_rnn(WIN_SIZE, 3, 3, adam, 'mse')
-jav_lstm_model = rnnm.get_simple_lstm(3, 'adam', 'mse')
-
 jav_lstm_hist = jav_lstm_model.fit(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=64,
+    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=256,
     callbacks=[jav_lstm_logger]
 )
 
@@ -125,11 +147,7 @@ jav_lstm_hist = jav_lstm_model.fit(
 # EVALUATING THE NETWORK
 ################################################################################
 
-test_jav_in, test_jav_out = rnnDataWindows(
-    all_jav[jav_lstm_skip], test_combos, WIN_SIZE, jav_scalers[jav_lstm_skip], 
-    0 # Always a window "skip" of 0 in this case because the frame is rotating...
 
-)
 
 jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
 
