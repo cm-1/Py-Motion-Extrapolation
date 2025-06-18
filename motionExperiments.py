@@ -842,13 +842,6 @@ for i, combo in enumerate(combos):
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
 
-    print("TODO: Try veld1 and acc ang preds here too!")
-    circle_rot_quats = np.empty(cma.circle_plane_info.normals.shape[:-1] + (4,))
-    half_c_pred_angles = cma.disp_angles_vel_deg2 / 2.0
-    circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
-    circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
-        np.sin(half_c_pred_angles), cma.circle_plane_info.normals
-    )
 
 
     # I guess I'm thinking that F2 = V(0>1)*F1*R1
@@ -871,9 +864,23 @@ for i, combo in enumerate(combos):
         return r_arm_preds
 
     r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
-    r_c_arm_preds = getArmRotPreds(circle_rot_quats)
-    r_c_arm_preds[1:][cma.invalid_circ_indices] = r_vel_preds[1:][cma.invalid_circ_indices]
-
+    r_c_arm_preds_d1d2a = []
+    cma_disp_angles = [
+        cma.disp_angles_vel_deg1, cma.disp_angles_vel_deg2, cma.disp_angles_acc
+    ]
+    for _disp_angles in cma_disp_angles:
+        circle_rot_quats = np.empty(
+            cma.circle_plane_info.normals.shape[:-1] + (4,)
+        )
+        _half_c_pred_angles = _disp_angles / 2.0
+        circle_rot_quats[:, 0] = np.cos(_half_c_pred_angles)
+        circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
+            np.sin(_half_c_pred_angles), cma.circle_plane_info.normals
+        )
+        _r_c_arm_preds = getArmRotPreds(circle_rot_quats)
+        _r_c_arm_preds[1:][cma.invalid_circ_indices] = \
+            r_vel_preds[1:][cma.invalid_circ_indices]
+        r_c_arm_preds_d1d2a.append(_r_c_arm_preds)
     # unit_vel_test = pm.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
     #     raise Exception("Made a mistake!")
@@ -1149,7 +1156,9 @@ for i, combo in enumerate(combos):
 
     allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
-    allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
+    allResultsObj.addQuaternionResult("Arm c d1", r_c_arm_preds_d1d2a[0])
+    allResultsObj.addQuaternionResult("Arm c d1", r_c_arm_preds_d1d2a[1])
+    allResultsObj.addQuaternionResult("Arm c acc", r_c_arm_preds_d1d2a[2])
     allResultsObj.addQuaternionResult("camobj", camobj_preds)
     allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
 

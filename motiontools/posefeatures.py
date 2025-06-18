@@ -42,7 +42,7 @@ class MOTION_DATA(Enum):
     SPEED_DEG1 = 1
     SPEED_DEG2 = 2
     ACC_VEC3 = 3
-    LAST_BEST_LABEL = 4
+    LAST_BEST_LABEL_ONEHOT = 4
     TIMESTEP = 5
 
     JERK_VEC3 = 6
@@ -132,6 +132,17 @@ class MOTION_DATA(Enum):
     JERK_VEL_DEG2_DOT = 68
     JERK_ACC_DOT = 69
 
+    CURVATURE = 70
+    LAST_CURVATURE = 71
+
+    # CURVATURE_V = 72
+    # CURVATURE_A = 73
+    # CURVATURE_J = 74
+    # LAST_CURVATURE_V = 75
+    # LAST_CURVATURE_A = 76
+    # LAST_CURVATURE_J = 77
+
+
 class RELATIVE_AXIS(Enum):
     VEL_DEG1 = 1
     VEL_DEG2 = 2
@@ -206,7 +217,22 @@ class Vec3Data:
                 self.unit_vecs[0] = 0.0
                 # MAYBE setting unit dir to 0 is a workaround if this happens?
 
-MOTION_DATA_KEY_TYPE = typing.Union[MOTION_DATA, SpecifiedMotionData]
+class OneHotMotionData(typing.NamedTuple):
+    base_cat: MOTION_DATA
+    cat_num: int
+
+    @property
+    def name(self):
+        bn = self.base_cat.name 
+        last_underscore_ind = bn.rfind("_")
+        if bn[last_underscore_ind:] != "_ONEHOT":
+            raise ValueError("No \"ONEHOT\" found in base type {}!".format(bn))
+        
+        return bn[:(last_underscore_ind + 1)] + "CAT" + str(self.cat_num) 
+
+MOTION_DATA_KEY_TYPE = typing.Union[
+    MOTION_DATA, SpecifiedMotionData, OneHotMotionData
+]
 PoseLoaderList = typing.List[gtc.PoseLoader]
 
 # Finds closest points on hyperplanes with the given normals and offsets.
@@ -310,6 +336,9 @@ def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
                 if isinstance(k, MOTION_DATA):
                     md_kind_present = md_kind_present or k == motion_data_kind
                 elif isinstance(k, SpecifiedMotionData):
+                    base_cat_eq = k.base_cat == motion_data_kind
+                    md_kind_present = md_kind_present or base_cat_eq
+                elif isinstance(k, OneHotMotionData):
                     base_cat_eq = k.base_cat == motion_data_kind
                     md_kind_present = md_kind_present or base_cat_eq
                 else:
@@ -770,7 +799,10 @@ class CalcsForVideo:
 
                 curr_err_norms_dict[motion_mod] = curr_err_norms[i, 1:]
             curr_min_norm_labels = np.argmin(curr_err_norms, axis=0).flatten()
-            motion_data[MOTION_DATA.LAST_BEST_LABEL] = curr_min_norm_labels[:-1]
+            for mn in range(len(self.motion_mod_keys)):
+                motion_data[
+                    OneHotMotionData(MOTION_DATA.LAST_BEST_LABEL_ONEHOT, mn)
+                ] = (curr_min_norm_labels[:-1] == mn)
 
             curr_min_keys = [
                 self.motion_mod_keys[i] for i in curr_min_norm_labels[1:]
@@ -1006,6 +1038,46 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
             motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
 
+            ck_denom = deg1_speeds_full.flatten()[1:]**(3/2)
+            ck_num_terms = []
+            vel_vecs = deg1_vels[1:]
+            for exc_i in range(3):
+                exc_ip = (exc_i + 1) % 3
+                ck_num_term = deg1_vel_diffs[:, exc_i] * vel_vecs[:, exc_ip]
+                ck_num_term -= deg1_vel_diffs[:, exc_ip] * vel_vecs[:, exc_i]
+                ck_num_terms.append(ck_num_term**2)
+            ck_num = np.sqrt(np.sum(ck_num_terms, axis=0))
+            curvatures = ck_num / ck_denom
+            motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
+            motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
+
+            '''
+            Slower curvature thing that didn't improve accuracy
+            _, jav_frames = pm.getOrthonormalFrames(
+                True, deg1_vels[2:], deg1_vel_diffs[1:], t_jerk_amt
+            )
+
+            curve_keys = (
+                MOTION_DATA.CURVATURE_V, MOTION_DATA.CURVATURE_A,
+                MOTION_DATA.CURVATURE_J
+            )
+            last_curve_keys = (
+                MOTION_DATA.LAST_CURVATURE_V, MOTION_DATA.LAST_CURVATURE_A,
+                MOTION_DATA.LAST_CURVATURE_J
+            )
+
+            for fn, frame in enumerate(jav_frames):
+                t_jav_vecs = frame @ translations[fn:(fn + 3)]
+                v_jav_vecs = np.diff(t_jav_vecs, 1, axis=0)
+                a_jav_vecs = np.diff(v_jav_vecs, 1, axis=0)
+                curvatures = np.abs(a_jav_vecs) / ((1 + v_jav_vecs[-2:]**2)**(3/2))
+                for c, (ck, lck) in enumerate(zip(curve_keys, last_curve_keys)):
+                    if fn == 0:
+                        motion_data[ck] = np.empty(n_jerk_preds)
+                        motion_data[lck] = np.empty(n_jerk_preds)
+                    motion_data[ck][fn] = curvatures[-1, c]
+                    motion_data[lck][fn] = curvatures[0, c]
+            '''
 
 
             keys_to_check_for_completeness = motion_data.keys()
@@ -1077,6 +1149,10 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # are not needed for this; we only need "current" acceleration.
             accs = np.diff(vels[:-1], axis=0)
             jerks = np.diff(accs, axis=0)
+            snaps = np.diff(jerks, axis=0)
+            crackles = np.diff(snaps, axis=0)
+            snaps = np.insert(snaps, 0, np.zeros(3), axis=0)
+            crackles = np.concatenate((np.zeros((2, 3)), crackles), axis=0)
 
             # Here we specify which order in which we orthonormalize our
             # velocity, acceleration, and jerk vectors into orthonormal frames.
@@ -1090,40 +1166,15 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             if vec_order is not None:
                 ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
 
-            mags0 = np.linalg.norm(ordered[0], axis=-1)
-            unit_vecs0 = pm.safelyNormalizeArray(
-                ordered[0], mags0[:, np.newaxis]
-            )
-            # Find the magnitude of the second vector that is parallel to and
-            # orthogonal to the first.
-            mags_p1 = pm.einsumDot(ordered[1], unit_vecs0) # Parallel magnitude
-            vecs_p1 = pm.scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
-            vecs_o1 = ordered[1] - vecs_p1 # Orthogonal vec3
-            mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-            unit_vecs1 = pm.safelyNormalizeArray(
-                vecs_o1, mags_o1[:, np.newaxis]
-            )
-
-            mags_p20 = pm.einsumDot(ordered[2], unit_vecs0) # Parallel magnitude
-            vecs_p20 = pm.scalarsVecsMul(mags_p20, unit_vecs0)
-            mags_p21 = pm.einsumDot(ordered[2], unit_vecs1)
-            vecs_p21 = pm.scalarsVecsMul(mags_p21, unit_vecs1)
-            vecs_o2 = ordered[2] - (vecs_p20 + vecs_p21)
-            mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
-
-            unit_vecs2 = pm.safelyNormalizeArray(
-                vecs_o2, mags_o2[:, np.newaxis]
-            )
-
-            # We now have matrices to convert vectors in world space into
-            # these local vector-aligned frames.
-            mats = np.stack([unit_vecs0, unit_vecs1, unit_vecs2], axis=1)
-
+            all_mags, mats = pm.getOrthonormalFrames(True, *ordered, False)
+                        
             # Transform each third vector and to-next-frame displacement into
             # this frame via matmul.
             # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
             local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+            local_snaps = pm.einsumMatVecMul(mats, snaps)
+            local_crackles = pm.einsumMatVecMul(mats, crackles)
 
             # We'll now return all of the data needed to convert velocity,
             # acceleration, and jerk multipliers into local vectors in these
@@ -1133,7 +1184,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
             # we can just return the following:
             c_res = (
-                mags0, mags_p1, mags_o1, mags_p20, mags_p21, mags_o2,
+                *all_mags, *(local_snaps.T), *(local_crackles.T),
                 *(local_diffs.T)
             )
 

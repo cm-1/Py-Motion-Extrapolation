@@ -69,12 +69,10 @@ def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
     deg2_acc_lpad[1:] = deg2_acc
     deg2_acc_lpad[0] = default_acc_dir
 
-    deg1_vel_frames = pm.getOrthonormalFrames(deg1_vels, deg2_acc_lpad)
-    deg2_vel_frames = pm.getOrthonormalFrames(deg2_vels, deg2_acc)
 
-    # Transposes
-    deg1_vel_frames = np.swapaxes(deg1_vel_frames, -1, -2)
-    deg2_vel_frames = np.swapaxes(deg2_vel_frames, -1, -2)
+    _, deg1_vel_frames = pm.getOrthonormalFrames(True, deg1_vels, deg2_acc_lpad)
+    _, deg2_vel_frames = pm.getOrthonormalFrames(True, deg2_vels, deg2_acc)
+
     next_deg1_vel_frames = deg1_vel_frames[1:]
     # unit_deg2_vels = pm.normalizeAll(deg2_vels)
     n_next_translations = len(translations) - 1

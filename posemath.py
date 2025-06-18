@@ -189,17 +189,66 @@ def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
     orthos = vectors - parallels
     return (parallels, orthos)
 
-def getOrthonormalFrames(vecs0: np.ndarray, vecs1: np.ndarray = None,
+def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
+                         vecs1: typing.Optional[np.ndarray] = None,
+                         vecs2: typing.Optional[np.ndarray] = None, 
                          vecs0_are_unit_len: bool = False):
-    mats = np.empty(vecs0.shape[:-1] + (3, 3))
-    mats[..., 0] = vecs0 if vecs0_are_unit_len else safelyNormalizeArray(vecs0)
-    if vecs1 is None:
+    vecs1_na = (vecs1 is None)
+    vecs2_na = (vecs2 is None)
+
+    assert vecs2_na or (not vecs1_na), "Shouldn't specify vecs2 but not vecs1!"
+
+    mags0 = \
+        np.asarray(1.0) if vecs0_are_unit_len \
+        else np.linalg.norm(vecs0, axis=-1)
+    
+    ret_mags = (mags0,)
+    
+    unit_vecs0 = vecs0 if vecs0_are_unit_len else safelyNormalizeArray(
+        vecs0, mags0[:, np.newaxis]
+    )
+
+    if vecs1_na:
         vecs1 = np.ones_like(vecs0)
-    v0v1dot = einsumDot(mats[..., 0], vecs1)
-    parallels = scalarsVecsMul(v0v1dot, mats[..., 0])
-    mats[..., 1] = safelyNormalizeArray(vecs1 - parallels)
-    mats[..., 2] = np.cross(mats[..., 0], mats[..., 1])
-    return mats
+
+    # Find the magnitude of the second vector that is parallel to and
+    # orthogonal to the first.
+    mags_p1 = einsumDot(vecs1, unit_vecs0) # Parallel magnitude
+    vecs_p1 = scalarsVecsMul(mags_p1, unit_vecs0) # Parallel vec3
+    vecs_o1 = vecs1 - vecs_p1 # Orthogonal vec3
+    mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
+
+    unit_vecs1 = safelyNormalizeArray(
+        vecs_o1, mags_o1[:, np.newaxis]
+    )
+
+    if not vecs1_na:
+        ret_mags += (mags_p1, mags_o1)
+
+    unit_vecs2: np.ndarray
+    if vecs2_na:
+        unit_vecs2= np.cross(unit_vecs0, unit_vecs1)
+    else:
+        mags_p20 = einsumDot(vecs2, unit_vecs0) # Parallel magnitude
+        vecs_p20 = scalarsVecsMul(mags_p20, unit_vecs0)
+        mags_p21 = einsumDot(vecs2, unit_vecs1)
+        vecs_p21 = scalarsVecsMul(mags_p21, unit_vecs1)
+        vecs_o2 = vecs2 - (vecs_p20 + vecs_p21)
+        mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
+
+        unit_vecs2 = safelyNormalizeArray(
+            vecs_o2, mags_o2[:, np.newaxis]
+        )
+
+        ret_mags += (mags_p20, mags_p21, mags_o2)
+
+    stack_ax = 1 if returned_mats_are_world2vecs else 2
+    mats = np.stack((unit_vecs0, unit_vecs1, unit_vecs2), axis=stack_ax)
+
+    return ret_mags, mats
+
+
+   
 
 def getPlaneAxes(roughAxes0, roughAxes1):
     nax0 = normalizeAll(roughAxes0)
