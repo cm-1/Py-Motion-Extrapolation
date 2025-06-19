@@ -135,6 +135,8 @@ class MOTION_DATA(Enum):
     CURVATURE = 70
     LAST_CURVATURE = 71
 
+    CRACKLE_VEC3 = 72
+
     # CURVATURE_V = 72
     # CURVATURE_A = 73
     # CURVATURE_J = 74
@@ -150,7 +152,16 @@ class RELATIVE_AXIS(Enum):
     ACC_ORTHO_DEG1 = 4
     PLANE_ORTHO = 5
     ROTATION = 6
-    ITSELF = 7
+    JERK_FULL = 7
+    SNAP_FULL = 8
+    ITSELF = 9
+
+MOTION_DATA_RELATIVE_AXIS_PAIRS = {
+    MOTION_DATA.ACC_VEC3: RELATIVE_AXIS.ACC_FULL,
+    MOTION_DATA.ROTATION_VEC3: RELATIVE_AXIS.ROTATION,
+    MOTION_DATA.JERK_VEC3: RELATIVE_AXIS.JERK_FULL,
+    MOTION_DATA.JERK_ERR_VEC3: RELATIVE_AXIS.SNAP_FULL,
+}
 
 class ANG_OR_MAG(Enum):
     ANG = 1
@@ -211,11 +222,14 @@ class Vec3Data:
             # things like "time since stationary" at a video start) and then
             # make separate trees based on whether or not those attributes
             # are "available"?
-            if self.norms[0] == 0.0:
-                if np.any(self.vecs[0] != 0):
-                    raise Exception("Norm and scaled vec 0-len inconsisitency!")
-                self.unit_vecs[0] = 0.0
-                # MAYBE setting unit dir to 0 is a workaround if this happens?
+            for i in range(2):
+                if self.norms[i] == 0.0:
+                    if np.any(self.vecs[i] != 0.0):
+                        raise Exception(
+                            "Norm and scaled vec 0-len inconsistency!"
+                        )
+                    self.unit_vecs[i] = 0.0
+                    # MAYBE setting unit dir to 0 is a workaround in this case?
 
 class OneHotMotionData(typing.NamedTuple):
     base_cat: MOTION_DATA
@@ -485,8 +499,12 @@ class CalcsForVideo:
         dict_to_update[kmbidir] = np.abs(dots_with_unit_axis)
         
         curr_angs = np.arccos(np.clip(dots_with_unit_axis / vec_norms, -1, 1))
-        if vec_norms[0] == 0.0:
-            curr_angs[0] = 0.0
+        # TODO: Handle jerk, snap, and crackle better here.
+        # Probably best to have a param where if these columns are included,
+        # then the beginning "zero" rows are excluded?
+        for i in range(2):
+            if vec_norms[i] == 0.0:
+                curr_angs[i] = 0.0
         dict_to_update[ka] = curr_angs
         dict_to_update[kabidir] = pm.getAcuteAngles(curr_angs)
 
@@ -697,7 +715,7 @@ class CalcsForVideo:
                     prev_translations, d_under_thresh.flatten(), 
                     a_over_thresh.flatten(),
                     max_opt_iters=self.min_jerk_opt_iter_lim,
-                    vels = deg1_vels, accs = deg2_accs, jerks = t_jerk_amt
+                    vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks
                 )
                 mj_preds = mj_preds[-len(acc_preds):]
                 mj_na = np.isnan(mj_preds)[:, 0]
@@ -834,6 +852,10 @@ class CalcsForVideo:
             prev_jerk_errs[0] = 0 # Overwrite with 0 so it = the "4th derivative" 
             prev_jerk_err_mags = curr_err_norms[jerk_ind][:-1]
             prev_jerk_err_mags[0] = 0
+
+            crackles = np.empty((n_jerk_preds, 3))
+            crackles[2:] = np.diff(prev_jerk_errs[1:], 1, axis=0) / step
+            crackles[:2] = 0.0
             
             acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
             acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
@@ -907,6 +929,13 @@ class CalcsForVideo:
             )
             motion_data[MOTION_DATA.PLANE_NORMAL_DOT] = plane_dots
             
+            unit_jerks = np.empty((n_jerk_preds + 1, 3))
+            unit_snaps = np.empty_like(unit_jerks)
+            unit_jerks[1:] = pm.safelyNormalizeArray(scaled_jerks, jerk_norms[..., np.newaxis])
+            unit_jerks[:1] = 0.0
+
+            unit_snaps[2:] = pm.safelyNormalizeArray(prev_jerk_errs[1:])
+            unit_snaps[:2] = 0.0
 
             rot_v3d = Vec3Data(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
             vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
@@ -923,41 +952,35 @@ class CalcsForVideo:
                     prev_circ_errs_acc, None, prev_circ_err_mags_acc
                 ),
                 MD.JERK_ERR_VEC3: V3D(prev_jerk_errs, None, prev_jerk_err_mags),
+                MD.CRACKLE_VEC3: V3D(crackles, None, None),
                 MD.ROT_ACC_VEC3: V3D(rot_accs[-n_jerk_preds:], None, None)
             }
             for md_k, v3s in vec3s_dict.items():
                 motion_data[SMD(md_k, RA.ITSELF, AM.MAG, False, False)] = v3s.norms
 
-
             rel_axes_dict: typing.Dict[RELATIVE_AXIS, NDArray] = {
                 RA.VEL_DEG1: unit_vels_deg1, RA.VEL_DEG2: unit_vels_deg2,
                 RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG1: unit_acc_ortho_deg1_vecs,
-                RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes
+                RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes,
+                RA.JERK_FULL: unit_jerks, RA.SNAP_FULL: unit_snaps
             }
 
             ra_keys = list(rel_axes_dict.keys())
-            vel_ra_keys = [RELATIVE_AXIS.VEL_DEG1, RELATIVE_AXIS.VEL_DEG2]
-
 
             ra_mats = np.stack([
                 rel_axes_dict[k][-(n_jerk_preds + 1):] for k in ra_keys
             ], axis=1)
 
-            vel_ra_mats = ra_mats[:, [ra_keys.index(k) for k in vel_ra_keys]]
 
             for shiftRel in [True, False]:
                 ra_start = -(n_jerk_preds + int(shiftRel))
                 ra_end = -1 if shiftRel else None
 
                 ra_mats_sub = ra_mats[ra_start:ra_end]
-                vel_ra_mats_sub = vel_ra_mats[ra_start:ra_end]
 
                 for md_k, v3s in vec3s_dict.items():
                     curr_ra_mats = ra_mats_sub
                     curr_ra_keys = ra_keys
-                    if md_k == MOTION_DATA.ACC_VEC3:
-                        curr_ra_mats = vel_ra_mats_sub
-                        curr_ra_keys = vel_ra_keys
 
 
                     ra_dots = pm.einsumMatVecMul(
@@ -974,6 +997,11 @@ class CalcsForVideo:
                                     key_precalced = True
                                     break
                             if key_precalced:
+                                continue
+                            # Also skip if the axis matches the vec3, since we
+                            # have a specialized "itself" axis for that.
+                            if md_k in MOTION_DATA_RELATIVE_AXIS_PAIRS and \
+                                MOTION_DATA_RELATIVE_AXIS_PAIRS[md_k] == ra_k:
                                 continue
 
                         self._addDotsAndAngs(
