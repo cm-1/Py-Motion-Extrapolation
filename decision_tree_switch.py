@@ -430,9 +430,13 @@ AVD2_KEY = SpecifiedMotionData(
 )
 AVD2_DATA_IND = dog.motion_data_keys.index(AVD2_KEY)
 
+bounce_ang_key = SpecifiedMotionData(
+    MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG,
+    False, True
+)
 
 col_sub_keys = [
-    AVD2_KEY, MOTION_DATA.BOUNCE_ANGLE, MOTION_DATA.VEL_BCS_RATIOS,
+    AVD2_KEY, bounce_ang_key, MOTION_DATA.VEL_BCS_RATIOS,
     MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
     MOTION_DATA.DISP_MAG_RATIO
 ]
