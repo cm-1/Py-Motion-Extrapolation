@@ -480,16 +480,22 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
     in_shape = len(nonco_col_nums) + (6 if use_resid_data else 0)
-    model = keras.Sequential([
-        keras.layers.Input((in_shape,)),
-        # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dense(12) #6)
-    ])
+
+    make_dense = lambda num_nodes = nodes_per_layer: keras.layers.Dense(
+        num_nodes, activation=vel_nn_activation #, kernel_initializer=initer
+    )
+
+    in_layer = keras.layers.Input((in_shape,))
+
+    x = make_dense()(in_layer)
+    for _ in range(2):
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = make_dense()(x)
+    
+    out = keras.layers.Dense(12)(x)
+
+    model = keras.Model(inputs = in_layer, outputs = out)
+
     if loss is None:
         loss = poseLossJAV
 
