@@ -771,17 +771,29 @@ def customPoseLoss(y_true, y_pred):
 # tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
 tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
 
-input_dim = dog.concat_train_data.shape[1]
+input_dim = dog.col_subset_train.shape[1]
 num_classes = len(MOTION_MODEL)
 
 onehot_train_labels = tf.one_hot(dog.concat_train_labels, num_classes)
 
+# I wanted to try to get the below to overfit to make sure I wasn't doing
+# "something wrong" before worrying about regularization. Initial attempts to
+# overfit failed, and train performance was no better than with a decision tree.
+# I finally succeeded in getting it to start overfitting (though it also
+# outperformed the tree slightly on test data) by using 3 hidden layers, 2048
+# nodes each, relu activation, no regularization, sigmoid activation for final
+# layer, CategoricalCrossentropy loss for training, using only noncolinear
+# columns, default 'adam' optimizer, batch size 1024, and then training for a
+# few sets of 5 epochs. These ideas generally came from:
+# https://stats.stackexchange.com/questions/474738/how-do-i-intentionally-design-an-overfitting-neural-network
+nncl_per_layer_num = 2048
+nncl_act = 'relu'
 tfmodel = keras.Sequential([
     keras.layers.Input((input_dim,)),
-    keras.layers.Dense(512, activation='sigmoid'),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
     # keras.layers.Dropout(0.2),
-    keras.layers.Dense(512, activation='sigmoid'),
-    keras.layers.Dense(512, activation='sigmoid'),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
     # keras.layers.Dense(1024, activation='sigmoid'),
     # keras.layers.Dropout(0.2),
     # keras.layers.Dense(1, activation='sigmoid'),
@@ -789,12 +801,16 @@ tfmodel = keras.Sequential([
 
 tfmodel.summary()
 
-tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
-adam = keras.optimizers.Adam(0.01)
+adam = 'adam' #keras.optimizers.Adam(0.01)
+catcross = True
+tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True) \
+              if catcross else tf_loss_fn
+ncll_y = onehot_train_labels if catcross else dog.concat_train_class_errs
 
-tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
+tfmodel.compile(optimizer=adam, loss=tf_loss_fn2)
+#%%
 nn_class_hist = tfmodel.fit(
-    dog.concat_train_data, dog.concat_train_class_errs, epochs=5, shuffle=True
+    dog.col_subset_train, ncll_y, epochs=5, batch_size = 1024, shuffle=True
 )
 #%%
 bgtrain = big_tree.predict(dog.concat_train_data)
@@ -805,12 +821,12 @@ mclf_train = mclf.predict(dog.concat_train_data)
 mclf_train_score = dog.getClassScoresTrain(mclf_train)
 print("Smaller tree train errs=", mclf_train_score)
 
-tf_train_preds = np.argmax(tfmodel(dog.concat_train_data).numpy(), axis=1)
+tf_train_preds = np.argmax(tfmodel(dog.col_subset_train).numpy(), axis=1)
 tf_train_errs = dog.getClassScoresTrain(tf_train_preds)
 print("TF train errs=", tf_train_errs)
 print()
 
-tf_test_preds = np.argmax(tfmodel(dog.concat_test_data).numpy(), axis=1)
+tf_test_preds = np.argmax(tfmodel(dog.col_subset_test).numpy(), axis=1)
 tf_test_errs = dog.getClassScoresTest(tf_test_preds)
 print("TF test errs=", tf_test_errs)
 
