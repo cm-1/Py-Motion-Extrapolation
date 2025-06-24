@@ -86,7 +86,7 @@ class PoseLoader(ABC):
     # My code is a lot simpler (e.g., assumes random seed's type is never an 
     # existing rng instead of an int) but should hopefully be "good enough".
     @staticmethod
-    def trainValidationTestSplit(data_to_split: NDArray,
+    def trainValidationTestSplit(data_to_split: typing.Union[NDArray, typing.List],
                                  validation_ratio: float = 0.15,
                                  test_ratio: float = 0.2,
                                  random_seed: int = 0):
@@ -148,9 +148,6 @@ class PoseLoader(ABC):
     # human-written.
     @classmethod
     def _setupPosePaths(cls):
-        if cls._dir_paths_initialized:
-            return
-            
         settingsDir = pathlib.Path(__file__).parent.resolve()
         jsonPath = settingsDir / "config" / "local.config.json"
         d = None
@@ -252,20 +249,83 @@ class PoseLoader(ABC):
         return len(self._translationsGTNP)
 
     @staticmethod
-    def _randFloat(upper: float, lower: float = None):
+    def _randHelper(shape, upper: float, lower: typing.Optional[float] = None):
         if lower is None:
             lower = -upper
+        return np.random.uniform(lower, upper, shape)
+
+    @staticmethod
+    def _randFloat(upper: float, lower: typing.Optional[float] = None):
         # Return single float extracted from array of length 1.
-        return np.random.uniform(lower, upper, 1)[0]
-    
+        return PoseLoader._randHelper(1, upper, lower)[0]
+
+class SyntheticPoseLoader(PoseLoader):
+    def __init__(self, num_frames: int, const_rot_accel: bool, helix: bool,
+                 const_deriv_lim: int = -1):
+        super(SyntheticPoseLoader, self).__init__()
+
+        self.num_frames = num_frames
+        self.const_rot_accel = const_rot_accel
+        self.helix = helix
+        self.const_deriv_lim = const_deriv_lim
+        # Reusability-TODO: Change the constructor so that seeds can be
+        # specified. Then, here, save the seeds if they're provided, and if not,
+        # create random seeds. Could use a lambda for that part.
+
+    @classmethod
+    def getAllIDs(cls, max_id: int = 1) -> typing.List:
+        raise AttributeError("Synthetic pose loader lacks pre-set IDs.")
+
+    @classmethod
+    def _setPosePathsFromJSON(cls, json_read_result):
+        pass
+
+    def getVidID(self):
+        # Reusability-TODO: Also return the random seeds used to generate the
+        # data. 
+        return (
+            self.num_frames, self.const_rot_accel, self.helix,
+            self.const_deriv_lim
+        )
+
+    def _getPosesFromDisk(self):
+        rotations = np.empty((0,3))
+        translations = np.empty((0,3))
+
+        if self.helix:
+            rotations, translations = self.getHelixRotationMatsAndPositions(
+                self.helix
+            )
+        elif self.const_rot_accel:
+            rotations = self.getConstAngAccelMats()
+
+        if self.const_deriv_lim > 0:
+            init_vals = [
+                self._randHelper(3, 33) for _ in range(self.const_deriv_lim + 1)
+            ]
+            diffs = np.broadcast_to(init_vals[-1], (self.num_frames, 3))
+            for iv in init_vals[-2::-1]:
+                diffs = iv + np.cumsum(diffs, axis=0)
+            translations = diffs          
+
+        # If translations or rotations were not created above, set to defaults.
+        if len(translations) == 0:
+            translations = np.zeros((self.num_frames, 3))
+        if len(rotations) == 0:
+            iden = np.eye(3).reshape(1, 3, 3)
+            rotations = np.repeat(iden, self.num_frames, axis=0)
+
+        gtMatData = [rotations, translations]
+        calcMatData = None # May use this in the future somehow?
+        return (gtMatData, calcMatData)
+
     # Updates self and then returns the random rotation.
-    def _applyRandRotToAll(self, rot_mats):
+    @staticmethod
+    def _applyRandRotToAll(rot_mats):
         rr = pm.randomRotationMat()
         # Front-multiply each other matrix by our random one.
         new_mats = np.einsum('ij,bjk->bik', rr, rot_mats)
-        self._rotationMatsGTNP = new_mats
-        self._rotationsGTNP = pm.axisAngleFromMatArray(new_mats)
-        return rr
+        return rr, new_mats
 
     # The times parameter may either 1D array or a "keepdims=True" result.
     # The axis can be a vec3 or an array of vec3s.
@@ -295,8 +355,8 @@ class PoseLoader(ABC):
         return (delta_mats, const_a_disp_angles)
 
     # Replace the file-loaded rotation data with a const-angular-accel sim.
-    def replaceDataWithConstAngAccel(self):
-        num_const_a_vals = self._getNumFrames()
+    def getConstAngAccelMats(self):
+        num_const_a_vals = self.num_frames
         start_ang_vel = np.random.uniform(-0.08, 0.08, 3)
         start_ang_vel_angle = np.linalg.norm(start_ang_vel)
         const_a_ax = start_ang_vel / start_ang_vel_angle
@@ -319,19 +379,19 @@ class PoseLoader(ABC):
             start_ang_vel_angle
         )
 
-        _ = self._applyRandRotToAll(delta_mats)
-        
-        return
-    
+        return self._applyRandRotToAll(delta_mats)[1]
+            
 
-    def replaceDataWithHelix(self, useAccel: bool):
+    def getHelixRotationMatsAndPositions(self, useAccel: bool):
+        retVal: typing.Tuple[NDArray, NDArray]
         if useAccel:
-            self._spiralHelixHelper(self._spiralHelixWithAccXY)
+            retVal = self._spiralHelixHelper(self._spiralHelixWithAccXY)
         else:
-            self._spiralHelixHelper(self._helixXY)
-
+            retVal = self._spiralHelixHelper(self._helixXY)
+        return retVal
+    
     def _spiralHelixHelper(self, custom_func):
-        num_frames = self._getNumFrames()
+        num_frames = self.num_frames
 
         rot_rate = self._randFloat(np.pi / 4)
         v_mag = self._randFloat(35)
@@ -357,10 +417,10 @@ class PoseLoader(ABC):
         spiral_shift = np.random.uniform(-50, 50, 3)
         vertical_spiral = centred_spiral + spiral_shift
 
-        spiral_tilt = self._applyRandRotToAll(rot_mats)
-        self._translationsGTNP = vertical_spiral @ spiral_tilt.transpose()
+        spiral_tilt, final_rot_mats = self._applyRandRotToAll(rot_mats)
+        final_translations = vertical_spiral @ spiral_tilt.transpose()
 
-        return
+        return (final_rot_mats, final_translations)
 
     def _spiralHelixWithAccXY(self, v_mag: float, rot_rate: float,
                               times: np.ndarray,
@@ -514,6 +574,7 @@ class PoseLoaderBCOT(PoseLoader):
         PoseLoaderBCOT._CV_POSE_EXPORT_DIR = pathlib.Path(
             json_read_result["bcot_result_directory"]
         )
+        PoseLoaderBCOT._dir_paths_initialized = True
 
     def _getPosesFromDisk(self):
 
@@ -531,7 +592,8 @@ class PoseLoaderBCOT(PoseLoader):
 
     @staticmethod
     def isBodySeqPairValid(bodyIndex: int, seqIndex: int, exclude_cam2: bool = False):
-        PoseLoaderBCOT._setupPosePaths()
+        if not PoseLoaderBCOT._dir_paths_initialized:
+            PoseLoaderBCOT._setupPosePaths()
 
         seq = BCOT_SEQ_NAMES[seqIndex]
         bod = BCOT_BODY_NAMES[bodyIndex]
@@ -607,7 +669,6 @@ class PoseLoaderTUDL(PoseLoaderBOP):
         (False, 3): (1806, 3794, 5117, 6706, 8246, 9772, 11851)
     }
     _DATASET_DIR = None
-    _dir_paths_initialized = False
 
 
     def __init__(self, is_test: bool, seq_num: int, subseq_num: int):
@@ -673,7 +734,6 @@ class PoseLoaderTUDL(PoseLoaderBOP):
     
 class PoseLoaderPauwels(PoseLoader):
     _DATASET_DIR = None
-    _dir_paths_initialized = False
 
     def __init__(self, cvFrameSkipForLoad = -1):
         '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
