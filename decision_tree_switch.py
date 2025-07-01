@@ -745,19 +745,53 @@ print("Most important feature inds:", scramble_rank[:10], sep='\n')
 #%%
 import shap
 default_rng = np.random.default_rng()
-rng_choice = default_rng.choice(dog.col_subset_test, 100, False, axis=0)
-shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
+shap_bg = default_rng.choice(dog.col_subset_test, 100, False, axis=0)
+shap_ex = shap.DeepExplainer(bcs_model, shap_bg)
 
 #%%
-rng_single = default_rng.choice(rng_choice, 1, axis=0)
-shap_values = shap_ex.shap_values(rng_single)#, samples=500)
-shap.initjs()
-
-# shap.summary_plot(shap_values=shap_values, features=rng_choice[35:36])
-
-shap.force_plot(
-    shap_ex.expected_value[1].numpy(), shap_values[:, :, 1] #, feature_names=X_train.columns
+shap_test_inds = default_rng.choice(len(dog.col_subset_test), 200, False, axis=0)
+shap_test = dog.col_subset_test[shap_test_inds]
+# If input shape is (n_rows, n_feats) and output shape is (n_rows, n_outs), shap
+# values shape is (n_rows, n_feats, n_outs)
+shap_values_tf = shap_ex(shap_test)
+preds_shap_bg = bcs_model(shap_bg).numpy()
+# SHAP DeepExplainer seems to leave base_values as None, which breaks certain
+# plots, so I need to fill it in manually.
+shap_values_tf.base_values = np.broadcast_to(
+    preds_shap_bg.mean(axis=0), (len(shap_test), preds_shap_bg.shape[-1])
 )
+# We also set the feature_names so that plots include them.
+shap_values_tf.feature_names = nonco_featnames
+shap.initjs()
+#%%
+output_shap_ind = 11
+shap.summary_plot(shap_values_tf.values[..., output_shap_ind], shap_test, feature_names=nonco_featnames)
+
+#%%
+fig, ax = shap.partial_dependence_plot(
+    77,
+    lambda x: bcs_model.predict(x, verbose=0)[..., output_shap_ind],
+    shap_test,
+    model_expected_value=True,
+    feature_expected_value=True,
+    show=False,
+    ice=False,
+)
+
+#%%
+shap.plots.bar(shap_values_tf[..., output_shap_ind].abs.max(0))
+
+#%%
+shap.plots.scatter(
+    shap_values_tf[:, 100, output_shap_ind],
+    color=shap_values_tf[..., output_shap_ind]
+)
+
+#%%
+clustering = shap.utils.hclust(shap_test) #, bcotjav.jav_test[shap_test_inds, 12:15])
+#%%
+shap.plots.bar(shap_values_tf[..., output_shap_ind], clustering=clustering)
+
 #%%
 
 ################################################################################
