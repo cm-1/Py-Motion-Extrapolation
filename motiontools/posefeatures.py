@@ -157,13 +157,26 @@ class RELATIVE_AXIS(Enum):
     SNAP_FULL = 8
     ITSELF = 9
 
-MOTION_DATA_RELATIVE_AXIS_PAIRS = {
-    MOTION_DATA.VEL_DEG1_VEC3: RELATIVE_AXIS.VEL_DEG1,
-    MOTION_DATA.ACC_VEC3: RELATIVE_AXIS.ACC_FULL,
-    MOTION_DATA.ROTATION_VEC3: RELATIVE_AXIS.ROTATION,
-    MOTION_DATA.JERK_VEC3: RELATIVE_AXIS.JERK_FULL,
-    MOTION_DATA.JERK_ERR_VEC3: RELATIVE_AXIS.SNAP_FULL,
-}
+class Vec3RelAxisPair(typing.NamedTuple):
+    vec3: MOTION_DATA
+    axis: RELATIVE_AXIS
+
+EQ_VEC3_AX_PAIRS: typing.List[Vec3RelAxisPair] = [
+    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1),
+    Vec3RelAxisPair(MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.ACC_FULL),
+    Vec3RelAxisPair(MOTION_DATA.ROTATION_VEC3, RELATIVE_AXIS.ROTATION),
+    Vec3RelAxisPair(MOTION_DATA.JERK_VEC3, RELATIVE_AXIS.JERK_FULL),
+    Vec3RelAxisPair(MOTION_DATA.JERK_ERR_VEC3, RELATIVE_AXIS.SNAP_FULL)
+]
+
+ORTHO_VEC3_AX_PAIRS = [
+    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.ACC_ORTHO_DEG1),
+    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.PLANE_ORTHO),
+    # Vec3RelAxisPair(MOTION_DATA.VEL_DEG2_VEC3, RELATIVE_AXIS.PLANE_ORTHO),
+    Vec3RelAxisPair(MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.PLANE_ORTHO)
+]
+
+VEC3_AX_PAIRS_TO_SKIP = EQ_VEC3_AX_PAIRS + ORTHO_VEC3_AX_PAIRS 
 
 class ANG_OR_MAG(Enum):
     ANG = 1
@@ -1005,10 +1018,11 @@ class CalcsForVideo:
                                     break
                             if key_precalced:
                                 continue
-                            # Also skip if the axis matches the vec3, since we
-                            # have a specialized "itself" axis for that.
-                            if md_k in MOTION_DATA_RELATIVE_AXIS_PAIRS and \
-                                MOTION_DATA_RELATIVE_AXIS_PAIRS[md_k] == ra_k:
+                            # Also skip if the axis matches or is ortho to the
+                            # vec3, since we have a specialized "itself" axis 
+                            # for the first case and the second yields no useful
+                            # data.
+                            if (md_k, ra_k) in VEC3_AX_PAIRS_TO_SKIP:
                                 continue
 
                         self._addDotsAndAngs(
