@@ -381,6 +381,8 @@ colin_thresh = 0.7 # Threshold for collinearity.
 nonco_cols, co_mat = pm.non_collinear_features(
     dog.concat_train_data, colin_thresh
 )
+def indsForKeysMD(keysMD):
+    return [dog.motion_data_keys.index(k) for k in keysMD]
 
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
@@ -388,25 +390,78 @@ onehot_inds = [
     i for i, k in enumerate(dog.motion_data_keys)
     if isinstance(k, OneHotMotionData)
 ]
+GT_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if len(k.name) == 3 and k.name[:2] == "GT"
+]
+ang_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.ang_or_mag == ANG_OR_MAG.ANG
+]
+bidir_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.bidirectional
+]
+circ_vec3_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.base_cat.name[:4].upper() == "CIRC"
+]
+veld_ra_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.VEL_DEG2
+]
+veld2_dot_inds = [
+    i for i, k in enumerate(dog.motion_data_keys)
+    if "DEG2_DOT" in k.name.upper()
+]
+# plane_ra_inds = [
+#     i for i, k in enumerate(dog.motion_data_keys)
+#     if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.PLANE_ORTHO
+# ]
+all_circ_inds = [
+    i for i, k in enumerate(dog.motion_data_keys) if "CIRC" in k.name.upper()
+]
+all_ratio_inds = [
+    i for i, k in enumerate(dog.motion_data_keys) if "TIMESCALED" in k.name.upper()
+]
+misc_rem_inds = indsForKeysMD([
+    MOTION_DATA.INV_VEL_BCS_RATIOS, MOTION_DATA.RAD_DIFF,
+    MOTION_DATA.SPEED_ACC_RATIO, MOTION_DATA.DISP_MAG_DIFF,
+    MOTION_DATA.PLANE_NORMAL_DOT, MOTION_DATA.SPEED_ORTHO_ACC_RATIO
+])
 
 nonco_cols[:] = True
-nonco_cols[onehot_inds] = True # Needs one-hot encoding or similar.
+nonco_cols[onehot_inds] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
+nonco_cols[GT_inds] = False
+nonco_cols[ang_inds] = False
+nonco_cols[bidir_inds] = False
+nonco_cols[circ_vec3_inds] = False
+nonco_cols[all_circ_inds] = False
+nonco_cols[all_ratio_inds] = False
+nonco_cols[misc_rem_inds] = False
+nonco_cols[veld_ra_inds] = False
+nonco_cols[veld2_dot_inds] = False
+# nonco_cols[plane_ra_inds] = False
+
 
 AVD2_KEY = SpecifiedMotionData(
     MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG, False, True
 )
-AVD2_DATA_IND = dog.motion_data_keys.index(AVD2_KEY)
 
+bounce_ang_key = SpecifiedMotionData(
+    MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG,
+    False, True
+)
 
 col_sub_keys = [
-    AVD2_KEY, MOTION_DATA.BOUNCE_ANGLE, MOTION_DATA.VEL_BCS_RATIOS,
+    AVD2_KEY, bounce_ang_key, MOTION_DATA.VEL_BCS_RATIOS,
     MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
     MOTION_DATA.DISP_MAG_RATIO
 ]
-col_indices = [dog.motion_data_keys.index(k) for k in col_sub_keys]
-nonco_cols[col_indices] = True
+col_indices = indsForKeysMD(col_sub_keys)
+# nonco_cols[col_indices] = True
 
 nonco_col_nums = np.where(nonco_cols)[0]
 
@@ -445,16 +500,22 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
     in_shape = len(nonco_col_nums) + (6 if use_resid_data else 0)
-    model = keras.Sequential([
-        keras.layers.Input((in_shape,)),
-        # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dense(12) #6)
-    ])
+
+    make_dense = lambda num_nodes = nodes_per_layer: keras.layers.Dense(
+        num_nodes, activation=vel_nn_activation #, kernel_initializer=initer
+    )
+
+    in_layer = keras.layers.Input((in_shape,))
+
+    x = make_dense()(in_layer)
+    for _ in range(2):
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = make_dense()(x)
+    
+    out = keras.layers.Dense(12)(x)
+
+    model = keras.Model(inputs = in_layer, outputs = out)
+
     if loss is None:
         loss = poseLossJAV
 
@@ -654,9 +715,9 @@ printErrStats3D(reframed_JAV_errs)
 ################################################################################
 
 # Get the column names for each of the kept columns.
-nonco_featnames = [
+nonco_featnames = np.array([
     k.name for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]
-]
+])
 
 # Finds the errors for the model when one of the test data columns has its
 # data scrambled, as per the advice of a StackOverflow post on how to figure out
@@ -704,19 +765,83 @@ print("Most important feature inds:", scramble_rank[:10], sep='\n')
 #%%
 import shap
 default_rng = np.random.default_rng()
-rng_choice = default_rng.choice(dog.col_subset_test, 100, False, axis=0)
-shap_ex = shap.DeepExplainer(bcs_model, rng_choice)
+shap_bg = default_rng.choice(dog.col_subset_test, 100, False, axis=0)
+shap_ex = shap.GradientExplainer(bcs_model, shap_bg)
 
 #%%
-rng_single = default_rng.choice(rng_choice, 1, axis=0)
-shap_values = shap_ex.shap_values(rng_single)#, samples=500)
+shap_test_inds = default_rng.choice(len(dog.col_subset_test), 200, False, axis=0)
+shap_test = dog.col_subset_test[shap_test_inds]
+# If input shape is (n_rows, n_feats) and output shape is (n_rows, n_outs), shap
+# values shape is (n_rows, n_feats, n_outs)
+shap_values_tf = shap_ex(shap_test)
+preds_shap_bg = bcs_model(shap_bg).numpy()
+# SHAP DeepExplainer seems to leave base_values as None, which breaks certain
+# plots, so I need to fill it in manually unless I use GradientExplainer.
+# shap_values_tf.base_values = np.broadcast_to(
+#     preds_shap_bg.mean(axis=0), (len(shap_test), preds_shap_bg.shape[-1])
+# )
+# We also set the feature_names so that plots include them.
+shap_values_tf.feature_names = nonco_featnames
 shap.initjs()
+shap_sort = np.argsort(
+    np.mean(np.abs(shap_values_tf.values), axis=0), axis=0
+)[::-1].transpose()
+#%%
+output_shap_ind = 0
+shap.summary_plot(shap_values_tf.values[..., output_shap_ind], shap_test, feature_names=nonco_featnames)
 
-# shap.summary_plot(shap_values=shap_values, features=rng_choice[35:36])
-
-shap.force_plot(
-    shap_ex.expected_value[1].numpy(), shap_values[:, :, 1] #, feature_names=X_train.columns
+#%%
+fig, ax = shap.partial_dependence_plot(
+    77,
+    lambda x: bcs_model.predict(x, verbose=0)[..., output_shap_ind],
+    shap_test,
+    model_expected_value=True,
+    feature_expected_value=True,
+    show=False,
+    ice=False,
 )
+
+#%%
+shap.plots.bar(shap_values_tf[..., output_shap_ind].abs.max(0))
+
+#%%
+shap.plots.scatter(
+    shap_values_tf[:, 100, output_shap_ind],
+    color=shap_values_tf[..., output_shap_ind]
+)
+
+#%%
+clustering = shap.utils.hclust(shap_test) #, bcotjav.jav_test[shap_test_inds, 12:15])
+#%%
+shap.plots.bar(shap_values_tf[..., output_shap_ind], clustering=clustering)
+
+#%% Graphing the SHAP and scramble importance rankings.
+num_features = len(nonco_col_nums)
+nonco_arange = np.arange(num_features)
+for skip in range(4):
+    plt.bar(
+        scramble_rank[:, skip] + skip / 4, num_features - nonco_arange,
+        width = 1/4, label="skip " + str(skip)
+    )
+plt.legend()
+plt.xticks(nonco_arange, minor=True)
+plt.xlabel("Feature number")
+plt.ylabel("Importance rank")
+plt.show()
+
+#%%
+num_muls = len(shap_sort)
+for mul in range(num_muls):
+    plt.bar(
+        shap_sort[mul] + mul / num_muls, num_features - nonco_arange,
+        width = 1/12, label="mul " + str(skip)
+    )
+plt.legend()
+plt.xticks(nonco_arange, minor=True)
+plt.xlabel("Feature number")
+plt.ylabel("Importance rank")
+plt.show()
+
 #%%
 
 ################################################################################
@@ -730,17 +855,29 @@ def customPoseLoss(y_true, y_pred):
 # tf_concat_train_errs = tf.convert_to_tensor(concat_train_errs, dtype=tf.float32)
 tf_loss_fn = customPoseLoss # CustomLossWithErrors(concat_train_errs)
 
-input_dim = dog.concat_train_data.shape[1]
+input_dim = dog.col_subset_train.shape[1]
 num_classes = len(MOTION_MODEL)
 
 onehot_train_labels = tf.one_hot(dog.concat_train_labels, num_classes)
 
+# I wanted to try to get the below to overfit to make sure I wasn't doing
+# "something wrong" before worrying about regularization. Initial attempts to
+# overfit failed, and train performance was no better than with a decision tree.
+# I finally succeeded in getting it to start overfitting (though it also
+# outperformed the tree slightly on test data) by using 3 hidden layers, 2048
+# nodes each, relu activation, no regularization, sigmoid activation for final
+# layer, CategoricalCrossentropy loss for training, using only noncolinear
+# columns, default 'adam' optimizer, batch size 1024, and then training for a
+# few sets of 5 epochs. These ideas generally came from:
+# https://stats.stackexchange.com/questions/474738/how-do-i-intentionally-design-an-overfitting-neural-network
+nncl_per_layer_num = 2048
+nncl_act = 'relu'
 tfmodel = keras.Sequential([
     keras.layers.Input((input_dim,)),
-    keras.layers.Dense(512, activation='sigmoid'),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
     # keras.layers.Dropout(0.2),
-    keras.layers.Dense(512, activation='sigmoid'),
-    keras.layers.Dense(512, activation='sigmoid'),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
+    keras.layers.Dense(nncl_per_layer_num, activation=nncl_act),
     # keras.layers.Dense(1024, activation='sigmoid'),
     # keras.layers.Dropout(0.2),
     # keras.layers.Dense(1, activation='sigmoid'),
@@ -748,12 +885,16 @@ tfmodel = keras.Sequential([
 
 tfmodel.summary()
 
-tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True)
-adam = keras.optimizers.Adam(0.01)
+adam = 'adam' #keras.optimizers.Adam(0.01)
+catcross = True
+tf_loss_fn2 = keras.losses.CategoricalCrossentropy(from_logits=True) \
+              if catcross else tf_loss_fn
+ncll_y = onehot_train_labels if catcross else dog.concat_train_class_errs
 
-tfmodel.compile(optimizer=adam, loss=tf_loss_fn)
+tfmodel.compile(optimizer=adam, loss=tf_loss_fn2)
+#%%
 nn_class_hist = tfmodel.fit(
-    dog.concat_train_data, dog.concat_train_class_errs, epochs=5, shuffle=True
+    dog.col_subset_train, ncll_y, epochs=5, batch_size = 1024, shuffle=True
 )
 #%%
 bgtrain = big_tree.predict(dog.concat_train_data)
@@ -764,12 +905,12 @@ mclf_train = mclf.predict(dog.concat_train_data)
 mclf_train_score = dog.getClassScoresTrain(mclf_train)
 print("Smaller tree train errs=", mclf_train_score)
 
-tf_train_preds = np.argmax(tfmodel(dog.concat_train_data).numpy(), axis=1)
+tf_train_preds = np.argmax(tfmodel(dog.col_subset_train).numpy(), axis=1)
 tf_train_errs = dog.getClassScoresTrain(tf_train_preds)
 print("TF train errs=", tf_train_errs)
 print()
 
-tf_test_preds = np.argmax(tfmodel(dog.concat_test_data).numpy(), axis=1)
+tf_test_preds = np.argmax(tfmodel(dog.col_subset_test).numpy(), axis=1)
 tf_test_errs = dog.getClassScoresTest(tf_test_preds)
 print("TF test errs=", tf_test_errs)
 
@@ -817,7 +958,7 @@ plt.show()
 #%%
 from gtCommon import PoseLoaderTUDL
 
-tudl_ids = PoseLoaderTUDL.getAllIDs()
+tudl_ids = PoseLoaderTUDL.getAllIDs(True)
 tudl_loaders = [PoseLoaderTUDL(*t) for t in tudl_ids]
 
 cfc.getAll(tudl_loaders)
