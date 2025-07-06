@@ -39,152 +39,137 @@ class MOTION_MODEL(Enum):
 
 
 class MOTION_DATA(Enum):
-    SPEED_DEG1 = 1
-    SPEED_DEG2 = 2
-    ACC_VEC3 = 3
-    LAST_BEST_LABEL_ONEHOT = 4
-    TIMESTEP = 5
+    LAST_BEST_LABEL_ONEHOT = 1
+    TIMESTEP = 2
 
+    VEL_DEG1_VEC3 = 3
+    VEL_DEG2_VEC3 = 4
+    ACC_VEC3 = 5
     JERK_VEC3 = 6
-    CIRC_RAD = 7
-    CIRC_SPEED = 8
-    CIRC_ACC = 9
-    CIRC_VEL_DEG1_ERR_VEC3 = 10
-    CIRC_VEL_DEG2_ERR_VEC3 = 11
-    CIRC_ACC_ERR_VEC3 = 12
-    JERK_ERR_VEC3 = 13
-    AX3_SQ_DIFF = 14
-    ROTATION_VEC3 = 15
-    CIRC_ANG_SPEED = 16
-    CIRC_ANG_ACC = 17
+    JERK_ERR_VEC3 = 7
+    CRACKLE_VEC3 = 8
+    ROTATION_VEC3 = 9
+    ROT_ACC_VEC3 = 10
+    CIRC_VEL_DEG1_ERR_VEC3 = 11
+    CIRC_VEL_DEG2_ERR_VEC3 = 12
+    CIRC_ACC_ERR_VEC3 = 13
 
-    DISP_MAG_DIFF = 18
-    DISP_MAG_DIFF_TIMESCALED = 19
-    DISP_MAG_RATIO = 20
+    CIRC_RAD = 14
+    CIRC_SPEED = 15
+    CIRC_ACC = 16
+    CIRC_ANG_SPEED = 17
+    CIRC_ANG_ACC = 18
+
+    AX3_SQ_DIFF = 19
+
+    DISP_MAG_DIFF = 20
+    DISP_MAG_DIFF_TIMESCALED = 21
+    DISP_MAG_RATIO = 22
     # BOUNCE_ANGLE = 21 # Redundant now with VEL_DEG1_VEC3 stuff.
 
-    UNIT_ROT_AX_DIFF = 21
-    UNIT_ROT_AX_DIFF_TIMESCALED = 22
+    UNIT_ROT_AX_DIFF = 23
+    UNIT_ROT_AX_DIFF_TIMESCALED = 24
 
-    RAD_DIFF = 23
-    TIMESCALED_RAD_DIFF = 24
+    RAD_DIFF = 25
+    TIMESCALED_RAD_DIFF = 26
 
     # Norms of vec6s composed of circle centres and radii-scaled normals.
-    CIRC_VEC6_DIFF = 25
+    CIRC_VEC6_DIFF = 27
 
-    TIME_SINCE_STATIONARY = 26
-    TIME_SINCE_DIR_CHANGE = 27
-    DIST_SINCE_DIR_CHANGE = 28
+    TIME_SINCE_STATIONARY = 28
+    TIME_SINCE_DIR_CHANGE = 29
+    DIST_SINCE_DIR_CHANGE = 30
 
-    TIME_CIRC_MOTION = 29
-    ANG_SUM_CIRC_MOTION = 30
-    DIST_SUM_CIRC_MOTION = 31
+    TIME_CIRC_MOTION = 31
+    ANG_SUM_CIRC_MOTION = 32
+    DIST_SUM_CIRC_MOTION = 33
 
-    CIRC_CENTRE_DIFF = 32
+    CIRC_CENTRE_DIFF = 34
 
-    ROT_ACC_VEC3 = 33
-    FRAME_NUM = 34
-    TIMESTAMP = 35
+    FRAME_NUM = 35
+    TIMESTAMP = 36
 
-    PREV_FA_ANG_ACC = 36
-    NEXT_FA_ANG_ACC = 37
+    PREV_FA_ANG_ACC = 37
+    NEXT_FA_ANG_ACC = 38
 
-    SPEED_ACC_RATIO = 38
-    VEL_BCS_RATIOS = 39
+    SPEED_ACC_RATIO = 39
+    VEL_BCS_RATIOS = 40
 
-    ORTHO_ACC_MAG = 40
+    CURVATURE = 41
+    LAST_CURVATURE = 42
 
-    VEL_DOT = 41 # Units match work per kg (J/kg)
 
-    SPEED_JERK_RATIO = 42
-    ACC_JERK_RATIO = 43
-    SPEED_ORTHO_ACC_RATIO = 44
-    CIRC_ACC_CIRC_SPEED_RATIO = 45
-    CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO = 46
-    CIRC_ANG_RATIO = 47
+    SPEED_JERK_RATIO = 43
+    ACC_JERK_RATIO = 44
+    SPEED_ORTHO_ACC_RATIO = 45
+    CIRC_ACC_CIRC_SPEED_RATIO = 46
+    CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO = 47
+    CIRC_ANG_RATIO = 48
 
-    BOUNCE_ANGLE_2_SUM = 48
-
-    ACC_VEL_DEG2_ERR_RATIO = 49
+    BOUNCE_ANGLE_2_SUM = 49
 
     PLANE_NORMAL_DOT = 50
 
     DIST_FROM_CIRCLE = 51
     RATIO_FROM_CIRCLE = 52
 
-    ACC_VEL_DEG1_DOT = 53
-    ACC_VEL_DEG2_DOT = 54
-    VEL_DEG2_MAG_DIFF = 55
-    VEL_DEG2_MAG_DIFF_TIMESCALED = 56
+    VEL_DEG2_MAG_DIFF = 53
+    VEL_DEG2_MAG_DIFF_TIMESCALED = 54
 
-    INV_DISP_MAG_RATIO = 57
-    INV_VEL_BCS_RATIOS = 58
-    INV_CIRC_ANG_RATIO = 59
+    INV_DISP_MAG_RATIO = 55
+    INV_VEL_BCS_RATIOS = 56
+    INV_CIRC_ANG_RATIO = 57
 
-    GT0 = 60
-    GT1 = 61
-    GT2 = 62
-    GT3 = 63
-    GT4 = 64
-    GT5 = 65
-
-    JERK_VEL_DEG1_DOT = 66
-    JERK_VEL_DEG2_DOT = 67
-    JERK_ACC_DOT = 68
-
-    CURVATURE = 69
-    LAST_CURVATURE = 70
-
-    CRACKLE_VEC3 = 71
-    VEL_DEG1_VEC3 = 72
-
-    # CURVATURE_V = 72
-    # CURVATURE_A = 73
-    # CURVATURE_J = 74
-    # LAST_CURVATURE_V = 75
-    # LAST_CURVATURE_A = 76
-    # LAST_CURVATURE_J = 77
+    GT0 = 58
+    GT1 = 59
+    GT2 = 60
+    GT3 = 61
+    GT4 = 62
+    GT5 = 63
 
 
-class RELATIVE_AXIS(Enum):
-    VEL_DEG1 = 1
-    VEL_DEG2 = 2
-    ACC_FULL = 3
-    ACC_ORTHO_DEG1 = 4
-    PLANE_ORTHO = 5
-    ROTATION = 6
-    JERK_FULL = 7
-    SNAP_FULL = 8
-    ITSELF = 9
+    # VEL_DOT = 64                             # Units match work per kg (J/kg)
 
-class Vec3RelAxisPair(typing.NamedTuple):
+
+    # CURVATURE_V = 65
+    # CURVATURE_A = 66
+    # CURVATURE_J = 67
+    # LAST_CURVATURE_V = 68
+    # LAST_CURVATURE_A = 69
+    # LAST_CURVATURE_J = 70
+
+
+class OTHER_DIRECTION(Enum):
+    ACC_ORTHO_DEG1 = 1
+    PLANE_ORTHO = 2
+
+RELATIVE_VECTOR = typing.Union[MOTION_DATA, OTHER_DIRECTION]
+ALL_RELATIVE_VECTORS = (
+    MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG2_VEC3, MOTION_DATA.ACC_VEC3,
+    MOTION_DATA.JERK_VEC3, MOTION_DATA.JERK_ERR_VEC3, MOTION_DATA.ROTATION_VEC3,
+    MOTION_DATA.ROT_ACC_VEC3,
+    OTHER_DIRECTION.ACC_ORTHO_DEG1, OTHER_DIRECTION.PLANE_ORTHO
+)
+
+class OrthoVecDirPair(typing.NamedTuple):
     vec3: MOTION_DATA
-    axis: RELATIVE_AXIS
-
-EQ_VEC3_AX_PAIRS: typing.List[Vec3RelAxisPair] = [
-    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1),
-    Vec3RelAxisPair(MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.ACC_FULL),
-    Vec3RelAxisPair(MOTION_DATA.ROTATION_VEC3, RELATIVE_AXIS.ROTATION),
-    Vec3RelAxisPair(MOTION_DATA.JERK_VEC3, RELATIVE_AXIS.JERK_FULL),
-    Vec3RelAxisPair(MOTION_DATA.JERK_ERR_VEC3, RELATIVE_AXIS.SNAP_FULL)
-]
+    axis: OTHER_DIRECTION
 
 ORTHO_VEC3_AX_PAIRS = [
-    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.ACC_ORTHO_DEG1),
-    Vec3RelAxisPair(MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.PLANE_ORTHO),
-    # Vec3RelAxisPair(MOTION_DATA.VEL_DEG2_VEC3, RELATIVE_AXIS.PLANE_ORTHO),
-    Vec3RelAxisPair(MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.PLANE_ORTHO)
+    OrthoVecDirPair(MOTION_DATA.VEL_DEG1_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1),
+    OrthoVecDirPair(MOTION_DATA.VEL_DEG1_VEC3, OTHER_DIRECTION.PLANE_ORTHO),
+    OrthoVecDirPair(MOTION_DATA.VEL_DEG2_VEC3, OTHER_DIRECTION.PLANE_ORTHO),
+    OrthoVecDirPair(MOTION_DATA.ACC_VEC3, OTHER_DIRECTION.PLANE_ORTHO)
 ]
-
-VEC3_AX_PAIRS_TO_SKIP = EQ_VEC3_AX_PAIRS + ORTHO_VEC3_AX_PAIRS 
 
 class ANG_OR_MAG(Enum):
     ANG = 1
-    MAG = 2
+    MAG_PROJ = 2
+    MAG_DOT = 3
 
 class SpecifiedMotionData(typing.NamedTuple):
     base_cat: MOTION_DATA
-    axis: RELATIVE_AXIS
+    axis: RELATIVE_VECTOR
     ang_or_mag: ANG_OR_MAG
     bidirectional: bool
     is_timestep_shifted: bool
@@ -193,16 +178,33 @@ class SpecifiedMotionData(typing.NamedTuple):
     def name(self):
         ret_name = ""
         bn = self.base_cat.name 
+        rn = self.axis.name
         last_underscore_ind = bn.rfind("_")
         if bn[last_underscore_ind:] != "_VEC3":
             raise ValueError("No \"VEC3\" found in base type {}!".format(bn))
         
         ret_name = bn[:last_underscore_ind] 
 
-        if self.axis != RELATIVE_AXIS.ITSELF:
-            ret_name += "_" + self.axis.name
-
-        ret_name += "_" + self.ang_or_mag.name
+        dirs_eq = False
+        if isinstance(self.axis, MOTION_DATA):
+            if self.base_cat != self.axis:
+                r_last_underscore_ind = rn.rfind("_")
+                if rn[r_last_underscore_ind:] != "_VEC3":
+                    raise ValueError(
+                        "No \"VEC3\" found in relative key {}!".format(rn)
+                    )
+                ret_name += "_" + rn[:r_last_underscore_ind]
+            else:
+                dirs_eq= True
+        else:
+            ret_name += "_" + rn
+        am = self.ang_or_mag.name
+        if dirs_eq and not self.is_timestep_shifted:
+            if self.ang_or_mag == ANG_OR_MAG.MAG_PROJ:
+                am = "MAG"
+            else:
+                raise Exception("Redundant self-axis value!")
+        ret_name += "_" + am
 
         if self.bidirectional:
             ret_name += "_BIDIR"
@@ -364,29 +366,6 @@ def gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
     
     return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
 
-def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
-        missing_keys: typing.List[MOTION_DATA] = []
-        for motion_data_kind in MOTION_DATA:
-            md_kind_present = False
-            for k in keys:
-                if isinstance(k, MOTION_DATA):
-                    md_kind_present = md_kind_present or k == motion_data_kind
-                elif isinstance(k, SpecifiedMotionData):
-                    base_cat_eq = k.base_cat == motion_data_kind
-                    md_kind_present = md_kind_present or base_cat_eq
-                elif isinstance(k, OneHotMotionData):
-                    base_cat_eq = k.base_cat == motion_data_kind
-                    md_kind_present = md_kind_present or base_cat_eq
-                else:
-                    raise ValueError("Bad key type! {}".format(k))
-                
-                if md_kind_present:
-                    break
-
-            if not md_kind_present:
-                missing_keys.append(motion_data_kind)
-
-        return missing_keys
 
 @dataclass
 class FeaturesAndResultsForVid:
@@ -403,7 +382,12 @@ class CalcsForVideo:
                  err_na_val: float = FLOAT_32_MAX,
                  min_jerk_opt_iter_lim: int = DEFAULT_MIN_JERK_OPT_ITER_LIM,
                  split_min_jerk_opt_iter_lim: int = DEFAULT_SPLIT_MIN_JERK_OPT_ITER_LIM,
-                 err_radius_ratio_thresh: float = DEFAULT_ERR_RADIUS_RATIO_THRESH
+                 err_radius_ratio_thresh: float = DEFAULT_ERR_RADIUS_RATIO_THRESH,
+                 exclude_onehots: bool = True, exclude_past_muls: bool = True,
+                 exclude_bidir: bool = True, exclude_axis_angs: bool = True,
+                 exclude_circ_data: bool = True, exclude_vel_deg2: bool = True,
+                 exclude_timescaled: bool = True,
+                 other_exclusions: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]] = None
                  ):
         self.obj_static_thresh_mm = obj_static_thresh_mm
         self.straight_angle_thresh_rad = np.deg2rad(straight_angle_thresh_deg)
@@ -412,16 +396,56 @@ class CalcsForVideo:
         self.err_radius_ratio_thresh = err_radius_ratio_thresh
         self.err_na_val = err_na_val
 
+        self.exclude_onehots = exclude_onehots
+        self.exclude_past_muls = exclude_past_muls
+        self.exclude_bidir = exclude_bidir
+        self.exclude_axis_angs = exclude_axis_angs
+        self.exclude_circ_data = exclude_circ_data
+        self.exclude_vel_deg2 = exclude_vel_deg2
+        self.exclude_timescaled = exclude_timescaled
+        self.other_exclusions = other_exclusions
+        if self.other_exclusions is None:
+            self.other_exclusions = set()
+
+        self.base_key_exclusions: typing.Set[MOTION_DATA] = set()
+
+        if self.exclude_onehots:
+            self.base_key_exclusions.update(
+                k for k in MOTION_DATA if k.name.upper().endswith("ONEHOT")
+            )
+        self.base_JAV6 = np.empty((0, 6))
+        if self.exclude_past_muls:
+            self.base_key_exclusions.update(
+                k for k in MOTION_DATA
+                if len(k.name) == 3 and k.name.upper().startswith("GT")
+            )
+        else:
+            base_a_opts = [0.0, 0.5, 1.0]
+            # See other commenting on how these possible multiplier totals are
+            # found when looking at the lagrange polynomial derivatives.
+            base_j_opts = [0, 1/6, 2/3, 1.0]
+
+            self.base_JAV6 = getBaselineJAV6(base_a_opts, base_j_opts)
+
+        if self.exclude_circ_data:
+            self.base_key_exclusions.update(
+                k for k in MOTION_DATA if self._isDataCircleRelated(k)
+            )
+        if self.exclude_vel_deg2:
+            self.base_key_exclusions.update(
+                k for k in MOTION_DATA if "VEL_DEG2" in k.name.upper()
+            )
+
+        if self.exclude_timescaled:
+            self.base_key_exclusions.update(
+                k for k in MOTION_DATA if "TIMESCALE" in k.name.upper()
+            )
+
+        self.base_key_exclusions.update(self.other_exclusions)
+
         self.motion_mod_keys = [
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
         ]
-
-        base_a_opts = [0.0, 0.5, 1.0]
-        # See other commenting on how these possible multiplier totals are found
-        # when looking at the lagrange polynomial derivatives.
-        base_j_opts = [0, 1/6, 2/3, 1.0]
-
-        self.base_JAV6 = getBaselineJAV6(base_a_opts, base_j_opts)
 
 
         # I had to accomodate a venv where I have Python 3.7 for running
@@ -439,7 +463,43 @@ class CalcsForVideo:
             joblib_1_3_supported = True
         self._joblib_1_3_supported = joblib_1_3_supported
         # End of constructor.
+
+    @staticmethod
+    def _isDataCircleRelated(data_key: MOTION_DATA):
+        n = data_key.name.upper()
+        circ_name = "_CIRC_" in n or "CIRCLE" in n
+        circ_name |= n.startswith("CIRC_") or n.endswith("_CIRC")
+        circ_name |= "RAD_DIFF" in n
+        return circ_name
+    
+    def validateKeys(self, keys: typing.List[MOTION_DATA_KEY_TYPE]):
+        all_possible_keys = set(MOTION_DATA)
+
+        present_keys = {k for k in keys if isinstance(k, MOTION_DATA)}
+        for k in keys:
+            if isinstance(k, SpecifiedMotionData) or isinstance(k, OneHotMotionData):
+                present_keys.add(k.base_cat)
         
+        invalid_keys = present_keys.difference(all_possible_keys)
+        if len(invalid_keys) > 0:
+            raise ValueError("Bad types for keys: {}".format(invalid_keys))
+
+        missing_keys = all_possible_keys.difference(present_keys)
+
+        wrong_missing_keys = missing_keys.difference(self.base_key_exclusions)
+        wrong_present_keys = self.base_key_exclusions.difference(missing_keys)
+        
+        if len(wrong_missing_keys) > 0:
+            raise Exception("Keys {} missing when they should not!".format(
+                [mk.name for mk in wrong_missing_keys]
+            ))
+        if len(wrong_present_keys) > 0:
+            raise Exception("Keys {} present despite contrary !settings".format(
+                [mk.name for mk in wrong_present_keys]
+            ))
+        
+        return
+    
     def getAll(self, pose_loaders: PoseLoaderList, num_procs: int = -1,
                max_threads_per_proc = 2):
         
@@ -506,29 +566,72 @@ class CalcsForVideo:
                 self.min_norm_labels[i][combo] = res.min_norm_labels[i]
                 self.min_norm_vecs[i][combo] = res.min_norm_vecs[i]
 
-    @staticmethod
-    def _addDotsAndAngs(dict_to_update: typing.Dict[MOTION_DATA_KEY_TYPE, NDArray],
-               motion_data_base_key: MOTION_DATA, relative_axis: RELATIVE_AXIS,
-               shift: bool, dots_with_unit_axis: NDArray, vec_norms: NDArray):
+    def _addDotsAndAngs(self,
+               dict_to_update: typing.Dict[MOTION_DATA_KEY_TYPE, NDArray],
+               motion_data_base_key: MOTION_DATA, relative_axis: RELATIVE_VECTOR,
+               shift: bool, dot_products: NDArray, vec_norms: NDArray, *,
+               other_norms: typing.Optional[NDArray] = None,
+               dots_with_unit_axis: typing.Optional[NDArray] = None):
+        
         SMD = SpecifiedMotionData
         AM = ANG_OR_MAG
-        km      = SMD(motion_data_base_key, relative_axis, AM.MAG, False, shift)
-        kmbidir = SMD(motion_data_base_key, relative_axis, AM.MAG, True, shift)
+
+        # Key ceation.
+        kmp = SMD(
+            motion_data_base_key, relative_axis, AM.MAG_PROJ, False, shift
+        )
+        kmpbidir = SMD(
+            motion_data_base_key, relative_axis, AM.MAG_PROJ, True, shift
+        )
+        kmd = SMD(
+            motion_data_base_key, relative_axis, AM.MAG_DOT, False, shift
+        )
+        kmdbidir = SMD(
+            motion_data_base_key, relative_axis, AM.MAG_DOT, True, shift
+        )
         ka      = SMD(motion_data_base_key, relative_axis, AM.ANG, False, shift)
         kabidir = SMD(motion_data_base_key, relative_axis, AM.ANG, True, shift)
 
-        dict_to_update[km] = dots_with_unit_axis
-        dict_to_update[kmbidir] = np.abs(dots_with_unit_axis)
+        # Storing/calculating the data.
+        if other_norms is not None or dots_with_unit_axis is not None:
+            if dots_with_unit_axis is None:
+                dots_with_unit_axis = dot_products / other_norms
+                # TODO: Handle jerk, snap, and crackle better here.
+                # Probably best to have a param where if these columns are included,
+                # then the beginning "zero" rows are excluded?
+                for i in range(2):
+                    if other_norms[i] == 0.0:
+                        dots_with_unit_axis[i] = 0.0
+            dict_to_update[kmp] = dots_with_unit_axis
+            if not self.exclude_bidir:
+                dict_to_update[kmpbidir] = np.abs(dots_with_unit_axis)
+        else:
+            kmd = kmp
+            kmdbidir = kmpbidir
+            dots_with_unit_axis = dot_products
+
+        duplicate_dot = (
+            isinstance(relative_axis, MOTION_DATA) and (not shift)
+            and motion_data_base_key.value < relative_axis.value
+        )
+        if not duplicate_dot:
+            dict_to_update[kmd] = dot_products
+            if not self.exclude_bidir:
+                dict_to_update[kmdbidir] = np.abs(dot_products)
         
-        curr_angs = np.arccos(np.clip(dots_with_unit_axis / vec_norms, -1, 1))
-        # TODO: Handle jerk, snap, and crackle better here.
-        # Probably best to have a param where if these columns are included,
-        # then the beginning "zero" rows are excluded?
-        for i in range(2):
-            if vec_norms[i] == 0.0:
-                curr_angs[i] = 0.0
-        dict_to_update[ka] = curr_angs
-        dict_to_update[kabidir] = pm.getAcuteAngles(curr_angs)
+        if not self.exclude_axis_angs:
+            curr_angs = np.arccos(
+                np.clip(dots_with_unit_axis / vec_norms, -1, 1)
+            )
+            # TODO: Handle jerk, snap, and crackle better here.
+            # Probably best to have a param where if these columns are included,
+            # then the beginning "zero" rows are excluded?
+            for i in range(2):
+                if vec_norms[i] == 0.0:
+                    curr_angs[i] = 0.0
+            dict_to_update[ka] = curr_angs
+            if not self.exclude_bidir:
+                dict_to_update[kabidir] = pm.getAcuteAngles(curr_angs)
 
 
     def getInputFeatures(self, pose_loader: gtc.PoseLoader,
@@ -537,7 +640,7 @@ class CalcsForVideo:
         # shorter aliases might be helpful.
         MD = MOTION_DATA
         SMD = SpecifiedMotionData
-        RA = RELATIVE_AXIS
+        OD = OTHER_DIRECTION
         AM = ANG_OR_MAG
         V3D = Vec3Data
 
@@ -604,26 +707,24 @@ class CalcsForVideo:
             unit_rot_ax_diff_mags = np.linalg.norm(unit_rot_ax_diffs, axis=-1)
 
             motion_data[MOTION_DATA.UNIT_ROT_AX_DIFF] = unit_rot_ax_diff_mags
-            motion_data[MOTION_DATA.UNIT_ROT_AX_DIFF_TIMESCALED] = \
-                                                        unit_rot_ax_diff_mags / step
+            if not self.exclude_timescaled:
+                motion_data[MOTION_DATA.UNIT_ROT_AX_DIFF_TIMESCALED] \
+                                                = unit_rot_ax_diff_mags / step
 
             deg1_speeds_full = np.linalg.norm(deg1_vels, axis=-1, keepdims=True)
             deg1_speeds = deg1_speeds_full[-n_jerk_preds:].flatten()
             deg2_speeds_full = np.linalg.norm(deg2_vels, axis=-1, keepdims=True)
-            deg2_speeds = deg2_speeds_full[-n_jerk_preds:]
-            timescaled_speeds_deg2 = deg2_speeds.flatten() / step
+            timescaled_speeds_deg2_full = deg2_speeds_full / step
             timescaled_speeds_deg1_full = deg1_speeds_full / step
             timescaled_speeds_deg1 = \
                 timescaled_speeds_deg1_full.flatten()[-n_jerk_preds:]
-            motion_data[MOTION_DATA.SPEED_DEG1] = timescaled_speeds_deg1
-            motion_data[MOTION_DATA.SPEED_DEG2] = timescaled_speeds_deg2
 
 
             deg2_accs = deg1_vel_diffs / step_sq
             acc_mags_full = np.linalg.norm(deg2_accs, axis=-1, keepdims=True)
             acc_mags = acc_mags_full[-n_jerk_preds:].flatten()
 
-            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds_deg2 / acc_mags
+            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds_deg1 / acc_mags
             vel_dots = pm.einsumDot(
                 deg1_vels[-n_jerk_preds:], deg1_vels[-(n_jerk_preds + 1):-1]
             )
@@ -633,10 +734,10 @@ class CalcsForVideo:
 
             disp_mag_diffs = np.diff(deg1_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
             motion_data[MOTION_DATA.DISP_MAG_DIFF] = disp_mag_diffs
-            motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] = disp_mag_diffs / step
+            if not self.exclude_timescaled:
+                motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] \
+                    = disp_mag_diffs / step
             speed_deg2_diffs = np.diff(deg2_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
-            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF] = speed_deg2_diffs
-            motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF_TIMESCALED] = speed_deg2_diffs / step
             disp_mag_div = deg1_speeds_full[1:] / deg1_speeds_full[:-1]
             motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div[-n_jerk_preds:].flatten()
             motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = 1.0 / disp_mag_div[-n_jerk_preds:].flatten()
@@ -645,35 +746,60 @@ class CalcsForVideo:
             unit_vels_deg2 = pm.safelyNormalizeArray(deg2_vels, deg2_speeds_full)
             unit_accs = pm.safelyNormalizeArray(deg2_accs, acc_mags_full)
 
-            radii = cma.getRadii()
-            motion_data[MOTION_DATA.CIRC_RAD] = radii[-n_jerk_preds:]
+            if not self.exclude_circ_data:
+                radii = cma.getRadii()
+                motion_data[MOTION_DATA.CIRC_RAD] = radii[-n_jerk_preds:]
 
-            circ_ang_speeds = cma.second_angles / step
-            prev_circ_ang_speeds = cma.first_angles / step
-            radii_subset = radii[-n_jerk_preds:]
-            circ_ang_speeds_subset = circ_ang_speeds[-n_jerk_preds:]
-            circ_speeds = radii_subset * circ_ang_speeds_subset
-            motion_data[MOTION_DATA.CIRC_SPEED] = circ_speeds
-            motion_data[MOTION_DATA.CIRC_ANG_SPEED] = circ_ang_speeds_subset
-            prev_circ_ang_speeds_subset = prev_circ_ang_speeds[-n_jerk_preds:]
-            circ_accs = (circ_speeds - (radii_subset * prev_circ_ang_speeds_subset)) / step
-            circ_ang_accs = circ_ang_speeds - prev_circ_ang_speeds
-            motion_data[MOTION_DATA.CIRC_ACC] = circ_accs
-            motion_data[MOTION_DATA.CIRC_ANG_ACC] = circ_ang_accs[-n_jerk_preds:]
+                circ_ang_speeds = cma.second_angles / step
+                prev_circ_ang_speeds = cma.first_angles / step
+                radii_subset = radii[-n_jerk_preds:]
+                circ_ang_speeds_subset = circ_ang_speeds[-n_jerk_preds:]
+                circ_speeds = radii_subset * circ_ang_speeds_subset
+                motion_data[MOTION_DATA.CIRC_SPEED] = circ_speeds
+                motion_data[MOTION_DATA.CIRC_ANG_SPEED] = circ_ang_speeds_subset
+                prev_circ_ang_speeds_subset = prev_circ_ang_speeds[-n_jerk_preds:]
+                circ_accs = (circ_speeds - (radii_subset * prev_circ_ang_speeds_subset)) / step
+                circ_ang_accs = circ_ang_speeds - prev_circ_ang_speeds
+                motion_data[MOTION_DATA.CIRC_ACC] = circ_accs
+                motion_data[MOTION_DATA.CIRC_ANG_ACC] = circ_ang_accs[-n_jerk_preds:]
 
-            motion_data[MOTION_DATA.CIRC_ACC_CIRC_SPEED_RATIO] = circ_accs / circ_speeds
-            motion_data[MOTION_DATA.CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO] = \
-                circ_ang_accs[-n_jerk_preds:] / circ_ang_speeds_subset
-            c_ang_ratio = cma.second_angles / cma.first_angles
-            motion_data[MOTION_DATA.CIRC_ANG_RATIO] = c_ang_ratio[-n_jerk_preds:]
-            motion_data[MOTION_DATA.INV_CIRC_ANG_RATIO] = 1.0 / c_ang_ratio[-n_jerk_preds:]
-            
+                motion_data[MOTION_DATA.CIRC_ACC_CIRC_SPEED_RATIO] = circ_accs / circ_speeds
+                motion_data[MOTION_DATA.CIRC_ANG_ACC_CIRC_ANG_SPEED_RATIO] = \
+                    circ_ang_accs[-n_jerk_preds:] / circ_ang_speeds_subset
+                c_ang_ratio = cma.second_angles / cma.first_angles
+                motion_data[MOTION_DATA.CIRC_ANG_RATIO] = c_ang_ratio[-n_jerk_preds:]
+                motion_data[MOTION_DATA.INV_CIRC_ANG_RATIO] = 1.0 / c_ang_ratio[-n_jerk_preds:]
+                
 
-            motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
+                motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
 
-            radii_diffs = np.diff(radii, 1, axis=0)[-n_jerk_preds:]
-            motion_data[MOTION_DATA.RAD_DIFF] = radii_diffs
-            motion_data[MOTION_DATA.TIMESCALED_RAD_DIFF] = radii_diffs / step
+                radii_diffs = np.diff(radii, 1, axis=0)[-n_jerk_preds:]
+                motion_data[MOTION_DATA.RAD_DIFF] = radii_diffs
+                if not self.exclude_timescaled:
+                    motion_data[MOTION_DATA.TIMESCALED_RAD_DIFF] = radii_diffs / step
+
+                c_centre_diff_vecs = np.diff(cma.getCentres3D(), axis=0)
+                c_centre_diff_norms = np.linalg.norm(c_centre_diff_vecs, axis=-1)
+                motion_data[MOTION_DATA.CIRC_CENTRE_DIFF] = c_centre_diff_norms
+
+
+                is_circ_res = cma.isMotionStillCircular(
+                    prev_translations[3:], self.err_radius_ratio_thresh, FLOAT_32_MAX
+                )
+
+                _, time_circ, (ang_sum_circ, dist_sum_circ) = pm.since_calc(
+                    is_circ_res.non_circ_bool_inds, n_input_frames, 
+                    [cma.second_angles, radii * cma.second_angles], 3
+                )
+
+                time_circ = (time_circ + 3) * step
+
+                motion_data[MOTION_DATA.TIME_CIRC_MOTION] = time_circ[-n_jerk_preds:]
+                motion_data[MOTION_DATA.ANG_SUM_CIRC_MOTION] = ang_sum_circ[-n_jerk_preds:]
+                motion_data[MOTION_DATA.DIST_SUM_CIRC_MOTION] = dist_sum_circ[-n_jerk_preds:]
+
+                motion_data[MOTION_DATA.DIST_FROM_CIRCLE] = is_circ_res.dists
+                motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios
 
             rotation_mats = all_rotation_mats[::step]
             rot_accs = np.diff(timescaled_vel_axes, 1, axis=0) / step
@@ -699,34 +825,25 @@ class CalcsForVideo:
             vec18s = np.concatenate((vec9s, n_vec9s), axis=1)
             motion_data[MOTION_DATA.AX3_SQ_DIFF] = pm.einsumDot(vec18s, vec18s)
 
-            c_centre_diff_vecs = np.diff(cma.getCentres3D(), axis=0)
-            c_centre_diff_norms = np.linalg.norm(c_centre_diff_vecs, axis=-1)
-            motion_data[MOTION_DATA.CIRC_CENTRE_DIFF] = c_centre_diff_norms
-
             
             t_diff_angs = pm.anglesBetweenVecs(
                 unit_vels_deg1[:-1], unit_vels_deg1[1:], False
             )
-            t_diff_dots = pm.einsumDot(deg1_speeds_full[:-1], deg1_speeds_full[1:])
             # motion_data[MOTION_DATA.BOUNCE_ANGLE] = t_diff_angs[-n_jerk_preds:]
             bounce_ang_pair_sums = t_diff_angs[1:] + t_diff_angs[:-1]
             motion_data[MOTION_DATA.BOUNCE_ANGLE_2_SUM] = \
                 bounce_ang_pair_sums[-n_jerk_preds:]
-            motion_data[MOTION_DATA.VEL_DOT] = t_diff_dots[-n_jerk_preds:]
 
-            avd1m = pm.einsumDot(deg2_accs, deg1_vels[1:])
-            motion_data[MOTION_DATA.ACC_VEL_DEG1_DOT] = avd1m[-n_jerk_preds:]
-            avd2m = pm.einsumDot(deg2_accs, deg2_vels)
-            motion_data[MOTION_DATA.ACC_VEL_DEG2_DOT] = avd2m[-n_jerk_preds:] 
 
-            scaled_jerks = t_jerk_amt / (step ** 3)
-            jvd1m = pm.einsumDot(scaled_jerks, deg1_vels[2:])
-            motion_data[MOTION_DATA.JERK_VEL_DEG1_DOT] = jvd1m
-            motion_data[MOTION_DATA.JERK_VEL_DEG2_DOT] = pm.einsumDot(
-                scaled_jerks, deg2_vels[1:]
-            )
-            ja_m = pm.einsumDot(scaled_jerks, deg2_accs[1:])
-            motion_data[MOTION_DATA.JERK_ACC_DOT] = ja_m
+            scaled_jerks = np.empty_like(deg2_accs)
+            scaled_jerks[0] = 0.0 # TODO: handle this better!
+            scaled_jerks[1:] = t_jerk_amt / (step ** 3)
+
+            if not self.exclude_vel_deg2:
+                motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF] = speed_deg2_diffs
+                if not self.exclude_timescaled:
+                    motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF_TIMESCALED] \
+                        = speed_deg2_diffs / step
 
 
             d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
@@ -739,7 +856,7 @@ class CalcsForVideo:
                     prev_translations, d_under_thresh.flatten(), 
                     a_over_thresh.flatten(),
                     max_opt_iters=self.min_jerk_opt_iter_lim,
-                    vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks
+                    vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks[1:]
                 )
                 mj_preds = mj_preds[-len(acc_preds):]
                 mj_na = np.isnan(mj_preds)[:, 0]
@@ -786,28 +903,11 @@ class CalcsForVideo:
 
             
             
-            is_circ_res = cma.isMotionStillCircular(
-                prev_translations[3:], self.err_radius_ratio_thresh, FLOAT_32_MAX
-            )
-
-            _, time_circ, (ang_sum_circ, dist_sum_circ) = pm.since_calc(
-                is_circ_res.non_circ_bool_inds, n_input_frames, 
-                [cma.second_angles, radii * cma.second_angles], 3
-            )
-
-            time_circ = (time_circ + 3) * step
-
-            motion_data[MOTION_DATA.TIME_CIRC_MOTION] = time_circ[-n_jerk_preds:]
-            motion_data[MOTION_DATA.ANG_SUM_CIRC_MOTION] = ang_sum_circ[-n_jerk_preds:]
-            motion_data[MOTION_DATA.DIST_SUM_CIRC_MOTION] = dist_sum_circ[-n_jerk_preds:]
 
             frame_nums = np.arange(n_input_frames - n_jerk_preds, n_input_frames)
             motion_data[MOTION_DATA.FRAME_NUM] = frame_nums
             motion_data[MOTION_DATA.TIMESTAMP] = frame_nums * step
 
-
-            motion_data[MOTION_DATA.DIST_FROM_CIRCLE] = is_circ_res.dists
-            motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios
 
 
             # ======================================================================
@@ -841,10 +941,11 @@ class CalcsForVideo:
 
                 curr_err_norms_dict[motion_mod] = curr_err_norms[i, 1:]
             curr_min_norm_labels = np.argmin(curr_err_norms, axis=0).flatten()
-            for mn in range(len(self.motion_mod_keys)):
-                motion_data[
-                    OneHotMotionData(MOTION_DATA.LAST_BEST_LABEL_ONEHOT, mn)
-                ] = (curr_min_norm_labels[:-1] == mn)
+            if not self.exclude_onehots:
+                for mn in range(len(self.motion_mod_keys)):
+                    motion_data[
+                        OneHotMotionData(MOTION_DATA.LAST_BEST_LABEL_ONEHOT, mn)
+                    ] = (curr_min_norm_labels[:-1] == mn)
 
             curr_min_keys = [
                 self.motion_mod_keys[i] for i in curr_min_norm_labels[1:]
@@ -872,15 +973,20 @@ class CalcsForVideo:
         
 
             step_4_pow = step**4
-            prev_jerk_errs = curr_errs_3D[MOTION_MODEL.JERK][:-1] / step_4_pow
-            prev_jerk_errs[0] = 0 # Overwrite with 0 so it = the "4th derivative" 
-            prev_jerk_err_mags = curr_err_norms[jerk_ind][:-1]
-            prev_jerk_err_mags[0] = 0
+            prev_jerk_errs = np.empty_like(deg2_accs)
+            prev_jerk_errs[1:] = curr_errs_3D[MOTION_MODEL.JERK][:-1] / step_4_pow
+            # Overwrite inf/empty with 0 so it = the "4th derivative".
+            # TODO: handle better!
+            prev_jerk_errs[:2] = 0
+            prev_jerk_err_mags = np.empty(len(acc_mags_full))
+            prev_jerk_err_mags[1:] = curr_err_norms[jerk_ind][:-1].flatten()
+            prev_jerk_err_mags[:2] = 0
 
             crackles = np.empty((n_jerk_preds, 3))
-            crackles[2:] = np.diff(prev_jerk_errs[1:], 1, axis=0) / step
+            crackles[2:] = np.diff(prev_jerk_errs[2:], 1, axis=0) / step
             crackles[:2] = 0.0
-            
+
+            avd1m = pm.einsumDot(deg2_accs, deg1_vels[1:])
             acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
             acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
             
@@ -892,26 +998,20 @@ class CalcsForVideo:
             unit_acc_ortho_deg1_vecs = pm.safelyNormalizeArray(
                 acc_ortho_deg1_vecs, acc_ortho_deg1_mags
             )
-            motion_data[MOTION_DATA.ORTHO_ACC_MAG] = acc_ortho_deg1_mags[-n_jerk_preds:].flatten()
 
             vel_deg2_acc_cross = np.cross(unit_vels_deg2, unit_accs)
             sin_vel_deg2_acc_angs = np.linalg.norm(
                 vel_deg2_acc_cross, axis=-1, keepdims=True
             )
 
-            acc_vel_deg2_mag = avd2m / deg2_speeds_full.flatten()
-            flat_accs = acc_mags.flatten()
-            self._addDotsAndAngs(
-                motion_data, MD.ACC_VEC3, RA.VEL_DEG2, False,
-                acc_vel_deg2_mag[-n_jerk_preds:], flat_accs
-            )
             
             jerk_norms = np.linalg.norm(scaled_jerks, axis=-1)
 
+            jvd1m = pm.einsumDot(scaled_jerks[1:], deg1_vels[2:])
             jerk_vel_deg1_mags = jvd1m / deg1_speeds
             
             jerk_acc_ortho_mags = pm.einsumDot(
-                scaled_jerks, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+                scaled_jerks[1:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
             )
             
             jerk_vel_vecs = pm.scalarsVecsMul(
@@ -920,14 +1020,16 @@ class CalcsForVideo:
             jerk_acc_vecs = pm.scalarsVecsMul(
                 jerk_acc_ortho_mags, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
             )
-            jerk_ortho_vecs = scaled_jerks - (jerk_vel_vecs + jerk_acc_vecs)
+            jerk_ortho_vecs = scaled_jerks[1:] - (jerk_vel_vecs + jerk_acc_vecs)
             jerk_ortho_norms = np.linalg.norm(jerk_ortho_vecs, axis=-1, keepdims=True)
 
             
             vec3_precalc_keys = [
-                (MD.ACC_VEC3, RA.VEL_DEG1), (MD.ACC_VEC3, RA.VEL_DEG2),
-                (MD.JERK_VEC3, RA.VEL_DEG1), (MD.JERK_VEC3, RA.ACC_ORTHO_DEG1),
-                (MD.JERK_VEC3, RA.PLANE_ORTHO)
+                (MD.ACC_VEC3, MD.VEL_DEG1_VEC3),
+                (MD.ACC_VEC3, OD.ACC_ORTHO_DEG1),
+                (MD.JERK_VEC3, MD.VEL_DEG1_VEC3),
+                (MD.JERK_VEC3, OD.ACC_ORTHO_DEG1),
+                (MD.JERK_VEC3, OD.PLANE_ORTHO)
             ]
 
             precalced_mags = [
@@ -955,49 +1057,61 @@ class CalcsForVideo:
             
             unit_jerks = np.empty((n_jerk_preds + 1, 3))
             unit_snaps = np.empty_like(unit_jerks)
-            unit_jerks[1:] = pm.safelyNormalizeArray(scaled_jerks, jerk_norms[..., np.newaxis])
-            unit_jerks[:1] = 0.0
+            unit_jerks = pm.safelyNormalizeArray(scaled_jerks, jerk_norms[..., np.newaxis])
 
-            unit_snaps[2:] = pm.safelyNormalizeArray(prev_jerk_errs[1:])
-            unit_snaps[:2] = 0.0
+            unit_snaps = pm.safelyNormalizeArray(prev_jerk_errs, prev_jerk_err_mags[..., np.newaxis])
 
-            rot_v3d = Vec3Data(timescaled_vel_axes, vel_axes, vel_angs_timescaled[-n_jerk_preds:])
+            rot_v3d = Vec3Data(timescaled_vel_axes, vel_axes, vel_angs_timescaled)
             vec3s_dict: typing.Dict[MOTION_DATA, Vec3Data] = {
-                MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags),
-                MD.JERK_VEC3: V3D(scaled_jerks, None, jerk_norms),
+                MD.ACC_VEC3: V3D(deg2_accs, unit_accs, acc_mags_full),
+                MD.JERK_VEC3: V3D(scaled_jerks, unit_jerks, jerk_norms),
                 MD.ROTATION_VEC3: rot_v3d,
-                MD.CIRC_VEL_DEG1_ERR_VEC3: V3D(
-                    prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
-                ),
-                MD.CIRC_VEL_DEG2_ERR_VEC3: V3D(
-                    prev_circ_errs_vd2, None, prev_circ_err_mags_vd2
-                ),
-                MD.CIRC_ACC_ERR_VEC3: V3D(
-                    prev_circ_errs_acc, None, prev_circ_err_mags_acc
-                ),
-                MD.JERK_ERR_VEC3: V3D(prev_jerk_errs, None, prev_jerk_err_mags),
+                MD.JERK_ERR_VEC3: V3D(prev_jerk_errs, unit_snaps, prev_jerk_err_mags),
                 MD.CRACKLE_VEC3: V3D(crackles, None, None),
-                MD.ROT_ACC_VEC3: V3D(rot_accs[-n_jerk_preds:], None, None),
+                MD.ROT_ACC_VEC3: V3D(rot_accs, None, None),
                 MD.VEL_DEG1_VEC3: V3D(
-                    deg1_vels / step, unit_vels_deg1, timescaled_speeds_deg1_full)
+                    deg1_vels / step, unit_vels_deg1, timescaled_speeds_deg1_full
+                )
             }
+            if not self.exclude_vel_deg2:
+                vec3s_dict[MD.VEL_DEG2_VEC3] = V3D(
+                    deg2_vels / step, unit_vels_deg2, timescaled_speeds_deg2_full
+                )
+            if not self.exclude_circ_data:
+                vec3s_dict[MD.CIRC_VEL_DEG1_ERR_VEC3] = V3D(
+                    prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
+                )
+                if not self.exclude_vel_deg2:
+                    vec3s_dict[MD.CIRC_VEL_DEG2_ERR_VEC3] = V3D(
+                        prev_circ_errs_vd2, None, prev_circ_err_mags_vd2
+                    )
+                vec3s_dict[MD.CIRC_ACC_ERR_VEC3] = V3D(
+                    prev_circ_errs_acc, None, prev_circ_err_mags_acc
+                )
+
+
+
             for md_k, v3s in vec3s_dict.items():
-                motion_data[SMD(md_k, RA.ITSELF, AM.MAG, False, False)] = \
+                motion_data[SMD(md_k, md_k, AM.MAG_PROJ, False, False)] = \
                     v3s.norms[-n_jerk_preds:]
 
-            rel_axes_dict: typing.Dict[RELATIVE_AXIS, NDArray] = {
-                RA.VEL_DEG1: unit_vels_deg1, RA.VEL_DEG2: unit_vels_deg2,
-                RA.ACC_FULL: unit_accs, RA.ACC_ORTHO_DEG1: unit_acc_ortho_deg1_vecs,
-                RA.PLANE_ORTHO: ortho_dirs, RA.ROTATION: vel_axes,
-                RA.JERK_FULL: unit_jerks, RA.SNAP_FULL: unit_snaps
+            other_dirs_dict: typing.Dict[OTHER_DIRECTION, NDArray] = {
+                OD.ACC_ORTHO_DEG1: unit_acc_ortho_deg1_vecs,
+                OD.PLANE_ORTHO: ortho_dirs
             }
 
-            ra_keys = list(rel_axes_dict.keys())
+            vec3_stack_for_mat = []
+            selected_rel_vecs = []
+            for k in ALL_RELATIVE_VECTORS:
+                if isinstance(k, MOTION_DATA):
+                    if k == MOTION_DATA.VEL_DEG2_VEC3 and self.exclude_vel_deg2:
+                        continue
+                    vec3_stack_for_mat.append(vec3s_dict[k].vecs[-(n_jerk_preds + 1):])
+                elif isinstance(k, OTHER_DIRECTION):
+                    vec3_stack_for_mat.append(other_dirs_dict[k][-(n_jerk_preds + 1):])
+                selected_rel_vecs.append(k)
 
-            ra_mats = np.stack([
-                rel_axes_dict[k][-(n_jerk_preds + 1):] for k in ra_keys
-            ], axis=1)
-
+            ra_mats = np.stack(vec3_stack_for_mat, axis=1)
 
             for shiftRel in [True, False]:
                 ra_start = -(n_jerk_preds + int(shiftRel))
@@ -1006,15 +1120,11 @@ class CalcsForVideo:
                 ra_mats_sub = ra_mats[ra_start:ra_end]
 
                 for md_k, v3s in vec3s_dict.items():
-                    curr_ra_mats = ra_mats_sub
-                    curr_ra_keys = ra_keys
-
 
                     ra_dots = pm.einsumMatVecMul(
-                        curr_ra_mats, v3s.vecs[-n_jerk_preds:]
+                        ra_mats_sub, v3s.vecs[-n_jerk_preds:]
                     )
-
-                    for ra_row, ra_k in enumerate(curr_ra_keys):
+                    for ra_row, ra_k in enumerate(selected_rel_vecs):
 
                         # Skipping values that were already derived+stored earlier.
                         if not shiftRel:
@@ -1029,70 +1139,93 @@ class CalcsForVideo:
                             # vec3, since we have a specialized "itself" axis 
                             # for the first case and the second yields no useful
                             # data.
-                            if (md_k, ra_k) in VEC3_AX_PAIRS_TO_SKIP:
+                            if isinstance(ra_k, MOTION_DATA):
+                                if md_k == ra_k:
+                                    continue
+                            elif (md_k, ra_k) in ORTHO_VEC3_AX_PAIRS:
                                 continue
+                        else:
+                            # TODO: Fix shift for jerk or snap as prev vec so 
+                            # that values generated are not NaN.
+                            if isinstance(ra_k, MOTION_DATA) and (
+                                ra_k == MOTION_DATA.JERK_VEC3 or ra_k == MOTION_DATA.JERK_ERR_VEC3
+                            ):
+                                ... # continue
+
+                        _ra_norms = None
+                        if isinstance(ra_k, MOTION_DATA):
+                            _ra_norms = vec3s_dict[ra_k].norms[ra_start:ra_end]
 
                         self._addDotsAndAngs(
                             motion_data, md_k, ra_k, shiftRel,
-                            ra_dots[-n_jerk_preds:, ra_row], v3s.norms[-n_jerk_preds:]
+                            ra_dots[-n_jerk_preds:, ra_row],
+                            v3s.norms[-n_jerk_preds:], other_norms=_ra_norms
                         )
-                        
+
+            flat_accs = acc_mags.flatten()
             self._addDotsAndAngs(
-                motion_data, MD.ACC_VEC3, RA.VEL_DEG1, False,
-                acc_vel_deg1_mag[-n_jerk_preds:], flat_accs
+                motion_data, MD.ACC_VEC3, OD.ACC_ORTHO_DEG1, False,
+                acc_ortho_deg1_mags[-n_jerk_preds:].flatten(), flat_accs
             )
 
             self._addDotsAndAngs(
-                motion_data, MD.JERK_VEC3, RA.VEL_DEG1, False,
-                jerk_vel_deg1_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
+                motion_data, MD.ACC_VEC3, MD.VEL_DEG1_VEC3, False,
+                avd1m[-n_jerk_preds:], flat_accs,
+                dots_with_unit_axis=acc_vel_deg1_mag[-n_jerk_preds:]
             )
 
             self._addDotsAndAngs(
-                motion_data, MD.JERK_VEC3, RA.ACC_ORTHO_DEG1, False,
+                motion_data, MD.JERK_VEC3, MD.VEL_DEG1_VEC3, False,
+                jvd1m[-n_jerk_preds:], jerk_norms[-n_jerk_preds:],
+                dots_with_unit_axis=jerk_vel_deg1_mags[-n_jerk_preds:]
+            )
+
+            self._addDotsAndAngs(
+                motion_data, MD.JERK_VEC3, OD.ACC_ORTHO_DEG1, False,
                 jerk_acc_ortho_mags[-n_jerk_preds:], jerk_norms[-n_jerk_preds:]
             )
             self._addDotsAndAngs(
-                motion_data, MD.JERK_VEC3, RA.PLANE_ORTHO, False,
+                motion_data, MD.JERK_VEC3, OD.PLANE_ORTHO, False,
                 jerk_ortho_norms.flatten(), jerk_norms.flatten()
             )
 
             jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
-            acc_jerk_ratio = acc_mags / jerk_mags
-            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds_deg2 / jerk_mags
+            acc_jerk_ratio = acc_mags / jerk_mags[-n_jerk_preds:]
+            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds_deg1 / jerk_mags[-n_jerk_preds:]
             motion_data[MOTION_DATA.ACC_JERK_RATIO] = acc_jerk_ratio
             motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = \
-                timescaled_speeds_deg2 / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
+                timescaled_speeds_deg1 / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
 
-            motion_data[MOTION_DATA.ACC_VEL_DEG2_ERR_RATIO] = acc_jerk_ratio / step
 
-            gt_calc_jav_input = np.empty((n_jerk_preds, 9))
+            if not self.exclude_past_muls:
+                gt_calc_jav_input = np.empty((n_jerk_preds, 9))
 
-            gt_calc_jav_input[:, 0] = deg1_speeds
-            gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:] * step_sq
-            gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0] * step_sq
-            gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags * (step**3)
-            gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags * (step**3)
-            gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten() * (step**3)
-            
-            jav_mats = np.stack([
-                unit_vels_deg1[-n_jerk_preds:],
-                unit_acc_ortho_deg1_vecs[-n_jerk_preds:],
-                pm.safelyNormalizeArray(jerk_ortho_vecs, jerk_ortho_norms)
-            ], axis=1)
+                gt_calc_jav_input[:, 0] = deg1_speeds
+                gt_calc_jav_input[:, 1] = acc_vel_deg1_mag[-n_jerk_preds:] * step_sq
+                gt_calc_jav_input[:, 2] = acc_ortho_deg1_mags[-n_jerk_preds:, 0] * step_sq
+                gt_calc_jav_input[:, 3] = jerk_vel_deg1_mags * (step**3)
+                gt_calc_jav_input[:, 4] = jerk_acc_ortho_mags * (step**3)
+                gt_calc_jav_input[:, 5] = jerk_ortho_norms.flatten() * (step**3)
+                
+                jav_mats = np.stack([
+                    unit_vels_deg1[-n_jerk_preds:],
+                    unit_acc_ortho_deg1_vecs[-n_jerk_preds:],
+                    pm.safelyNormalizeArray(jerk_ortho_vecs, jerk_ortho_norms)
+                ], axis=1)
 
-            prev_start = -(n_jerk_preds + 1)
-            gt_calc_jav_input[:, 6:9] = pm.einsumMatVecMul(
-                jav_mats, translation_diffs[prev_start:-1]
-            )
+                prev_start = -(n_jerk_preds + 1)
+                gt_calc_jav_input[:, 6:9] = pm.einsumMatVecMul(
+                    jav_mats, translation_diffs[prev_start:-1]
+                )
 
-            gt_jav6 = gtMultipliers6(gt_calc_jav_input, self.base_JAV6)
+                gt_jav6 = gtMultipliers6(gt_calc_jav_input, self.base_JAV6)
 
-            motion_data[MOTION_DATA.GT0] = gt_jav6[:, 0]
-            motion_data[MOTION_DATA.GT1] = gt_jav6[:, 1]
-            motion_data[MOTION_DATA.GT2] = gt_jav6[:, 2]
-            motion_data[MOTION_DATA.GT3] = gt_jav6[:, 3]
-            motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
-            motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
+                motion_data[MOTION_DATA.GT0] = gt_jav6[:, 0]
+                motion_data[MOTION_DATA.GT1] = gt_jav6[:, 1]
+                motion_data[MOTION_DATA.GT2] = gt_jav6[:, 2]
+                motion_data[MOTION_DATA.GT3] = gt_jav6[:, 3]
+                motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
+                motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
 
             ck_denom = deg1_speeds_full.flatten()[1:]**(3/2)
             ck_num_terms = []
@@ -1106,6 +1239,10 @@ class CalcsForVideo:
             curvatures = ck_num / ck_denom
             motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
             motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
+
+            # Remove any specified keys.
+            for k in self.other_exclusions:
+                motion_data.pop(k, None)
 
             '''
             Slower curvature thing that didn't improve accuracy
@@ -1136,15 +1273,9 @@ class CalcsForVideo:
             '''
 
 
-            keys_to_check_for_completeness = motion_data.keys()
             if check_key_completeness:
-                missing_keys = getMissingMotionDataKeys(
-                    keys_to_check_for_completeness
-                )
-                if len(missing_keys) > 0:
-                    raise Exception("Keys {} missing!".format([
-                        mk.name for mk in missing_keys
-                    ]))
+                self.validateKeys(motion_data.keys())
+                
             motion_datas.append(motion_data)
             min_err_labels.append(curr_min_norm_labels[1:])
             all_err_norms.append(curr_err_norms_dict)

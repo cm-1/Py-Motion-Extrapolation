@@ -22,8 +22,7 @@ import gtCommon as gtc
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from motiontools.posefeatures import RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, ANG_OR_MAG, JAV # Enums
 from motiontools.posefeatures import SpecifiedMotionData, OneHotMotionData
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
@@ -412,8 +411,17 @@ colin_thresh = 0.7 # Threshold for collinearity.
 nonco_cols, co_mat = pm.non_collinear_features(
     dog.concat_train_data, colin_thresh
 )
-def indsForKeysMD(keysMD):
-    return [dog.motion_data_keys.index(k) for k in keysMD]
+def indsForKeysMD(keysMD: typing.List[MOTION_DATA]):
+    ret = []
+    for k in keysMD:
+        f = -1
+        try:
+            f = dog.motion_data_keys.index(k)
+        except ValueError:
+            print("Key", k.name, "not found.")
+        if f >= 0:
+            ret.append(f)
+    return ret
 
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
@@ -439,7 +447,7 @@ circ_vec3_inds = [
 ]
 veld_ra_inds = [
     i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.VEL_DEG2
+    if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
 ]
 veld2_dot_inds = [
     i for i, k in enumerate(dog.motion_data_keys)
@@ -447,12 +455,12 @@ veld2_dot_inds = [
 ]
 # plane_ra_inds = [
 #     i for i, k in enumerate(dog.motion_data_keys)
-#     if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.PLANE_ORTHO
+#     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
 # ]
 all_circ_inds = [
     i for i, k in enumerate(dog.motion_data_keys) if "CIRC" in k.name.upper()
 ]
-all_ratio_inds = [
+all_timescaled_inds = [
     i for i, k in enumerate(dog.motion_data_keys) if "TIMESCALED" in k.name.upper()
 ]
 misc_rem_inds = indsForKeysMD([
@@ -462,27 +470,27 @@ misc_rem_inds = indsForKeysMD([
 ])
 
 nonco_cols[:] = True
-nonco_cols[onehot_inds] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
-nonco_cols[GT_inds] = False
-nonco_cols[ang_inds] = False
-nonco_cols[bidir_inds] = False
-nonco_cols[circ_vec3_inds] = False
-nonco_cols[all_circ_inds] = False
-nonco_cols[all_ratio_inds] = False
+
+broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
+broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
+broad_exclusions += veld_ra_inds + veld2_dot_inds
+
+nonco_cols[broad_exclusions] = False
 nonco_cols[misc_rem_inds] = False
-nonco_cols[veld_ra_inds] = False
-nonco_cols[veld2_dot_inds] = False
+nonco_cols[[
+    i for i, k in enumerate(dog.motion_data_keys) if isinstance(k, MOTION_DATA)
+]] = False
 # nonco_cols[plane_ra_inds] = False
 
 
 AVD2_KEY = SpecifiedMotionData(
-    MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG, False, True
+    MOTION_DATA.ACC_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG, False, True
 )
 
 bounce_ang_key = SpecifiedMotionData(
-    MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG,
+    MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
     False, True
 )
 
@@ -491,7 +499,7 @@ col_sub_keys = [
     MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
     MOTION_DATA.DISP_MAG_RATIO
 ]
-col_indices = indsForKeysMD(col_sub_keys)
+# col_indices = indsForKeysMD(col_sub_keys)
 # nonco_cols[col_indices] = True
 
 nonco_col_nums = np.where(nonco_cols)[0]
@@ -564,8 +572,6 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
 # Z-scale each column to standard normal distribution.
 bcs_scaler = StandardScaler()
-
-from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
 
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
