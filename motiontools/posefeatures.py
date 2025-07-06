@@ -268,7 +268,7 @@ PoseLoaderList = typing.List[gtc.PoseLoader]
 # The below function is the result of me feeding my original getClosestPoint()
 # function through Copilot/Claude to accomodate multiple points per hyperplane.
 # TODO: Need to manually verify logic and clean things up a bit.
-def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray, return_dists: bool = False):
+def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDArray, return_sq_dists: bool = False):
     """
     Parameters:
         normals: shape (m, k) where m is number of hyperplanes, k is dimensionality
@@ -281,7 +281,6 @@ def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDA
     # scaled_plane_offsets: (m, 1)
     # points: (1, k, n)
     normals_exp = normals.reshape(normals.shape[0], normals.shape[1], 1)
-    offsets_exp = scaled_plane_offsets.reshape(-1, 1)
     points_exp = points.T.reshape(1, points.shape[1], points.shape[0])
     
     # Calculate dot products: (m, 1, n)
@@ -289,7 +288,7 @@ def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDA
     pn = np.sum(normals_exp * points_exp, axis=1, keepdims=True)  # (m, 1, n)
     
     # Calculate scalars: (m, 1, n)
-    scalar = (offsets_exp.reshape(-1, 1, 1) - pn) / norm_sq
+    scalar = (scaled_plane_offsets.reshape(-1, 1, 1) - pn) / norm_sq
     
     # Calculate displacements: (m, k, n)
     disps = scalar * normals_exp
@@ -297,12 +296,12 @@ def getClosestPoint(normals: NDArray, scaled_plane_offsets: NDArray, points: NDA
     # Calculate closest points: (m, k, n)
     closest = points_exp + disps
     
-    if return_dists:
+    if return_sq_dists:
         # Calculate distances: (m, n)
-        distances = np.sqrt(np.sum(disps * disps, axis=1))
-        return (closest.transpose(2, 1, 0),  # (n, k, m)
-                distances.T)                  # (n, m)
-    return closest.transpose(2, 1, 0)        # (n, k, m)
+        sq_distances = np.sum(disps * disps, axis=1)
+        return (closest,
+                sq_distances)
+    return closest
 
 def getBaselineJAV6(acc_multiplier_options, jerk_multiplier_options):
     base = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
@@ -330,32 +329,40 @@ def gtMultipliers6(y_true: NDArray, baseline_m6: NDArray):
     j_o = y_true[:, 8] / y_true[:, 5]
     
     # First hyperplane (a and j components)
-    points_aj = baseline_m6[:, [2, 4]]  # Shape: (n, 2)
-    closest_points_aj, dists_aj = getClosestPoint(
-        y_true[:, [2, 4]], y_true[:, 7], points_aj, return_dists=True
+    pts_aj = baseline_m6[:, [2, 4]]  # Shape: (n, 2)
+    u_pts_aj, u_pts_aj_inds = np.unique(pts_aj, return_inverse=True, axis=0)
+    closest_points_aj, sq_dists_aj = getClosestPoint(
+        y_true[:, [2, 4]], y_true[:, 7], u_pts_aj, return_sq_dists=True
     )
-    # For each hyperplane (each row in y_true), find the closest among n points
-    min_indices_aj = np.argmin(dists_aj, axis=0)  # Shape: (m,)
-    # Get the closest points using the indices
-    # closest_points_aj shape is (n, 2, m), we want to select best n for each m
-    a_a = closest_points_aj[min_indices_aj, 0, range(len(y_true))]
-    j_a = closest_points_aj[min_indices_aj, 1, range(len(y_true))]
+
+
     
     # Second hyperplane (v, a, and j components)
-    points_vaj = baseline_m6[:, [0, 1, 3]]  # Shape: (n, 3)
-    closest_points_vaj, dists_vaj = getClosestPoint(
-        y_true[:, [0, 1, 3]], y_true[:, 6], points_vaj, return_dists=True
+    pts_vaj = baseline_m6[:, [0, 1, 3]]  # Shape: (n, 3)
+    u_pts_vaj, u_pts_vaj_inds = np.unique(pts_vaj, return_inverse=True, axis=0)
+    closest_points_vaj, sq_dists_vaj = getClosestPoint(
+        y_true[:, [0, 1, 3]], y_true[:, 6], u_pts_vaj, return_sq_dists=True
     )
-    # For each hyperplane, find the closest among n points
-    min_indices_vaj = np.argmin(dists_vaj, axis=0)  # Shape: (m,)
+
+    all_sq_dists_aj = sq_dists_aj[:, u_pts_aj_inds]
+    all_sq_dists_vaj = sq_dists_vaj[:, u_pts_vaj_inds]
+    all_sq_dists = all_sq_dists_aj + all_sq_dists_vaj
+
+    min_indices = np.argmin(all_sq_dists, axis=1)
+    min_indices_aj = u_pts_aj_inds[min_indices]
+    min_indices_vaj = u_pts_vaj_inds[min_indices]
+
+    # Get the closest points using the indices
+    # closest_points_aj shape is (n, 2, m), we want to select best n for each m
+    a_a = closest_points_aj[range(len(y_true)), 0, min_indices_aj]
+    j_a = closest_points_aj[range(len(y_true)), 1, min_indices_aj]
     # Get the closest points using the indices
     # closest_points_vaj shape is (n, 3, m), we want to select best n for each m
-    v_v = closest_points_vaj[min_indices_vaj, 0, range(len(y_true))]
-    a_v = closest_points_vaj[min_indices_vaj, 1, range(len(y_true))]
-    j_v = closest_points_vaj[min_indices_vaj, 2, range(len(y_true))]
+    v_v = closest_points_vaj[range(len(y_true)), 0, min_indices_vaj]
+    a_v = closest_points_vaj[range(len(y_true)), 1, min_indices_vaj]
+    j_v = closest_points_vaj[range(len(y_true)), 2, min_indices_vaj]
     
     return np.stack([v_v, a_v, a_a, j_v, j_a, j_o], axis=-1)
-
 
 def getMissingMotionDataKeys(keys: typing.List[MOTION_DATA_KEY_TYPE]):
         missing_keys: typing.List[MOTION_DATA] = []
