@@ -851,32 +851,40 @@ shap.plots.scatter(
 clustering = shap.utils.hclust(shap_test) #, bcotjav.jav_test[shap_test_inds, 12:15])
 #%%
 shap.plots.bar(shap_values_tf[..., output_shap_ind], clustering=clustering)
-
 #%% Graphing the SHAP and scramble importance rankings.
+
+scramble_for_bars = scramble_scores - np.min(scramble_scores, axis=0)
+scramble_for_bars /= (np.mean(scramble_for_bars, axis=0) + np.std(scramble_for_bars, axis=0))
 num_features = len(nonco_col_nums)
 nonco_arange = np.arange(num_features)
 for skip in range(4):
     plt.bar(
-        scramble_rank[:, skip] + skip / 4, num_features - nonco_arange,
+        nonco_arange + skip / 4, scramble_for_bars[:, skip],
         width = 1/4, label="skip " + str(skip)
     )
 plt.legend()
+plt.xticks(nonco_arange[::5])
 plt.xticks(nonco_arange, minor=True)
 plt.xlabel("Feature number")
-plt.ylabel("Importance rank")
+plt.ylabel("Scramble Importance")
+plt.ylim(0, 1)
 plt.show()
 
 #%%
-num_muls = len(shap_sort)
+shap_accum = np.mean(np.abs(shap_values_tf.values), axis=0)
+shap_accum /= (np.mean(shap_accum, axis=0) + np.std(shap_accum, axis=0))
+num_muls = shap_values_tf.shape[-1]
 for mul in range(num_muls):
     plt.bar(
-        shap_sort[mul] + mul / num_muls, num_features - nonco_arange,
+        nonco_arange + mul / num_muls, shap_accum[:, mul],
         width = 1/12, label="mul " + str(skip)
     )
 plt.legend()
+plt.xticks(nonco_arange[::5])
 plt.xticks(nonco_arange, minor=True)
 plt.xlabel("Feature number")
-plt.ylabel("Importance rank")
+plt.ylabel("SHAP Importance")
+plt.ylim(0, 1)
 plt.show()
 
 #%%
