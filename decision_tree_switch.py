@@ -509,9 +509,6 @@ nonco_col_nums = np.where(nonco_cols)[0]
 # nonco_cols[list(select_cols)] = True
 
 
-# %%
-
-
 # Custom importance weighting layer suggested/described "in theory" by a friend.
 # Then, I had the class written by ChatGPT and manually verified.
 # (But I'm not a big tensorflow expert, so maybe my verification was faulty...)
@@ -563,7 +560,8 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     model.compile(loss=loss, optimizer=optim)
     return model
 bcs_model = getUntrainedNN()
-# %%
+
+
 JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
 # # Convert from numpy array to tf tensor.
@@ -579,8 +577,7 @@ class DataForJAV:
                  save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
-        if len(self.data_organizer.col_subset_test) <= 0:
-            self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
+        self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
 
         self.save_data_for_conf = save_data_for_conf
         self.jav_per_combo = None
@@ -610,19 +607,13 @@ class DataForJAV:
         self.jav_train = partial_jav_train
         self.jav_test = partial_jav_test
         
-    def getScoresTrain(self, predictions: typing.Optional[NDArray] = None, 
-                       should_print=True):
-        if predictions is None:
-            predictions = bcs_model.predict(self.data_organizer.col_subset_train)
+    def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
             predictions, self.jav_train,
             self.data_organizer.skip_train_inds_dict, should_print
         )
 
-    def getScoresTest(self, predictions: typing.Optional[NDArray] = None,
-                      should_print=True):
-        if predictions is None:
-            predictions = bcs_model.predict(self.data_organizer.col_subset_test)
+    def getScoresTest(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
             predictions, self.jav_test, 
             self.data_organizer.skip_inds_dict, should_print
