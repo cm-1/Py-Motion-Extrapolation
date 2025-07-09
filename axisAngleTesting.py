@@ -192,7 +192,7 @@ aa_quat_diffs = np.abs(np.stack([
     aas_to_qs_test - qs_to_reconstruct, -aas_to_qs_test - qs_to_reconstruct
 ], axis = 0))
 quat_diffs_per_q = np.sum(aa_quat_diffs, axis = -1)
-if np.max(np.min(quat_diffs_per_q), axis = 0) > 0.0001:
+if np.max(np.min(quat_diffs_per_q, axis = 0)) > 0.0001:
     raise Exception("Quaternion reconstruction failed!")
 
 #%% Testing the Runge-Kutta quaternion integration.
