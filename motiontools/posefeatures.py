@@ -1186,7 +1186,7 @@ class CalcsForVideo:
             )
             self._addDotsAndAngs(
                 motion_data, MD.JERK_VEC3, OD.PLANE_ORTHO, False,
-                jerk_ortho_norms.flatten(), jerk_norms.flatten()
+                jerk_ortho_norms.flatten(), jerk_norms[1:].flatten()
             )
 
             jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
