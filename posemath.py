@@ -393,14 +393,34 @@ def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
     return thetas
 
 # Angles returned should be in the 0-PI range.
-def axisAnglesFromQuats(quatVals):
-    # By the same logic as in the function where we find the angles between
-    # rotations represented by pairs of quaternions, we will take the abs of
-    # the cos of the halfangle to extract the one in the 0-pi range.
-    halfAngles = np.arccos(np.clip(np.abs(quatVals[..., 0:1]), -1, 1))
+def axisAnglesFromQuats(quatVals: np.ndarray):
+    halfAngles = np.arccos(np.clip(quatVals[..., 0:1], -1, 1))
+    sinHalf = np.sin(halfAngles)
+    tooLarge = (halfAngles > HALF_PI_NP)
+    sinHalf[tooLarge] = -sinHalf[tooLarge]
+    halfAngles[tooLarge] = np.pi - halfAngles[tooLarge]
     angles = halfAngles + halfAngles
-    axes = safelyNormalizeArray(quatVals[..., 1:], np.sin(halfAngles))
+
+    axes = safelyNormalizeArray(quatVals[..., 1:], sinHalf)
     return axes, angles
+
+def axisAngleVec3sFromQuats(quatVals: np.ndarray):
+    halfAngles = np.arccos(np.clip(quatVals[..., 0:1], -1, 1))
+    sinHalf = np.sin(halfAngles)
+    tooLarge = (halfAngles > HALF_PI_NP)
+    sinHalf[tooLarge] = -sinHalf[tooLarge]
+    halfAngles[tooLarge] = np.pi - halfAngles[tooLarge]
+    angles = halfAngles + halfAngles
+
+
+    zero_angs = (angles[..., 0] == 0.0)
+    nonzero_angs = ~zero_angs
+    scaled_axes = np.empty(quatVals.shape[:-1] + (3,))
+    scaled_axes[zero_angs] = 0.0
+    scalars = angles[nonzero_angs] / sinHalf
+    scaled_axes[nonzero_angs] = scalars * quatVals[nonzero_angs, 1:]
+    
+    return scaled_axes
 
 def multiplyQuatLists(q0, q1):
     num_qs = len(q0) if q0.ndim > 1 else len(q1)

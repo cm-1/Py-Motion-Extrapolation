@@ -22,8 +22,7 @@ import gtCommon as gtc
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, JAV # Enums
-from motiontools.posefeatures import RELATIVE_AXIS, ANG_OR_MAG
+from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, ANG_OR_MAG, JAV # Enums
 from motiontools.posefeatures import SpecifiedMotionData, OneHotMotionData
 # Classes, functions, and type hints:
 from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV, OrderForJAV
@@ -381,8 +380,17 @@ colin_thresh = 0.7 # Threshold for collinearity.
 nonco_cols, co_mat = pm.non_collinear_features(
     dog.concat_train_data, colin_thresh
 )
-def indsForKeysMD(keysMD):
-    return [dog.motion_data_keys.index(k) for k in keysMD]
+def indsForKeysMD(keysMD: typing.List[MOTION_DATA]):
+    ret = []
+    for k in keysMD:
+        f = -1
+        try:
+            f = dog.motion_data_keys.index(k)
+        except ValueError:
+            print("Key", k.name, "not found.")
+        if f >= 0:
+            ret.append(f)
+    return ret
 
 timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
@@ -408,7 +416,7 @@ circ_vec3_inds = [
 ]
 veld_ra_inds = [
     i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.VEL_DEG2
+    if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
 ]
 veld2_dot_inds = [
     i for i, k in enumerate(dog.motion_data_keys)
@@ -416,12 +424,12 @@ veld2_dot_inds = [
 ]
 # plane_ra_inds = [
 #     i for i, k in enumerate(dog.motion_data_keys)
-#     if isinstance(k, SpecifiedMotionData) and k.axis == RELATIVE_AXIS.PLANE_ORTHO
+#     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
 # ]
 all_circ_inds = [
     i for i, k in enumerate(dog.motion_data_keys) if "CIRC" in k.name.upper()
 ]
-all_ratio_inds = [
+all_timescaled_inds = [
     i for i, k in enumerate(dog.motion_data_keys) if "TIMESCALED" in k.name.upper()
 ]
 misc_rem_inds = indsForKeysMD([
@@ -431,27 +439,27 @@ misc_rem_inds = indsForKeysMD([
 ])
 
 nonco_cols[:] = True
-nonco_cols[onehot_inds] = False # Needs one-hot encoding or similar.
 nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
 nonco_cols[framenum_ind] = False
-nonco_cols[GT_inds] = False
-nonco_cols[ang_inds] = False
-nonco_cols[bidir_inds] = False
-nonco_cols[circ_vec3_inds] = False
-nonco_cols[all_circ_inds] = False
-nonco_cols[all_ratio_inds] = False
+
+broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
+broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
+broad_exclusions += veld_ra_inds + veld2_dot_inds
+
+nonco_cols[broad_exclusions] = False
 nonco_cols[misc_rem_inds] = False
-nonco_cols[veld_ra_inds] = False
-nonco_cols[veld2_dot_inds] = False
+nonco_cols[[
+    i for i, k in enumerate(dog.motion_data_keys) if isinstance(k, MOTION_DATA)
+]] = False
 # nonco_cols[plane_ra_inds] = False
 
 
 AVD2_KEY = SpecifiedMotionData(
-    MOTION_DATA.ACC_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG, False, True
+    MOTION_DATA.ACC_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG, False, True
 )
 
 bounce_ang_key = SpecifiedMotionData(
-    MOTION_DATA.VEL_DEG1_VEC3, RELATIVE_AXIS.VEL_DEG1, ANG_OR_MAG.ANG,
+    MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
     False, True
 )
 
@@ -460,7 +468,7 @@ col_sub_keys = [
     MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
     MOTION_DATA.DISP_MAG_RATIO
 ]
-col_indices = indsForKeysMD(col_sub_keys)
+# col_indices = indsForKeysMD(col_sub_keys)
 # nonco_cols[col_indices] = True
 
 nonco_col_nums = np.where(nonco_cols)[0]
@@ -468,9 +476,6 @@ nonco_col_nums = np.where(nonco_cols)[0]
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
 # nonco_cols[list(select_cols)] = True
-
-
-# %%
 
 
 # Custom importance weighting layer suggested/described "in theory" by a friend.
@@ -524,7 +529,8 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     model.compile(loss=loss, optimizer=optim)
     return model
 bcs_model = getUntrainedNN()
-# %%
+
+
 JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
 # # Convert from numpy array to tf tensor.
@@ -534,16 +540,13 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # Z-scale each column to standard normal distribution.
 bcs_scaler = StandardScaler()
 
-from motiontools.posefeatures import SpecifiedMotionData, RELATIVE_AXIS, ANG_OR_MAG
-
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
                  save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
-        if len(self.data_organizer.col_subset_test) <= 0:
-            self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
+        self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
 
         self.save_data_for_conf = save_data_for_conf
         self.jav_per_combo = None
@@ -573,19 +576,13 @@ class DataForJAV:
         self.jav_train = partial_jav_train
         self.jav_test = partial_jav_test
         
-    def getScoresTrain(self, predictions: typing.Optional[NDArray] = None, 
-                       should_print=True):
-        if predictions is None:
-            predictions = bcs_model.predict(self.data_organizer.col_subset_train)
+    def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
             predictions, self.jav_train,
             self.data_organizer.skip_train_inds_dict, should_print
         )
 
-    def getScoresTest(self, predictions: typing.Optional[NDArray] = None,
-                      should_print=True):
-        if predictions is None:
-            predictions = bcs_model.predict(self.data_organizer.col_subset_test)
+    def getScoresTest(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
             predictions, self.jav_test, 
             self.data_organizer.skip_inds_dict, should_print
@@ -814,32 +811,40 @@ shap.plots.scatter(
 clustering = shap.utils.hclust(shap_test) #, bcotjav.jav_test[shap_test_inds, 12:15])
 #%%
 shap.plots.bar(shap_values_tf[..., output_shap_ind], clustering=clustering)
-
 #%% Graphing the SHAP and scramble importance rankings.
+
+scramble_for_bars = scramble_scores - np.min(scramble_scores, axis=0)
+scramble_for_bars /= (np.mean(scramble_for_bars, axis=0) + np.std(scramble_for_bars, axis=0))
 num_features = len(nonco_col_nums)
 nonco_arange = np.arange(num_features)
 for skip in range(4):
     plt.bar(
-        scramble_rank[:, skip] + skip / 4, num_features - nonco_arange,
+        nonco_arange + skip / 4, scramble_for_bars[:, skip],
         width = 1/4, label="skip " + str(skip)
     )
 plt.legend()
+plt.xticks(nonco_arange[::5])
 plt.xticks(nonco_arange, minor=True)
 plt.xlabel("Feature number")
-plt.ylabel("Importance rank")
+plt.ylabel("Scramble Importance")
+plt.ylim(0, 1)
 plt.show()
 
 #%%
-num_muls = len(shap_sort)
+shap_accum = np.mean(np.abs(shap_values_tf.values), axis=0)
+shap_accum /= (np.mean(shap_accum, axis=0) + np.std(shap_accum, axis=0))
+num_muls = shap_values_tf.shape[-1]
 for mul in range(num_muls):
     plt.bar(
-        shap_sort[mul] + mul / num_muls, num_features - nonco_arange,
+        nonco_arange + mul / num_muls, shap_accum[:, mul],
         width = 1/12, label="mul " + str(skip)
     )
 plt.legend()
+plt.xticks(nonco_arange[::5])
 plt.xticks(nonco_arange, minor=True)
 plt.xlabel("Feature number")
-plt.ylabel("Importance rank")
+plt.ylabel("SHAP Importance")
+plt.ylim(0, 1)
 plt.show()
 
 #%%
