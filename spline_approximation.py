@@ -304,6 +304,10 @@ class ABCSplineFitCalculator(ABC):
                             Spline fitting!")
         
         mode = SplinePredictionMode.EXTRAPOLATE
+        # The below is actually len(all_input_pts) - 1 - self.min_inputs_req + 1
+        # simplified, because we omit the last input point for which there is no
+        # following point to predict (-1) but the min filter size + 1 is the
+        # number of filter windows.
         num_spline_preds = len(all_input_pts) - self.min_inputs_req 
                                     
         # The below is just to accomodate either an array of floats or of vecs.
@@ -314,7 +318,12 @@ class ABCSplineFitCalculator(ABC):
         prediction_num = 0
             
         min_input_ind = self.min_inputs_req - 1
-        for last_input_ind in range(min_input_ind, self.max_num_input_data - 1):
+
+        # Because the last input point does not generate a prediction (as there
+        # is no ground truth after to compare against) we subtract one from
+        # its len.
+        loop_end = min(self.max_num_input_data - 1, len(all_input_pts) - 1)
+        for last_input_ind in range(min_input_ind, loop_end):
             case_filter = self.cases[prediction_num].by_mode_dict[mode].filter_on_input
             filter_len = len(case_filter)
             input_start = (last_input_ind + 1) - filter_len
@@ -332,9 +341,10 @@ class ABCSplineFitCalculator(ABC):
         main_filter_len = len(main_filter)
         len_diff = self.max_num_input_data - main_filter_len
 
-        spline_preds[prediction_num:] = curvetools.convolveFilter(
-            main_filter, all_input_pts[len_diff:-1] 
-        )
+        if len(main_filter) <= (len(all_input_pts) - 1) - len_diff:
+            spline_preds[prediction_num:] = curvetools.convolveFilter(
+                main_filter, all_input_pts[len_diff:-1] 
+            )
 
         return spline_preds
     
@@ -416,7 +426,8 @@ class ABCSplineFitCalculator(ABC):
 
         # For the rest, calculate velocity and acceleration using derivatives of
         # the fitted B-Spline curve.
-        for pred_ind in range(spline_ind_min, self.max_num_input_data - 1):
+        loop_end = min(self.max_num_input_data - 1, len(spline_preds))
+        for pred_ind in range(spline_ind_min, loop_end):
             # Predictions[0] corresponds to position[1]. Hence: 
             available_inputs = pred_ind + 1
 
@@ -440,9 +451,10 @@ class ABCSplineFitCalculator(ABC):
         len_diff = self.max_num_input_data - main_filter_len
 
         main_pred_start = self.max_num_input_data - 1
-        spline_preds[main_pred_start:] = curvetools.convolveFilter(
-            main_filter, all_input_pts[len_diff:-1] 
-        )
+        if main_pred_start < len(spline_preds):
+            spline_preds[main_pred_start:] = curvetools.convolveFilter(
+                main_filter, all_input_pts[len_diff:-1] 
+            )
 
         return spline_preds
 

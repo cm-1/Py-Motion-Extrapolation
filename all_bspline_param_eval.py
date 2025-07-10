@@ -202,7 +202,7 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 ] = r_a
             
             # Print out current progress, as this can take a long time.
-            progress_str = "\rdeg {}, ctrl {}, num_in {}".format(
+            progress_str = "\rdeg {:>2}, ctrl {:>2}, num_in {:>2}".format(
                 deg, num_ctrl_pts, num_input_pts
             )
             print(progress_str, end = '', flush=True)
@@ -220,13 +220,17 @@ np.savez_compressed(
 #%% 
 load_target = "./default_filename.npz"
 if mode == SplinePredictionMode.EXTRAPOLATE:
-    load_target = "./results/bspline_param_evals2_c.npz"
+    # Old: load_target = "./results/bspline_param_evals2_c.npz"
+    load_target = "./results/bspline_param_evals_extrap.npz"
 elif mode == SplinePredictionMode.SMOOTH:
-    load_target = "./results/bspline_param_evals_quad_c.npz"
+    # Old: load_target = "./results/bspline_param_evals_quad_c.npz"
+    load_target = "./results/bspline_param_evals_smooth.npz"
 elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
-    load_target = "./results/bspline_param_evals_smoothderiv_c.npz"
+    # Old: load_target = "./results/bspline_param_evals_smoothderiv_c.npz"
+    load_target = "./results/bspline_param_evals_smoothacc.npz"
 elif mode == SplinePredictionMode.CONST_ACCEL:
-    load_target = "./results/bspline_param_evals_deriv_c.npz"
+    # Old: load_target = "./results/bspline_param_evals_deriv_c.npz"
+    load_target = "./results/bspline_param_evals_constacc.npz"
 load_result = np.load(load_target)
 # load_result.close()
 
