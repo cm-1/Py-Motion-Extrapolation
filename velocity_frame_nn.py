@@ -19,7 +19,10 @@ import keras
 # Stuff needed for calculating the input features for the non-RNN models.
 # MOTION_DATA_KEY_TYPE is a class representing input feature column "names",
 # while the MOTION_DATA enum is a "subset" of these.
-from motiontools.posefeatures import MOTION_DATA, MOTION_DATA_KEY_TYPE
+from motiontools.posefeatures import (
+    MOTION_DATA, MOTION_DATA_KEY_TYPE, SpecifiedMotionData, OneHotMotionData,
+    ANG_OR_MAG
+)
 
 
 
@@ -70,6 +73,78 @@ print("Removing collinear data columns.")
 colin_thresh = 0.7 # Threshold for collinearity.
 
 nonco_cols, co_mat = pm.non_collinear_features(concat_train_data, colin_thresh)
+def indsForKeysMD(keysMD: typing.List[MOTION_DATA]):
+    ret = []
+    for k in keysMD:
+        f = -1
+        try:
+            f = motion_data_keys.index(k)
+        except ValueError:
+            print("Key", k.name, "not found.")
+        if f >= 0:
+            ret.append(f)
+    return ret
+
+timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+framenum_ind = motion_data_keys.index(MOTION_DATA.FRAME_NUM)
+onehot_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if isinstance(k, OneHotMotionData)
+]
+GT_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if len(k.name) == 3 and k.name[:2] == "GT"
+]
+ang_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.ang_or_mag == ANG_OR_MAG.ANG
+]
+bidir_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.bidirectional
+]
+circ_vec3_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.base_cat.name[:4].upper() == "CIRC"
+]
+veld_ra_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
+]
+veld2_dot_inds = [
+    i for i, k in enumerate(motion_data_keys)
+    if "DEG2_DOT" in k.name.upper()
+]
+# plane_ra_inds = [
+#     i for i, k in enumerate(motion_data_keys)
+#     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
+# ]
+all_circ_inds = [
+    i for i, k in enumerate(motion_data_keys) if "CIRC" in k.name.upper()
+]
+all_timescaled_inds = [
+    i for i, k in enumerate(motion_data_keys) if "TIMESCALED" in k.name.upper()
+]
+misc_rem_inds = indsForKeysMD([
+    MOTION_DATA.INV_VEL_BCS_RATIOS, MOTION_DATA.RAD_DIFF,
+    MOTION_DATA.SPEED_ACC_RATIO, MOTION_DATA.DISP_MAG_DIFF,
+    MOTION_DATA.PLANE_NORMAL_DOT, MOTION_DATA.SPEED_ORTHO_ACC_RATIO
+])
+
+nonco_cols[:] = True
+nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
+nonco_cols[framenum_ind] = False
+
+broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
+broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
+broad_exclusions += veld_ra_inds + veld2_dot_inds
+
+nonco_cols[broad_exclusions] = False
+nonco_cols[misc_rem_inds] = False
+nonco_cols[[
+    i for i, k in enumerate(motion_data_keys) if isinstance(k, MOTION_DATA)
+]] = False
+
 
 timestamp_ind = motion_data_keys.index(MOTION_DATA.TIMESTAMP)
 framenum_ind = motion_data_keys.index(MOTION_DATA.FRAME_NUM)
@@ -176,16 +251,22 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
     in_shape = nonco_train_data.shape[1] + (6 if use_resid_data else 0)
-    model = keras.Sequential([
-        keras.layers.Input((in_shape,)),
-        # ImportanceLayer(nonco_train_data.shape[1]),  # Custom importance layer
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dropout(dropout_rate),
-        keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation),
-        keras.layers.Dense(12) #6)
-    ])
+
+    make_dense = lambda num_nodes = nodes_per_layer: keras.layers.Dense(
+        num_nodes, activation=vel_nn_activation #, kernel_initializer=initer
+    )
+
+    in_layer = keras.layers.Input((in_shape,))
+
+    x = make_dense()(in_layer)
+    for _ in range(2):
+        x = keras.layers.Dropout(dropout_rate)(x)
+        x = make_dense()(x)
+    
+    out = keras.layers.Dense(12)(x)
+
+    model = keras.Model(inputs = in_layer, outputs = out)
+
     if loss is None:
         loss = poseLossJAV
 

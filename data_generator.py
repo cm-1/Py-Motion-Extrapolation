@@ -6,6 +6,7 @@
 import typing
 import pickle
 import os
+import sys
 
 import numpy as np
 from numpy.typing import NDArray
@@ -47,12 +48,26 @@ print("Calculating input data. This may take a minute or two.")
 # We also get a list of pose loaders, one for each BCOT video.
 nametup_combos, bcot_loaders = getAllCombosAndLoadersBCOT()
 
+exclude_all_excludable = True
+if len(sys.argv) > 1 and sys.argv[1] == "keep-all":
+    exclude_all_excludable = False
+    print("Calculating all possible columns!")
+else:
+    print("Calculating default subset of columns!")
+
 cfc = CalcsForVideo(
     obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
-    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
+    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH,
+    exclude_onehots=exclude_all_excludable,
+    exclude_past_muls=exclude_all_excludable,
+    exclude_bidir=exclude_all_excludable,
+    exclude_axis_angs=exclude_all_excludable,
+    exclude_circ_data=exclude_all_excludable,
+    exclude_vel_deg2=exclude_all_excludable,
+    exclude_timescaled = exclude_all_excludable
 )
 cfc.getAll(bcot_loaders)
 
