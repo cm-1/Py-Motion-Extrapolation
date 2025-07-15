@@ -179,7 +179,7 @@ print("Calculating output data.")
 # Will have to eventually rename this and the other instances in other files to
 # something else consistent.
 bcs_per_combo = dataForCombosJAV(
-    bcot_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), False, False
+    bcot_loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), False, False
 )
 
 train_combos_c2 = [c[:2] for c in train_combos]
