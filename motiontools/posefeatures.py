@@ -1371,10 +1371,15 @@ class JAV(Enum):
 NumpyForSkipAndID = typing.List[typing.Dict[typing.Any, NDArray]]
 OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
+def _listOfEmptyDicts(size: int):
+    return [dict() for _ in range(size)]
 
 def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                      return_world2locals: bool = False, 
-                     return_translations: bool = False):
+                     return_translations: bool = False,
+                     return_rotation_mats: bool = False,
+                     return_rotation_vels: bool = False
+                     ):
     '''
     For each frame of video, we consider a coordinate frame where one axis is
     aligned with the object's velocity and another is aligned with the
@@ -1386,9 +1391,12 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
     '''
 
     # Empty dict for each skip amount.
-    all_data: NumpyForSkipAndID = [dict() for _ in range(3)]
-    all_world2local_mats: NumpyForSkipAndID = [dict() for _ in range(3)]
-    all_translations: NumpyForSkipAndID = [dict() for _ in range(3)]
+    all_data: NumpyForSkipAndID = _listOfEmptyDicts(3)
+    all_world2local_mats: NumpyForSkipAndID = _listOfEmptyDicts(3)
+    all_translations: NumpyForSkipAndID = _listOfEmptyDicts(3)
+
+    all_rotation_mats: NumpyForSkipAndID = _listOfEmptyDicts(3)
+    all_rotation_vels: NumpyForSkipAndID = _listOfEmptyDicts(3)
     
     if vec_order is None:
         vec_order = (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
@@ -1399,6 +1407,12 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
     for calc_obj in pose_loaders:
         c = calc_obj.getVidID()
         curr_translations = calc_obj.getTranslationsGTNP()
+
+        # Only applicable if we want to return associated rotations.
+        curr_rotation_mats: typing.Optional[NDArray] = None
+        if return_rotation_mats or return_rotation_vels:
+            curr_rotation_mats = calc_obj.getRotationsGTNP()
+        
         for skip in range(skip_end):
             step = skip + 1
             translations = curr_translations[::step]
@@ -1457,12 +1471,29 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                 all_world2local_mats[skip][c] = mats
             if return_translations:
                 all_translations[skip][c] = translations
+            if return_rotation_mats or return_rotation_vels:
+                rotation_mats = curr_rotation_mats[::step]
+                if return_rotation_mats:
+                    all_rotation_mats[skip][c] = rotation_mats
+                if return_rotation_vels:
+                    rev_rotation_mats = np.swapaxes(rotation_mats[:-1], -2, -1)
+                    rotation_vel_mats = pm.einsumMatMatMul(
+                        rotation_mats[1:], rev_rotation_mats
+                    )
+                    all_rotation_vels[skip][c] = pm.axisAngleFromMatArray(
+                        rotation_vel_mats
+                    )
+
     if return_world2locals or return_translations:
         res = (all_data, )
         if return_world2locals:
             res += (all_world2local_mats, )
         if return_translations:
             res += (all_translations, )
+        if return_rotation_mats:
+            res += (all_rotation_mats, )
+        if return_rotation_vels:
+            res += (all_rotation_vels, )
         return res
     return all_data
 
