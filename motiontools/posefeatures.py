@@ -1411,7 +1411,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         # Only applicable if we want to return associated rotations.
         curr_rotation_mats: typing.Optional[NDArray] = None
         if return_rotation_mats or return_rotation_vels:
-            curr_rotation_mats = calc_obj.getRotationsGTNP()
+            curr_rotation_mats = calc_obj.getRotationMatsGTNP()
         
         for skip in range(skip_end):
             step = skip + 1
