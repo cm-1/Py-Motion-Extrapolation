@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 import pathlib
 import json
 import re
@@ -170,7 +171,11 @@ class PoseLoader(ABC):
         cls._setPosePathsFromJSON(d)
     
     @abstractmethod
-    def _getPosesFromDisk(self):
+    def _getPosesFromDisk(self) -> \
+        typing.Tuple[
+            typing.Tuple[NDArray, NDArray],
+            typing.Optional[typing.Tuple[NDArray, NDArray]]
+        ]:
         pass
             
     def loadData(self):
@@ -179,10 +184,25 @@ class PoseLoader(ABC):
 
         gtMatData, calcMatData = self._getPosesFromDisk()
 
-        self._translationsGTNP = gtMatData[1]
-        self._rotationMatsGTNP = gtMatData[0]
+        rots_are_mats = (
+            gtMatData[0].ndim == 3 and gtMatData[0].shape[-2:] == (3, 3)
+        )
 
-        self._rotationsGTNP = pm.axisAngleFromMatArray(gtMatData[0])
+        self._translationsGTNP = gtMatData[1]
+
+        if rots_are_mats:
+            self._rotationMatsGTNP = gtMatData[0]
+            self._rotationsGTNP = pm.axisAngleFromMatArray(gtMatData[0])
+        else:
+            if not (gtMatData[0].ndim == 2 and gtMatData[0].shape[-1] == 3):
+                raise Exception(
+                    "Rotations don't seem to be axis-angle or matrices!"
+                )
+
+            self._rotationsGTNP = gtMatData[0]
+            self._rotationMatsGTNP = pm.matsFromScaledAxisAngleArray(
+                gtMatData[0]
+            )
 
         # Check if file for CV-calculated pose data exists; if so, load it too.
         if calcMatData is not None:
@@ -795,3 +815,110 @@ class PoseLoaderPauwels(PoseLoader):
     def getRotationsGTNP(self):
         raise NotImplementedError("Could make this > efficient?")
         return super().getRotationsGTNP()
+
+
+class PoseLoaderClipsHOT3D(PoseLoader):
+    class CAM_TYPE(Enum):
+        ARIA = 1
+        QUEST = 2
+
+    _FRAMES_PER_VID = 150
+    _ZEROS_WIDTH = 6
+
+    _ALL_CAM_KEYS = {
+        CAM_TYPE.ARIA: ("1201-1", "1201-2", "214-1"),
+        CAM_TYPE.QUEST: ("1201-1", "1201-2")
+    }
+
+    _ALL_REF_CAM_IDXS = {CAM_TYPE.ARIA: 2}
+    _CAM_TYPE_CLIP_RANGES = {
+        CAM_TYPE.ARIA: (1849, 3364), CAM_TYPE.QUEST: (0, 1287)
+    }
+
+    _POSE_FNAMES = {
+        CAM_TYPE.ARIA: "hot3d_aria_poses.npz",
+        CAM_TYPE.QUEST: "hot3d_quest_poses.npz"
+    }
+
+    _TIMESTAMP_FNAMES = {
+        CAM_TYPE.ARIA: "hot3d_aria_times.npz",
+        CAM_TYPE.QUEST: "hot3d_quest_times.npz"
+    }
+
+    _DATASET_DIR = None
+    # _CV_POSE_EXPORT_DIR = None
+    _dir_paths_initialized = False
+
+    def __init__(self, clip_num: int):
+        super(PoseLoaderClipsHOT3D, self).__init__(False)
+
+        self._clip_num = clip_num
+        cam_type_found = False
+        self.clip_type = PoseLoaderClipsHOT3D.CAM_TYPE.ARIA
+        for key, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
+            if self._clip_num >= rnge[0] and self._clip_num <= rnge[1]:
+                self.clip_type = key
+                cam_type_found = True
+                break
+
+        if not cam_type_found:
+            raise Exception("Clip #" + str(clip_num) + " not recognized!")
+        
+        times_fname = PoseLoaderClipsHOT3D._TIMESTAMP_FNAMES[self.clip_type]
+        poses_fname = PoseLoaderClipsHOT3D._POSE_FNAMES[self.clip_type]
+
+        self.poseDirGT = PoseLoaderClipsHOT3D._DATASET_DIR 
+        self.posePathGT = self.poseDirGT / poses_fname
+        self.timesPathGT = self.poseDirGT / times_fname
+        
+
+    def getVidID(self):
+        return (self._clip_num, ) # TODO: Add in model number, *maybe* others.
+
+    @classmethod
+    def getAllIDs(cls):
+        # TODO: Need to include model numbers here too!
+        ret = []
+        for cam, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
+            if cam == PoseLoaderClipsHOT3D.CAM_TYPE.QUEST:
+                print("Still need to save Quest3 data!")
+                continue
+            ret += [(x, ) for x in range(rnge[0], rnge[1] + 1)]
+        return ret
+
+    @classmethod
+    def _setPosePathsFromJSON(cls, json_read_result):
+        PoseLoaderClipsHOT3D._DATASET_DIR = pathlib.Path(
+            json_read_result["hot3d_dataset_directory"]
+        )
+        # PoseLoaderClipsHOT3D._CV_POSE_EXPORT_DIR = pathlib.Path(
+        #     json_read_result["hot3d_result_directory"]
+        # )
+        PoseLoaderClipsHOT3D._dir_paths_initialized = True
+
+    def _getPosesFromDisk(self):
+
+        print("Key:", self._clip_num, ". Pose path:", self.posePathGT)
+        clip_pt = "clip{:06d}".format(self._clip_num)
+        poses = np.empty((0, 6))
+        with np.load(self.posePathGT) as np_load:
+            for key in np_load.files:
+                if clip_pt in key:
+                    print("Just picking first model's poses for now!") # TODO
+                    poses = np_load[key].copy()
+                    break
+
+        times = np.empty((0, ))
+        with np.load(self.timesPathGT) as np_load:
+            clip_ind = [np_load['clip_nums'] == self._clip_num][0]
+            times = np_load['timestamps'][clip_ind].copy()
+        
+        self._timestamps = times
+
+        aas = poses[:, :3]
+        translations = poses[:, 3:]
+        gtMatData = (aas, translations)
+        calcMatData = None
+
+        return (gtMatData, calcMatData)
+    
