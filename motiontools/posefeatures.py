@@ -261,6 +261,76 @@ class OneHotMotionData(typing.NamedTuple):
         
         return bn[:(last_underscore_ind + 1)] + "CAT" + str(self.cat_num) 
 
+def _getUnflatTimestamps(num_displacements: int,
+                         timestamps: typing.Optional[NDArray]):
+    unflat_timestamps: typing.Optional[NDArray] = None
+    if timestamps is not None:
+        if len(timestamps) != (num_displacements + 1):
+            raise ValueError(
+                "Must have n+1 timestamps for n displacements!"
+            )
+        unflat_timestamps = timestamps.reshape(-1, 1)
+    return unflat_timestamps
+
+class PositionDerivativeCollection:
+    def __init__(self, displacements: NDArray,
+                 timestamps: typing.Optional[NDArray] = None):
+        self.velocities = displacements.copy()
+        unflat_timestamps = _getUnflatTimestamps(len(displacements), timestamps)
+        if timestamps is not None:
+            time_deltas = np.diff(unflat_timestamps, 1, axis=0)
+            self.velocities = displacements / time_deltas
+
+        self.accelerations = self._recursiveDeriv(
+            self.velocities, 2, unflat_timestamps
+        )
+        self.jerks = self._recursiveDeriv(
+            self.accelerations, 3, unflat_timestamps
+        )
+        self.snaps = self._recursiveDeriv(
+            self.jerks, 4, unflat_timestamps
+        )
+        self.crackles = self._recursiveDeriv(
+            self.snaps, 5, unflat_timestamps
+        )
+
+    @staticmethod   
+    def _recursiveDeriv(prev_vals: NDArray, deriv_power: int,
+                        full_timestamps: typing.Optional[NDArray]):
+        '''E.g., prev_vals are the last accelerations, deriv_power is 3 
+        (for jerk), and full_timestamps are the timestamps for all positions
+        (minus perhaps the last one for which no prediction follows) reshaped
+        to (n, 1).'''
+        ret_val = np.diff(prev_vals, 1, axis=0)
+        if full_timestamps is not None:
+            time_deltas = \
+                full_timestamps[deriv_power:] - full_timestamps[:-deriv_power]
+            scalars = deriv_power / time_deltas
+            ret_val = scalars * ret_val
+        return ret_val
+
+class RotationDerivativeCollection:
+    def __init__(self, known_rotation_diffs_aa: NDArray, 
+                 timestamps: typing.Optional[NDArray] = None):
+        '''The param known_rotation_diffs_aa means taking the axis-angle forms
+        of the rotations between frames WITHOUT considering timestamps yet!'''
+        timestamps_given = (timestamps is not None)
+        unflat_timestamps = _getUnflatTimestamps(
+            len(known_rotation_diffs_aa), timestamps
+        )
+        
+        self.velocities = known_rotation_diffs_aa
+        if timestamps_given:
+            time_deltas = np.diff(unflat_timestamps, 1, axis=0)
+            self.velocities = self.velocities / time_deltas
+        
+        self.accelerations = np.diff(self.velocities, 1, axis=0)
+        if timestamps_given:
+            # TODO: Try the "easier" version of this instead and compare error.
+            t2_m_t0 = unflat_timestamps[2:] - unflat_timestamps[-2:]
+            self.accelerations *= (2 / t2_m_t0)
+
+
 MOTION_DATA_KEY_TYPE = typing.Union[
     MOTION_DATA, SpecifiedMotionData, OneHotMotionData
 ]
@@ -672,16 +742,35 @@ class CalcsForVideo:
             translation_diffs = np.diff(translations, 1, axis=0)
             prev_translations = translations[:-1]
             n_input_frames = len(prev_translations)
-            deg1_vels = translation_diffs[:-1]
-            deg1_vel_diffs = np.diff(deg1_vels, 1, axis=0)
-            half_deg1_vel_diffs = deg1_vel_diffs / 2.0
-            
+
+            rderivs = RotationDerivativeCollection(timescaled_vel_axes)
+            rot_accs = rderivs.accelerations / step
+
+
+            pderivs = PositionDerivativeCollection(translation_diffs[:-1])
+            deg1_vels = pderivs.velocities
+            deg2_accs = pderivs.accelerations / step_sq
+            t_jerk_amt = pderivs.jerks
+
+            # Pad with 0 so it equals the "4th derivative".
+            # TODO: handle better!
+            scaled_snaps = pderivs.snaps / (step**4)
+            snap_mags = np.linalg.norm(scaled_snaps, axis=-1)
+            # Why pad the snaps and crackles both by 2? The snaps need to be a
+            # bit longer because they're used as a relative axis but the
+            # crackles do not.
+            prev_jerk_errs = np.pad(scaled_snaps, ((2, 0), (0, 0)))
+            prev_jerk_err_mags = np.pad(snap_mags, ((2, 0)))
+
+            crackles = np.pad(pderivs.crackles / (step**5), ((2, 0), (0, 0)))
+
+            half_deg1_vel_diffs = 0.5 * pderivs.accelerations
             deg2_vels = deg1_vels[1:] + half_deg1_vel_diffs
+
 
             t_jerk_preds = 4 * prev_translations[3:] - 6 * prev_translations[2:-1] \
                 + 4 * prev_translations[1:-2] - prev_translations[:-3]
 
-            t_jerk_amt = prev_translations[3:] - 3*deg1_vels[1:-1] - prev_translations[:-3]
 
             cma = pex.CircularMotionAnalysis(
                 translations, translation_diffs, None
@@ -720,7 +809,6 @@ class CalcsForVideo:
                 timescaled_speeds_deg1_full.flatten()[-n_jerk_preds:]
 
 
-            deg2_accs = deg1_vel_diffs / step_sq
             acc_mags_full = np.linalg.norm(deg2_accs, axis=-1, keepdims=True)
             acc_mags = acc_mags_full[-n_jerk_preds:].flatten()
 
@@ -737,7 +825,6 @@ class CalcsForVideo:
             if not self.exclude_timescaled:
                 motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] \
                     = disp_mag_diffs / step
-            speed_deg2_diffs = np.diff(deg2_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
             disp_mag_div = deg1_speeds_full[1:] / deg1_speeds_full[:-1]
             motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div[-n_jerk_preds:].flatten()
             motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = 1.0 / disp_mag_div[-n_jerk_preds:].flatten()
@@ -802,7 +889,6 @@ class CalcsForVideo:
                 motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios
 
             rotation_mats = all_rotation_mats[::step]
-            rot_accs = np.diff(timescaled_vel_axes, 1, axis=0) / step
             prev_fixed_ax_angs = pm.closestAnglesAboutAxis(
                 rotation_mats[1:-2], rotation_mats[2:-1], vel_axes[:-1]
             )
@@ -840,6 +926,7 @@ class CalcsForVideo:
             scaled_jerks[1:] = t_jerk_amt / (step ** 3)
 
             if not self.exclude_vel_deg2:
+                speed_deg2_diffs = np.diff(deg2_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
                 motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF] = speed_deg2_diffs
                 if not self.exclude_timescaled:
                     motion_data[MOTION_DATA.VEL_DEG2_MAG_DIFF_TIMESCALED] \
@@ -963,7 +1050,6 @@ class CalcsForVideo:
             circ_vd1_ind = MOTION_MODEL.CIRC_VEL_DEG1.value - 1
             circ_vd2_ind = MOTION_MODEL.CIRC_VEL_DEG2.value - 1
             circ_acc_ind = MOTION_MODEL.CIRC_ACC.value - 1
-            jerk_ind = MOTION_MODEL.JERK.value - 1
             prev_circ_errs_vd1 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG1][:-1]
             prev_circ_errs_vd2 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG2][:-1]
             prev_circ_errs_acc = curr_errs_3D[MOTION_MODEL.CIRC_ACC][:-1]
@@ -972,19 +1058,6 @@ class CalcsForVideo:
             prev_circ_err_mags_acc = curr_err_norms[circ_acc_ind][:-1]
         
 
-            step_4_pow = step**4
-            prev_jerk_errs = np.empty_like(deg2_accs)
-            prev_jerk_errs[1:] = curr_errs_3D[MOTION_MODEL.JERK][:-1] / step_4_pow
-            # Overwrite inf/empty with 0 so it = the "4th derivative".
-            # TODO: handle better!
-            prev_jerk_errs[:2] = 0
-            prev_jerk_err_mags = np.empty(len(acc_mags_full))
-            prev_jerk_err_mags[1:] = curr_err_norms[jerk_ind][:-1].flatten()
-            prev_jerk_err_mags[:2] = 0
-
-            crackles = np.empty((n_jerk_preds, 3))
-            crackles[2:] = np.diff(prev_jerk_errs[2:], 1, axis=0) / step
-            crackles[:2] = 0.0
 
             avd1m = pm.einsumDot(deg2_accs, deg1_vels[1:])
             acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
@@ -1005,7 +1078,6 @@ class CalcsForVideo:
             )
 
             
-            jerk_norms = np.linalg.norm(scaled_jerks, axis=-1)
 
             jvd1m = pm.einsumDot(scaled_jerks[1:], deg1_vels[2:])
             jerk_vel_deg1_mags = jvd1m / deg1_speeds
@@ -1056,7 +1128,7 @@ class CalcsForVideo:
             motion_data[MOTION_DATA.PLANE_NORMAL_DOT] = plane_dots
             
             unit_jerks = np.empty((n_jerk_preds + 1, 3))
-            unit_snaps = np.empty_like(unit_jerks)
+            jerk_norms = np.linalg.norm(scaled_jerks, axis=-1)
             unit_jerks = pm.safelyNormalizeArray(scaled_jerks, jerk_norms[..., np.newaxis])
 
             unit_snaps = pm.safelyNormalizeArray(prev_jerk_errs, prev_jerk_err_mags[..., np.newaxis])
@@ -1232,8 +1304,10 @@ class CalcsForVideo:
             vel_vecs = deg1_vels[1:]
             for exc_i in range(3):
                 exc_ip = (exc_i + 1) % 3
-                ck_num_term = deg1_vel_diffs[:, exc_i] * vel_vecs[:, exc_ip]
-                ck_num_term -= deg1_vel_diffs[:, exc_ip] * vel_vecs[:, exc_i]
+                ck_num_term = \
+                    pderivs.accelerations[:, exc_i] * vel_vecs[:, exc_ip]
+                ck_num_term -= \
+                    pderivs.accelerations[:, exc_ip] * vel_vecs[:, exc_i]
                 ck_num_terms.append(ck_num_term**2)
             ck_num = np.sqrt(np.sum(ck_num_terms, axis=0))
             curvatures = ck_num / ck_denom
@@ -1328,18 +1402,21 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         for skip in range(skip_end):
             step = skip + 1
             translations = curr_translations[::step]
-            vels = np.diff(translations, axis=0)
+            displacements = np.diff(translations, axis=0)
             # We need a velocity for the last timestep, but not an acceleration,
             # because we need the vectors that take each current position to
             # the next when calculating the "ground truth" for displacement
             # predictions. This is the velocity vector; acceleration vectors
             # are not needed for this; we only need "current" acceleration.
-            accs = np.diff(vels[:-1], axis=0)
-            jerks = np.diff(accs, axis=0)
-            snaps = np.diff(jerks, axis=0)
-            crackles = np.diff(snaps, axis=0)
-            snaps = np.insert(snaps, 0, np.zeros(3), axis=0)
-            crackles = np.concatenate((np.zeros((2, 3)), crackles), axis=0)
+            times: typing.Optional[NDArray] = None
+            if calc_obj.areTimestampsConst():
+                times = calc_obj.getTimestamps()[::step]
+            mds = PositionDerivativeCollection(displacements[:-1], times[:-1])
+            vels = mds.velocities
+            accs = mds.accelerations
+            jerks = mds.jerks
+            snaps = np.insert(mds.snaps, 0, np.zeros(3), axis=0)
+            crackles = np.concatenate((np.zeros((2, 3)), mds.crackles), axis=0)
 
             # Here we specify which order in which we orthonormalize our
             # velocity, acceleration, and jerk vectors into orthonormal frames.
@@ -1348,7 +1425,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             
             # To only calculate as much as we need, we clip the arrays' fronts
             # off when we can.
-            default_ordered = (vels[2:-1], accs[1:], jerks)
+            default_ordered = (vels[2:], accs[1:], jerks)
             ordered = copy.copy(default_ordered)
             if vec_order is not None:
                 ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
@@ -1359,7 +1436,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # Transform each third vector and to-next-frame displacement into
             # this frame via matmul.
             # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
-            local_diffs = pm.einsumMatVecMul(mats, vels[3:])
+            local_diffs = pm.einsumMatVecMul(mats, displacements[3:])
             local_snaps = pm.einsumMatVecMul(mats, snaps)
             local_crackles = pm.einsumMatVecMul(mats, crackles)
 

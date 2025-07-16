@@ -480,7 +480,8 @@ broad_exclusions += veld_ra_inds + veld2_dot_inds
 nonco_cols[broad_exclusions] = False
 nonco_cols[misc_rem_inds] = False
 nonco_cols[[
-    i for i, k in enumerate(dog.motion_data_keys) if isinstance(k, MOTION_DATA)
+    i for i, k in enumerate(dog.motion_data_keys)
+    if isinstance(k, MOTION_DATA) and k != MOTION_DATA.TIMESTEP
 ]] = False
 # nonco_cols[plane_ra_inds] = False
 

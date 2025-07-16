@@ -63,7 +63,7 @@ class VidBCOT(typing.NamedTuple):
 
 class PoseLoader(ABC):
 
-    def __init__(self):
+    def __init__(self, are_timestamps_const: bool):
         self._setupPosePaths()
         
         self._translationsGTNP = np.zeros((0,3), dtype=np.float64)
@@ -72,6 +72,12 @@ class PoseLoader(ABC):
         self._rotationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
         self._dataLoaded = False
+
+        self._are_timestamps_const = are_timestamps_const
+        self._timestamps: typing.Optional[NDArray] = None
+    
+    def areTimestampsConst(self):
+        return self._are_timestamps_const
 
     @classmethod
     @abstractmethod
@@ -242,6 +248,13 @@ class PoseLoader(ABC):
     def getRotationsCalcNP(self):
         self.loadData()
         return self._rotationsCalcNP
+    
+    def getTimestamps(self):
+        self.loadData()
+        if self._are_timestamps_const:
+            return np.arange(len(self._translationsGTNP))
+        else:
+            return self._timestamps
 
     def _getNumFrames(self):
         if not self._dataLoaded:
@@ -262,7 +275,7 @@ class PoseLoader(ABC):
 class SyntheticPoseLoader(PoseLoader):
     def __init__(self, num_frames: int, const_rot_accel: bool, helix: bool,
                  const_deriv_lim: int = -1):
-        super(SyntheticPoseLoader, self).__init__()
+        super(SyntheticPoseLoader, self).__init__(True)
 
         self.num_frames = num_frames
         self.const_rot_accel = const_rot_accel
@@ -479,7 +492,7 @@ class PoseLoaderBCOT(PoseLoader):
 
     def __init__(self, bodyIndex: int, seqIndex: int, cvFrameSkipForLoad = -1):
         '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
-        super(PoseLoaderBCOT, self).__init__()
+        super(PoseLoaderBCOT, self).__init__(True)
 
         self._bod_index = bodyIndex
         self._seq_index = seqIndex
@@ -605,8 +618,9 @@ class PoseLoaderBCOT(PoseLoader):
         return posePathGT.is_dir()
 
 class PoseLoaderBOP(PoseLoader, ABC):
-    def __init__(self):
-        super(PoseLoaderBOP, self).__init__() 
+    def __init__(self, are_timestamps_const: bool):
+        super(PoseLoaderBOP, self).__init__(are_timestamps_const)
+        raise NotImplementedError("Need to figure out how to handle this better!")
 
     @staticmethod
     def _getPosesFromFileBOP(filename: str,
@@ -672,7 +686,8 @@ class PoseLoaderTUDL(PoseLoaderBOP):
 
 
     def __init__(self, is_test: bool, seq_num: int, subseq_num: int):
-        super(PoseLoaderTUDL, self).__init__()
+        super(PoseLoaderTUDL, self).__init__(False)
+        raise NotImplementedError("Need to check if TUDL timestamps are constant!")
 
         assert seq_num > 0, "Sequence # must be > 0."
         assert seq_num <= PoseLoaderTUDL._NUM_SEQS, "Sequence # must be <= 3."
@@ -737,8 +752,8 @@ class PoseLoaderPauwels(PoseLoader):
 
     def __init__(self, cvFrameSkipForLoad = -1):
         '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
-        super(PoseLoaderPauwels, self).__init__()
-
+        super(PoseLoaderPauwels, self).__init__(False)
+        raise NotImplementedError("Need to check if this dataset has timestamps!")
         self._cvFrameSkipForLoad = cvFrameSkipForLoad
         
         self.posePathGT = PoseLoaderPauwels._DATASET_DIR / "ground_truth.txt"

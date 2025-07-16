@@ -243,7 +243,15 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
         ret_mags += (mags_p20, mags_p21, mags_o2)
 
     stack_ax = 1 if returned_mats_are_world2vecs else 2
-    mats = np.stack((unit_vecs0, unit_vecs1, unit_vecs2), axis=stack_ax)
+
+    all_unit_vecs = (unit_vecs0, unit_vecs1, unit_vecs2)
+    if not areAxisArraysOrthonormal(all_unit_vecs, loud=True):
+        raise Exception((
+            "Generated matrices were not orthonormal! Likely cause: I have not "
+            "yet handled the case where the generating vectors are parallel or "
+            "zero (e.g., vecs_0 == vecs_1)."
+        ))
+    mats = np.stack(all_unit_vecs, axis=stack_ax)
 
     return ret_mags, mats
 
