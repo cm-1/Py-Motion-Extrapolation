@@ -76,15 +76,20 @@ err_norm_lists = cfc.err_norm_lists
 # will either all be train vids or all be test vids. This way (a) we are
 # guaranteed to have every motion "class" in our train and test sets, and (b)
 # we'll know how well the models generalize to new 3D objects not trained on.
-bcot_train_combos, bcot_test_combos = PoseLoaderBCOT.trainTestByBody(
-    test_ratio=0.2, random_seed=0
+bcot_split = PoseLoaderBCOT.trainValidationTestByBody(
+    validation_ratio=0.1, test_ratio=0.2, random_seed=0
 )
+bcot_train_combos, bcot_validation_combos, bcot_test_combos = bcot_split
+
 train_combos_c2 = [c[:2] for c in bcot_train_combos]
 test_combos_c2 = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
+val_combos_c2 = [c[:2] for c in bcot_validation_combos]
+if len(val_combos_c2) == 0:
+    val_combos_c2 = None
 
 dog = DataOrganizer(
     all_motion_data, min_norm_labels, err_norm_lists,
-    train_combos_c2, test_combos_c2
+    train_combos_c2, test_combos_c2, val_combos_c2
 )
 
 #%%
@@ -287,7 +292,9 @@ from sklearn.preprocessing import StandardScaler
 # Function that combines the results of the previous one into a 2D numpy
 # array.
 # List[Dict]
-def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, *,
+def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, 
+                         validation_combos: typing.Optional[typing.List] = None,
+                         *,
                          pose_loaders: typing.Optional[PoseLoaderList] = None, 
                          precalc_per_combo: typing.Optional[NumpyForSkipAndID] = None):   
     if pose_loaders is None and precalc_per_combo is None:
@@ -312,6 +319,11 @@ def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, *,
     test_res = np.concatenate(
         concatForComboSubset(all_data, test_combos), axis=0
     )
+    if validation_combos is not None and len(validation_combos) > 0:
+        val_res = np.concatenate(
+            concatForComboSubset(all_data, validation_combos), axis=0
+        )
+        return train_res, test_res, val_res
     return train_res, test_res
 
 # Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
@@ -592,11 +604,15 @@ class DataForJAV:
             self.w2ls_JAV = None
             self.translations_JAV = None
 
-        partial_jav_train, partial_jav_test = dataForComboSplitJAV(
+        jav_split = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
+            data_organizer.validation_ids,
             precalc_per_combo=self.jav_per_combo
         )
-
+        self.jav_train, self.jav_test = jav_split[:2]
+        self.jav_validation = np.empty((0, ) + self.jav_train.shape[1:])
+        if len(data_organizer.validation_ids) > 0:
+            self.jav_validation = jav_split[2]
 
         # self.jav_train = np.concatenate(
         #     (partial_jav_train, jav_tr_append), axis=-1
@@ -605,8 +621,6 @@ class DataForJAV:
         #     (partial_jav_test, jav_te_append), axis=-1
         # )
 
-        self.jav_train = partial_jav_train
-        self.jav_test = partial_jav_test
         
     def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
@@ -618,6 +632,12 @@ class DataForJAV:
         return self._scoreHelper(
             predictions, self.jav_test, 
             self.data_organizer.skip_inds_dict, should_print
+        )
+    
+    def getScoresValidation(self, predictions: NDArray, should_print: bool = True):
+        return self._scoreHelper(
+            predictions, self.jav_validation,
+            self.data_organizer.skip_validation_inds_dict, should_print
         )
 
     @staticmethod
@@ -635,11 +655,18 @@ bcotjav = DataForJAV(dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, True)
 
 
 #%% Train the network.
-bcs_hist = bcs_model.fit(dog.col_subset_train, bcotjav.jav_train, epochs=32, shuffle=True)
+val_param = None
+if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
+    val_param = (dog.col_subset_validation, bcotjav.jav_validation)
+bcs_hist = bcs_model.fit(
+    dog.col_subset_train, bcotjav.jav_train, epochs=32, shuffle=True,
+    validation_data=val_param,
+    batch_size = 1024
+)
 
 #%% Evaluate network on test data.
 
-bcs_pred = bcs_model.predict(dog.col_subset_test)
+bcs_pred = bcs_model.predict(dog.col_subset_test, batch_size = 1024)
 bcs_test_errs: NDArray = poseLossJAV(bcotjav.jav_test, bcs_pred).numpy()
 #%% Print scores on test data.
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}

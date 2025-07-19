@@ -822,15 +822,18 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         ARIA = 1
         QUEST = 2
 
-    _FRAMES_PER_VID = 150
-    _ZEROS_WIDTH = 6
+    # _FRAMES_PER_VID = 150
+    # _ZEROS_WIDTH = 6
 
     _ALL_CAM_KEYS = {
         CAM_TYPE.ARIA: ("1201-1", "1201-2", "214-1"),
         CAM_TYPE.QUEST: ("1201-1", "1201-2")
     }
 
-    _ALL_REF_CAM_IDXS = {CAM_TYPE.ARIA: 2}
+    # The value for the Quest3 does not actually matter, since both of its
+    # cameras always output the exact same timestamp.
+    _ALL_REF_CAM_IDXS = {CAM_TYPE.ARIA: 2, CAM_TYPE.QUEST: 0}
+
     _CAM_TYPE_CLIP_RANGES = {
         CAM_TYPE.ARIA: (1849, 3364), CAM_TYPE.QUEST: (0, 1287)
     }
@@ -849,12 +852,20 @@ class PoseLoaderClipsHOT3D(PoseLoader):
     # _CV_POSE_EXPORT_DIR = None
     _dir_paths_initialized = False
 
+    # TODO: Change this when using more than one 3D model!
+    _ALL_POSES: typing.Dict[int, NDArray] = dict()
+    _ALL_TIMESTAMPS: typing.Dict[int, NDArray] = dict()
+
     def __init__(self, clip_num: int):
-        super(PoseLoaderClipsHOT3D, self).__init__(False)
+        # ASDFASDFD ASDFASDF EFSDAASDFDASD SFDF SDFSEFD
+        super(PoseLoaderClipsHOT3D, self).__init__(  True  ) # SDF;lkSDFLK:SFD:LKSDF:LKKSDFL:K
 
         self._clip_num = clip_num
         cam_type_found = False
+
+        # Just need an arbitary default before finding correct val via loop.
         self.clip_type = PoseLoaderClipsHOT3D.CAM_TYPE.ARIA
+        # Loop over camera/device types to see which one this clip belongs to.
         for key, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
             if self._clip_num >= rnge[0] and self._clip_num <= rnge[1]:
                 self.clip_type = key
@@ -880,43 +891,62 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         # TODO: Need to include model numbers here too!
         ret = []
         for cam, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
-            if cam == PoseLoaderClipsHOT3D.CAM_TYPE.QUEST:
-                print("Still need to save Quest3 data!")
-                continue
             ret += [(x, ) for x in range(rnge[0], rnge[1] + 1)]
         return ret
 
     @classmethod
     def _setPosePathsFromJSON(cls, json_read_result):
-        PoseLoaderClipsHOT3D._DATASET_DIR = pathlib.Path(
+        if PoseLoaderClipsHOT3D._dir_paths_initialized:
+            return
+        
+        data_dir = pathlib.Path(
             json_read_result["hot3d_dataset_directory"]
         )
+        PoseLoaderClipsHOT3D._DATASET_DIR = data_dir
+
         # PoseLoaderClipsHOT3D._CV_POSE_EXPORT_DIR = pathlib.Path(
         #     json_read_result["hot3d_result_directory"]
         # )
+
+        print("Just picking first model's poses for now!") # TODO
+        last_key = -1
+
+        # Because all of the dataset pose info is stored in just a few *sorta*
+        # small files, it makes more sense for efficiency to store those
+        # entire files in memory than to keep opening/closing the same one over
+        # and over again. 
+        for ct in PoseLoaderClipsHOT3D.CAM_TYPE:
+            pose_path = data_dir / PoseLoaderClipsHOT3D._POSE_FNAMES[ct]
+            with np.load(pose_path) as np_load:
+                # clip_pt = "clip{:06d}".format(self._clip_num)
+                for key in np_load.files:
+                    clipn = int(key[4:10])
+                    if clipn != last_key:
+                        PoseLoaderClipsHOT3D._ALL_POSES[clipn] = np_load[key]
+                    last_key = key        
+            np_load.close()
+            times_path = data_dir / PoseLoaderClipsHOT3D._TIMESTAMP_FNAMES[ct]
+            clip_range = PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES[ct]
+            clip_nums_copy = None
+            all_ts_copy = None
+            with np.load(times_path) as np_load:
+                clip_nums_copy = np_load['clip_nums'].copy()
+                all_ts_copy = np_load['timestamps'].copy()
+            np_load.close()
+            for row, clipn in enumerate(clip_nums_copy):
+                if clipn >= clip_range[0] and clipn <= clip_range[1]:
+                    PoseLoaderClipsHOT3D._ALL_TIMESTAMPS[clipn] = all_ts_copy[row]
+                        
         PoseLoaderClipsHOT3D._dir_paths_initialized = True
 
     def _getPosesFromDisk(self):
+        # print("Key:", self._clip_num, ". Pose path:", self.posePathGT)
 
-        print("Key:", self._clip_num, ". Pose path:", self.posePathGT)
-        clip_pt = "clip{:06d}".format(self._clip_num)
-        poses = np.empty((0, 6))
-        with np.load(self.posePathGT) as np_load:
-            for key in np_load.files:
-                if clip_pt in key:
-                    print("Just picking first model's poses for now!") # TODO
-                    poses = np_load[key].copy()
-                    break
-
-        times = np.empty((0, ))
-        with np.load(self.timesPathGT) as np_load:
-            clip_ind = [np_load['clip_nums'] == self._clip_num][0]
-            times = np_load['timestamps'][clip_ind].copy()
-        
-        self._timestamps = times
+        self._timestamps = PoseLoaderClipsHOT3D._ALL_TIMESTAMPS[self._clip_num]
+        poses = PoseLoaderClipsHOT3D._ALL_POSES[self._clip_num]
 
         aas = poses[:, :3]
-        translations = poses[:, 3:]
+        translations = 1000.0 * poses[:, 3:] # Unit conversion.
         gtMatData = (aas, translations)
         calcMatData = None
 

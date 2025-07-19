@@ -97,77 +97,121 @@ def motionClassScores(per_class_errs: NDArray, pred_labels, inds_dict = None):
     return mean_dict
 
 class DataOrganizer:
-    def __init__(self, all_motion_data, min_norm_labels, err_norm_lists, 
-                 train_ids, test_ids, motion_data_keys=None):
+    class _SubsetConcats(typing.NamedTuple):
+        ids: typing.Iterable
+        concat_labels: NDArray
+        concat_data: NDArray
+        concat_class_errs: NDArray
+        skip_inds_dict: typing.Dict[str, NDArray]
         
-        self.train_ids = train_ids
-        self.test_ids = test_ids
+    def __init__(self, all_motion_data, min_norm_labels, err_norm_lists, 
+                 train_ids, test_ids, validation_ids = None, 
+                 motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None):
+        
+        # It is fine if this is None for now because, if it is, it will be
+        # overwritten later.
+        self.motion_data_keys = motion_data_keys
 
-        # The below gets the training and test data, but leaves them currently
-        # still separated by skip amount. E.g., one can quickly slap a "[0]" at
-        # the end of each line to just look at data for one skip amount.
-        train_data = concatForComboSubset(all_motion_data, train_ids)
-        train_labels = concatForComboSubset(min_norm_labels, train_ids)
-        train_errs = concatForComboSubset(err_norm_lists, train_ids)
-        test_labels = concatForComboSubset(min_norm_labels, test_ids)
-        test_data = concatForComboSubset(all_motion_data, test_ids)
-        test_errs = concatForComboSubset(err_norm_lists, test_ids)
+        if motion_data_keys is None:
+            arbitrary_seq_dict = next(iter(all_motion_data[0].values()))
+            self.motion_data_keys = list(arbitrary_seq_dict.keys())
+        
+        self._timestep_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTEP)
+        
+        # We'll specify the column names/order manually for this one.
+        self.motion_mod_keys = [
+            MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
+        ] 
+ 
+
+        # Training data:
+        sd = self._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists, train_ids
+        )
+        self.train_ids, self.concat_train_labels = sd[:2]
+        self.concat_train_data, self.concat_train_class_errs = sd[2:4]
+        self.skip_train_inds_dict = sd[4]
+
+        # Test data:
+        sd = self._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists, test_ids
+        )
+        self.test_ids, self.concat_test_labels = sd[:2]
+        self.concat_test_data, self.concat_test_class_errs = sd[2:4]
+        self.skip_inds_dict = sd[4]
+
+        # Validation data:
+        sd = self._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists, validation_ids
+        )
+        self.validation_ids, self.concat_validation_labels = sd[:2]
+        self.concat_validation_data, self.concat_validation_class_errs = sd[2:4]
+        self.skip_validation_inds_dict = sd[4]
+
+        # Optional attributes to be set in later code.
+        self.col_subset_train = np.empty(0)
+        self.col_subset_test = np.empty(0)
+        self.col_subset_validation = np.empty(0)
+        # self.untransformed_col_subset_train = empty_np
+        # self.untransformed_col_subset_test = empty_np
+
+
+    def _splitAndConcatSubset(self, all_motion_data, min_norm_labels,
+                              err_norm_lists,
+                              subset_ids: typing.Optional[typing.Iterable],):
+        if subset_ids is None:
+            d_empty = np.empty((0, len(self.motion_data_keys)))
+            lab_empty = np.empty((0, ), dtype=int)
+            e_empty = np.empty((0, len(self.motion_mod_keys)))
+            inds_empty = {k: ... for k in ('skip0', 'skip1', 'skip2', 'all')}
+            return DataOrganizer._SubsetConcats(
+                [], lab_empty, d_empty, e_empty, inds_empty
+            )
+
+        
+        # The below gets the data subset, but leaves them currently still 
+        # separated by skip amount and by column key (if present). E.g., one can
+        # quickly slap a "[0]" at the end of each line to just look at data for
+        # one skip amount.
+        labels = concatForComboSubset(min_norm_labels, subset_ids)
+        errs = concatForComboSubset(err_norm_lists, subset_ids)
+        data = concatForComboSubset(all_motion_data, subset_ids)
 
         
         # Get 2D NDArrays from the above.
-        self.concat_train_labels = np.concatenate(train_labels)
-        self.concat_test_labels = np.concatenate(test_labels)
+        concat_labels = np.concatenate(labels)
 
+        # Get the "keys" as another return value so that we know the column 
+        # names/order.
+        self.motion_data_keys, concat_data = get2DArrayFromDataStruct(
+            data, self.motion_data_keys, stack_axis=-1
+        )
         
-        # Get the "keys" as another return value so that we know the column names/order.
-        self.motion_data_keys, self.concat_train_data = \
-            get2DArrayFromDataStruct(train_data, motion_data_keys, stack_axis=-1)
-        
-        _, self.concat_test_data = get2DArrayFromDataStruct(
-            test_data, self.motion_data_keys, stack_axis=-1
+        _, concat_errs = get2DArrayFromDataStruct(
+            errs, self.motion_mod_keys, stack_axis=-1
         )
-
-        # We'll specify the column names/order manually for this one.
-        self.motion_mod_keys = [MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)] 
-        _, self.concat_train_class_errs = get2DArrayFromDataStruct(
-            train_errs, self.motion_mod_keys, stack_axis=-1
-        )
-        _, self.concat_test_class_errs = get2DArrayFromDataStruct(
-            test_errs, self.motion_mod_keys, stack_axis=-1
-        )
-
 
         # Get the indices of each skip amount inside the concatenated 2D array
         # we created above. There might be a "smarter" way to do this given how
         # things were previously split into lists by skip amount, but whatever.
-        skip_inds = []       # For test data
-        s_train_inds = [] # For trian data
-        ts_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTEP)
+        skip_inds = []
         for i in range(1,4): # We have data for frame steps of 1, 2, and 3.
-            curr_skip_inds = self.concat_test_data[:, ts_ind] == i
-            skip_inds.append(curr_skip_inds)
-            s_train_inds.append(self.concat_train_data[:, ts_ind] == i)
+            skip_inds.append(concat_data[:, self._timestep_ind] == i)
 
         # Convert the above 3-item lists into dicts.
-        self.skip_inds_dict = {"skip" + str(i): skip_inds[i] for i in range(3)}
-        self.skip_inds_dict["all"] = ... # my_np_array[...] gets all elements.
+        skip_inds_dict = {"skip" + str(i): skip_inds[i] for i in range(3)}
+        skip_inds_dict["all"] = ... # my_np_array[...] gets all elements.
 
-        self.skip_train_inds_dict = \
-            {"skip" + str(i): s_train_inds[i] for i in range(3)}
-        self.skip_train_inds_dict["all"] = None
+        return DataOrganizer._SubsetConcats(
+            subset_ids, concat_labels, concat_data, concat_errs, skip_inds_dict
+        )
 
-        # Optional attributes to be set in later code.
-        empty_np = np.empty(0)
-        self.untransformed_col_subset_train = empty_np
-        self.untransformed_col_subset_test = empty_np
-        self.col_subset_train = empty_np
-        self.col_subset_test = empty_np
-
-
-    def setPickAndTransform(self, columns, transformer = None):
+    def setPickAndTransform(self, columns, transformer = None,
+                            free_orig_mem: bool = False):
         # Get the data subset for the selected non-collinear columns.
         self.col_subset_train = self.concat_train_data[:, columns]
         self.col_subset_test = self.concat_test_data[:, columns]
+        self.col_subset_validation = self.concat_validation_data[:, columns]
 
         if transformer is not None:
             if not _isFitted(transformer):
@@ -180,18 +224,35 @@ class DataOrganizer:
             if not _isFitted(transformer): # SHOULD be fitted NOW!
                 raise Exception("_isFitted(transformer) false after fit!")
             
-            self.untransformed_col_subset_train = self.col_subset_train
-            self.untransformed_col_subset_test = self.col_subset_test
+            # self.untransformed_col_subset_train = self.col_subset_train
+            # self.untransformed_col_subset_test = self.col_subset_test
             self.col_subset_train = transformer.transform(self.col_subset_train)
             self.col_subset_test = transformer.transform(self.col_subset_test)
+            if len(self.col_subset_validation) > 0:
+                # StandardScaler (and probably others) raise exceptions for
+                # input shapes (0, ...).
+                self.col_subset_validation = transformer.transform(
+                    self.col_subset_validation
+                )
             # Make sure OneHot columns are not scaled/shifted!
             column_nums = columns
             if columns.dtype == bool:
                 column_nums, = np.nonzero(columns)
             for new_i, orig_i in enumerate(column_nums):
                 if isinstance(self.motion_data_keys[orig_i], OneHotMotionData):
-                    self.col_subset_train[:, new_i] = self.concat_train_data[:, orig_i]
-                    self.col_subset_test[:, new_i] = self.concat_test_data[:, orig_i]
+                    self.col_subset_train[:, new_i] = \
+                        self.concat_train_data[:, orig_i]
+                    self.col_subset_test[:, new_i] = \
+                        self.concat_test_data[:, orig_i]
+                    self.col_subset_validation[:, new_i] = \
+                        self.concat_validation_data[:, orig_i]
+
+        if free_orig_mem:
+            del self.concat_train_data
+            del self.concat_test_data
+            del self.concat_validation_data
+            print("Did not finish implementing deletions!")
+
         return
     
     def getClassErrsTrain(self, pred_labels):

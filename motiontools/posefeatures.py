@@ -517,6 +517,7 @@ class CalcsForVideo:
             MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
         ]
 
+        self._initializeFutureVars()
 
         # I had to accomodate a venv where I have Python 3.7 for running
         # tensorflow-gpu on Windows. Unfortunately, newer joblib versions 
@@ -533,6 +534,26 @@ class CalcsForVideo:
             joblib_1_3_supported = True
         self._joblib_1_3_supported = joblib_1_3_supported
         # End of constructor.
+
+    def _initializeFutureVars(self):
+        # Initialize to-be-filled variables with empty lists.        
+        self.all_motion_data: typing.List[
+            typing.Dict[typing.Any, typing.Dict[MOTION_DATA_KEY_TYPE, NDArray]]
+        ] = []
+        self.err_norm_lists: typing.List[
+            typing.Dict[typing.Any, typing.Dict[MOTION_MODEL, NDArray]]
+        ] = []
+
+        self.min_norm_labels: typing.List[typing.Dict[typing.Any, NDArray]] = []
+
+        self.min_norm_vecs: typing.List[typing.Dict[typing.Any, NDArray]] = []
+
+    def freeUpMemory(self):
+        del self.all_motion_data
+        del self.err_norm_lists
+        del self.min_norm_labels
+        del self.min_norm_vecs
+        self._initializeFutureVars()
 
     @staticmethod
     def _isDataCircleRelated(data_key: MOTION_DATA):
@@ -1423,9 +1444,9 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
             # predictions. This is the velocity vector; acceleration vectors
             # are not needed for this; we only need "current" acceleration.
             times: typing.Optional[NDArray] = None
-            if calc_obj.areTimestampsConst():
-                times = calc_obj.getTimestamps()[::step]
-            mds = PositionDerivativeCollection(displacements[:-1], times[:-1])
+            if not calc_obj.areTimestampsConst():
+                times = calc_obj.getTimestamps()[::step][:-1]
+            mds = PositionDerivativeCollection(displacements[:-1], times)
             vels = mds.velocities
             accs = mds.accelerations
             jerks = mds.jerks
