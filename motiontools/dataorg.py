@@ -3,7 +3,9 @@ import typing
 import numpy as np
 from numpy.typing import NDArray
 
-from motiontools.posefeatures import MOTION_MODEL, MOTION_DATA
+from motiontools.posefeatures import (
+    MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION
+)
 from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
 
 # We frequently work with data sequences that have the following type: 
@@ -95,6 +97,124 @@ def motionClassScores(per_class_errs: NDArray, pred_labels, inds_dict = None):
         k: v.mean() for k, v in all_errs_dict.items()
     }
     return mean_dict
+
+class UnitAwareScaler:
+    _pos_vec3_keys = (
+        MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG2_VEC3,
+        MOTION_DATA.ACC_VEC3, MOTION_DATA.JERK_VEC3,
+        MOTION_DATA.JERK_ERR_VEC3, MOTION_DATA.CRACKLE_VEC3
+    )
+    _rot_vec3_keys = (
+        MOTION_DATA.ROTATION_VEC3, MOTION_DATA.ROT_ACC_VEC3
+    )
+    
+    def __init__(self, data_column_keys):
+        self.column_keys = data_column_keys
+        self.n_features_in_ = 0 # Because we haven't fitted yet.
+
+    @staticmethod
+    def _is_positional(key):
+        if isinstance(key, MOTION_DATA):
+            return key in UnitAwareScaler._pos_vec3_keys
+        elif isinstance(key, OTHER_DIRECTION):
+            return True
+        return False
+    
+    @staticmethod
+    def _is_rotational(key):
+        if isinstance(key, MOTION_DATA):
+            return key in UnitAwareScaler._rot_vec3_keys
+        return False
+
+    def fit(self, X):
+        n_keys = len(self.column_keys)
+        if len(X) <= 0:
+            raise ValueError("No data provided to fit for!")
+        if len(X[0]) != n_keys:
+            raise ValueError("Number of data columns does not match keys!")
+        
+        smd_cols = [
+            (i, k) for i, k in enumerate(self.column_keys)
+            if isinstance(k, SpecifiedMotionData)
+        ]
+
+        nc_pos_proj_inds = [
+            i for i, k in smd_cols
+            if (
+                k.base_cat in UnitAwareScaler._pos_vec3_keys
+                and k.ang_or_mag == ANG_OR_MAG.MAG_PROJ
+            )
+        ]
+        nc_rot_proj_inds = [
+            i for i, k in smd_cols
+            if (
+                k.base_cat in UnitAwareScaler._rot_vec3_keys
+                and k.ang_or_mag == ANG_OR_MAG.MAG_PROJ
+            )
+        ]
+        nc_pos_pos_inds = [
+            i for i, k in smd_cols
+            if (
+                k.base_cat in UnitAwareScaler._pos_vec3_keys
+                and self._is_positional(k.axis)
+                and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
+            )
+        ]
+        nc_rot_rot_inds = [
+            i for i, k in smd_cols
+            if (
+                k.base_cat in UnitAwareScaler._rot_vec3_keys
+                and self._is_rotational(k.axis)
+                and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
+            )
+        ]
+        nc_pos_rot_inds = [
+            i for i, k in smd_cols
+            if (
+                (
+                    (k.base_cat in UnitAwareScaler._pos_vec3_keys)
+                    != self._is_positional(k.axis)
+                )
+                and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
+            )
+        ]
+        print("pos-pos:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_pos_inds])
+        print("rot-rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_rot_rot_inds])
+        print("pos:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_proj_inds])
+        print("rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_rot_proj_inds])
+        print("pos-rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_rot_inds])
+        nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
+
+
+        pos_scale = np.mean(np.std(X[:, nc_pos_proj_inds], axis=0))
+        rot_scale = np.mean(np.std(X[:, nc_rot_proj_inds], axis=0))
+
+        self.scale_ = np.empty(n_keys)
+        self.scale_[nc_ang_inds] = 1.0
+        self.scale_[nc_pos_proj_inds] = pos_scale
+        self.scale_[nc_rot_proj_inds] = rot_scale
+        self.scale_[nc_pos_pos_inds] = pos_scale * pos_scale
+        self.scale_[nc_pos_rot_inds] = pos_scale * rot_scale
+        self.scale_[nc_rot_rot_inds] = rot_scale * rot_scale
+
+        self.mean_ = np.zeros(n_keys)
+
+        scale_not_filled = np.full(n_keys, True)
+        filled_int_inds = np.concatenate((
+            nc_ang_inds, nc_pos_proj_inds, nc_rot_proj_inds, nc_pos_pos_inds,
+            nc_pos_rot_inds, nc_rot_rot_inds
+        )).astype(int)
+        scale_not_filled[filled_int_inds] = False
+
+        self.mean_[scale_not_filled] = np.mean(X[:, scale_not_filled], axis=0)
+        self.scale_[scale_not_filled] = np.std(X[:, scale_not_filled], axis=0)
+        self.n_features_in_ = n_keys
+
+    def transform(self, X):
+        return (X - self.mean_) / self.scale_
+
+    def inverse_transform(self, X):
+        return (X * self.scale_) + self.mean_
 
 class DataOrganizer:
     class _SubsetConcats(typing.NamedTuple):

@@ -29,7 +29,7 @@ from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
 from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
 from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
 
-from motiontools.dataorg import DataOrganizer, concatForComboSubset
+from motiontools.dataorg import DataOrganizer, concatForComboSubset, UnitAwareScaler
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -516,6 +516,9 @@ col_sub_keys = [
 # nonco_cols[col_indices] = True
 
 nonco_col_nums = np.where(nonco_cols)[0]
+# Get the column names for each of the kept columns.
+nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
+nonco_featnames = np.array([k.name for k in nonco_col_ks])
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
@@ -582,7 +585,7 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
-bcs_scaler = StandardScaler()
+bcs_scaler = UnitAwareScaler(nonco_col_ks)
 
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
@@ -769,11 +772,6 @@ printErrStats3D(reframed_JAV_errs)
 ################################################################################
 # Column Scrambling to Assess Feature Importance
 ################################################################################
-
-# Get the column names for each of the kept columns.
-nonco_featnames = np.array([
-    k.name for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]
-])
 
 # Finds the errors for the model when one of the test data columns has its
 # data scrambled, as per the advice of a StackOverflow post on how to figure out
