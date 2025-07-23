@@ -3,6 +3,7 @@ import typing
 import copy
 import time
 from collections import defaultdict
+from enum import Enum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -56,7 +57,10 @@ cfc = CalcsForVideo(
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
-    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
+    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH,
+    # exclude_axis_angs=False, exclude_bidir=False, exclude_circ_data=False,
+    # exclude_onehots=False, exclude_past_muls=False, exclude_timescaled=False,
+    # exclude_vel_deg2=False
 )
 results = cfc.getAll(bcot_loaders)
 
@@ -326,6 +330,10 @@ def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List,
         return train_res, test_res, val_res
     return train_res, test_res
 
+
+def poseLossVec3(y_true, y_pred):
+    return tf.norm(y_true - y_pred, axis=-1)
+
 # Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
 def poseLossJAV(y_true, y_pred):
     '''
@@ -546,12 +554,23 @@ class ImportanceLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
-def getUntrainedNN(loss = None, use_resid_data: bool = False):
+class OutVecMode(Enum):
+    JAV_MULTIPLIERS = 1
+    VEL_ALIGNED_VEC3 = 2
+    WORLD_VEC3 = 3
+    WORLD_DISP = 4
+    ROT_ALIGNED_VEC3 = 5
+
+WORLD_VEC_MODES = (OutVecMode.WORLD_VEC3, OutVecMode.WORLD_DISP)
+
+chosen_mode = OutVecMode.JAV_MULTIPLIERS
+
+def getUntrainedNN(in_dim: int, out_dim: int, loss = None, use_resid_data: bool = False):
 
     dropout_rate = 0.2
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
-    in_shape = len(nonco_col_nums) + (6 if use_resid_data else 0)
+    in_shape = in_dim + (6 if use_resid_data else 0)
 
     make_dense = lambda num_nodes = nodes_per_layer: keras.layers.Dense(
         num_nodes, activation=vel_nn_activation #, kernel_initializer=initer
@@ -564,7 +583,7 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
         x = keras.layers.Dropout(dropout_rate)(x)
         x = make_dense()(x)
     
-    out = keras.layers.Dense(12)(x)
+    out = keras.layers.Dense(out_dim)(x)
 
     model = keras.Model(inputs = in_layer, outputs = out)
 
@@ -575,9 +594,13 @@ def getUntrainedNN(loss = None, use_resid_data: bool = False):
     optim = 'adam'
     model.compile(loss=loss, optimizer=optim)
     return model
-bcs_model = getUntrainedNN()
 
-
+sel_dim = 12
+sel_loss = poseLossJAV
+if chosen_mode != OutVecMode.JAV_MULTIPLIERS:
+    sel_dim = 3
+    sel_loss = poseLossVec3
+    
 JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
 # # Convert from numpy array to tf tensor.
@@ -590,23 +613,68 @@ bcs_scaler = UnitAwareScaler(nonco_col_ks)
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
+                 outVecMode: OutVecMode, skip: int = -1, *,
                  save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
+        self.outVecMode = outVecMode
+        self.scaler_scale = 0.0
+        self.rot_scale = 0.0
+        self.skip = skip
+        if isinstance(bcs_scaler, UnitAwareScaler):
+            self.scaler_scale = bcs_scaler.pos_scale
+            self.rot_scale = bcs_scaler.rot_scale
+        elif outVecMode != OutVecMode.JAV_MULTIPLIERS:
+            raise NotImplementedError(
+                "Non-unit-aware scaler not yet supported!"
+            )
+
 
         self.save_data_for_conf = save_data_for_conf
         self.jav_per_combo = None
-        if save_data_for_conf:
-            res = dataForCombosJAV(loaders, JAV_order, True, True)
-            self.jav_per_combo = res[0]
-            self.w2ls_JAV = res[1]
-            self.translations_JAV = res[2]
-        else:
-            self.jav_per_combo = dataForCombosJAV(loaders, JAV_order, False, False)
-            self.w2ls_JAV = None
-            self.translations_JAV = None
+        _rot_align = self.outVecMode == OutVecMode.ROT_ALIGNED_VEC3 
+        need_rot_vel = _rot_align or self.outVecMode in WORLD_VEC_MODES
+        need_rot = need_rot_vel or _rot_align
 
+        save_data_for_conf |= self.outVecMode in WORLD_VEC_MODES
+        need_pos = save_data_for_conf or _rot_align
+        jav_res = dataForCombosJAV(
+            loaders, JAV_order, save_data_for_conf, need_pos,
+            need_rot, need_rot_vel
+        )
+        # Default: assume all bools were False and no tuple returned.
+        self.jav_per_combo = jav_res
+        self.w2ls_JAV = None
+        self.translations_JAV = None
+        self._rmatsv9 = None
+        self._aas_JAV = None
+        self._rot_vels_JAV = None
+        r_mats = None
+        jav_tup_ind = 1
+        if need_pos or need_rot:
+            self.jav_per_combo = jav_res[0]
+        if save_data_for_conf:
+            self.w2ls_JAV = jav_res[jav_tup_ind]
+            jav_tup_ind += 1
+        if need_pos:
+            self.translations_JAV = jav_res[jav_tup_ind]
+            jav_tup_ind += 1
+        if need_rot:
+            r_mats = jav_res[jav_tup_ind]
+            self._rmatsv9 = [
+                {k: x.reshape(-1, 9) for k, x in d.items()} for d in r_mats
+            ]
+            self._aas_JAV = [
+                {k: pm.axisAngleFromMatArray(x) for k, x in d.items()}
+                for d in r_mats
+            ]
+            jav_tup_ind += 1
+        if need_rot_vel:
+            self._rot_vels_JAV = jav_res[jav_tup_ind]
+            jav_tup_ind += 1
+        
+        
         jav_split = dataForComboSplitJAV(
             data_organizer.train_ids, data_organizer.test_ids,
             data_organizer.validation_ids,
@@ -617,6 +685,81 @@ class DataForJAV:
         if len(data_organizer.validation_ids) > 0:
             self.jav_validation = jav_split[2]
 
+        # Set default values for the neural network input values and ground
+        # truth values.
+        b, e = None, None # Beginning and ending JAV columns
+        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
+            b, e = 12, 15
+        skip_str = "skip" + str(skip)
+        _dog = self.data_organizer
+        self.in_train = _dog.col_subset_train
+        self.in_test = _dog.col_subset_test
+        self.in_validation = _dog.col_subset_validation
+        self.gt_train = self.jav_train[:, b:e]
+        self.gt_test = self.jav_test[:, b:e]
+        self.gt_validation = self.jav_validation[:, b:e]
+
+        self.translationScaler = None
+        if self.scaler_scale != 0.0:
+            self._fitWorldScaler(self.scaler_scale)
+
+        self.score_scaler = 0.0
+        if self.outVecMode == OutVecMode.WORLD_VEC3:
+            self.score_scaler = self.translationScaler
+        elif self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
+            self.score_scaler = self.scaler_scale
+
+
+        if self.outVecMode in WORLD_VEC_MODES or _rot_align:
+            _r_mats_prev = None
+            _r_mats_gt = None
+
+            if _rot_align:
+                _r_mats_prev = self._worldvec_concats(
+                    1, 0, 0.0, vecs=r_mats
+                )
+                _r_mats_gt = self._worldvec_concats(
+                    0, 0, 0.0, vecs=r_mats
+                )
+                _r_mats_gt = tuple(np.swapaxes(r, -2, -1) for r in _r_mats_gt)
+            
+            self.in_train = self._world_coord_cols(
+                self.in_train, data_organizer.train_ids, _r_mats_prev[0]
+            )
+            self.in_test = self._world_coord_cols(
+                self.in_test,  data_organizer.test_ids, _r_mats_prev[1]
+            )
+            self.in_validation = self._world_coord_cols(
+                self.in_validation, data_organizer.validation_ids,
+                _r_mats_prev[2]
+            )
+
+            _diff_ord = 0; _scale = 0.0
+            if _rot_align or self.outVecMode == OutVecMode.WORLD_DISP:
+                _diff_ord = 1; _scale = self.scaler_scale
+
+            gt_wct_res = self._worldvec_concats(
+                0, diff_ord = _diff_ord, scale = _scale, use_translation=True
+            )
+            if _r_mats_gt is not None:
+                gt_wct_res = tuple(
+                    pm.einsumMatVecMul(r, g)
+                    for r, g in zip(_r_mats_gt, gt_wct_res)
+                )
+            self.gt_train, self.gt_test, self.gt_validation = gt_wct_res
+                
+
+        tr_inds = ... if skip < 0 else _dog.skip_train_inds_dict[skip_str]
+        te_inds = ... if skip < 0 else _dog.skip_inds_dict[skip_str]
+        va_inds = ... if skip < 0 else _dog.skip_validation_inds_dict[skip_str]
+        self.in_train = self.in_train[tr_inds]
+        self.in_test = self.in_test[te_inds]
+        self.in_validation = self.in_validation[va_inds]
+        self.gt_train = self.gt_train[tr_inds]
+        self.gt_test = self.gt_test[te_inds]
+        self.gt_validation = self.gt_validation[va_inds]
+
+        
         # self.jav_train = np.concatenate(
         #     (partial_jav_train, jav_tr_append), axis=-1
         # )
@@ -624,29 +767,140 @@ class DataForJAV:
         #     (partial_jav_test, jav_te_append), axis=-1
         # )
 
+    def _world_coord_cols(self, curr_cols, subset_ids, rotations = None):
+        scs = self.scaler_scale
+        rs = self.rot_scale
+        _ts = self.translations_JAV
+        coords = self._worldvec_helper(subset_ids, 1, use_translation=True)
+        coords_tm1 = self._worldvec_helper(subset_ids, 2, use_translation=True)
+        coords_tm2 = self._worldvec_helper(subset_ids, 3, use_translation=True)
+        coords_tm3 = self._worldvec_helper(subset_ids, 4, use_translation=True)
+        vels = self._worldvec_helper(subset_ids, 1, 1, scale=scs, vecs = _ts)
+        accs = self._worldvec_helper(subset_ids, 1, 2, scale=scs, vecs = _ts)
+        jerks = self._worldvec_helper(subset_ids, 1, 3, scale=scs, vecs = _ts)
+        aas = self._worldvec_helper(subset_ids, 1, vecs=self._aas_JAV)
+        rmatv9s = self._worldvec_helper(subset_ids, 1, vecs=self._rmatsv9)
+        rot_vels = self._worldvec_helper(
+            subset_ids, 1, current_diff_order=1, vecs=self._rot_vels_JAV,
+            scale = rs
+        )
+        rot_accs = self._worldvec_helper(
+            subset_ids, 1, diff_order=1,
+            current_diff_order=1, vecs=self._rot_vels_JAV, scale = rs
+        )
+        rot_jerks = self._worldvec_helper(
+            subset_ids, 1, diff_order=2,
+            current_diff_order=1, vecs=self._rot_vels_JAV, scale=rs
+        )
+        w2ls_concat = np.concatenate(concatForComboSubset(
+            self.w2ls_JAV, subset_ids
+        ), axis=0)
+        other_coords = (coords_tm1, coords_tm2, coords_tm3)
+        other_vecs = (vels, accs, jerks, aas, rot_vels, rot_accs, rot_jerks)
+        w2l_thing = (w2ls_concat.reshape(-1, 9), )
+        if rotations is not None:
+            # Transpose rotations so they're world-to-local.
+            rs_T = np.swapaxes(rotations, -2, -1)
+            other_coords = tuple(
+                pm.einsumMatVecMul(rs_T, c - coords) for c in other_coords
+            )
+            other_vecs = tuple(pm.einsumMatVecMul(rs_T, v) for v in other_vecs)
+            local_to_vel = pm.einsumMatMatMul(w2ls_concat, rotations)
+            w2l_thing = (local_to_vel.reshape(-1, 9), )
+
+        combined_tuple = (curr_cols, ) + other_coords + other_vecs + w2l_thing
+        if rotations is None:
+            combined_tuple += (coords, rmatv9s)
+        return np.concatenate(combined_tuple, axis=-1)
+    
+    def _fitWorldScaler(self, scale: float):
+        scaler = StandardScaler()
+        if self.translations_JAV is None:
+            raise Exception("No translations stored to set scaler with!")
+        
+        scaler.fit(
+            concatForComboSubset(
+                self.translations_JAV, self.data_organizer.train_ids
+            )[0]
+        )
+        scaler.scale_[:] = scale
+        
+        self.translationScaler = scaler
+    
+    def _worldvec_concats(self, shift_from_gt: int, diff_ord: int, scale: float,
+                          use_translation: bool = False, vecs = None):
+        tr = self._worldvec_helper(
+            self.data_organizer.train_ids, shift_from_gt, diff_ord, scale=scale,
+             vecs=vecs, use_translation=use_translation
+        )
+        te = self._worldvec_helper(
+            self.data_organizer.test_ids, shift_from_gt, diff_ord, scale=scale,
+            vecs=vecs, use_translation=use_translation
+        )
+        va = self._worldvec_helper(
+            self.data_organizer.validation_ids, shift_from_gt, diff_ord,
+            scale=scale, vecs=vecs, use_translation=use_translation
+        )
+        return tr, te, va
+    
+    def _worldvec_helper(self, subset_ids, shift_from_gt: int,
+                         diff_order: int = 0, current_diff_order: int = 0,
+                         scale: float = 0.0, use_translation: bool = False,
+                         vecs: typing.Optional[typing.List[typing.Dict[typing.Any, NDArray]]] = None):
+        start = 4 - diff_order - current_diff_order - shift_from_gt
+        if use_translation:
+            vecs = self.translations_JAV
+        elif vecs is None:
+            raise ValueError("No vectors specified!")
+        concat = np.concatenate(concatForComboSubset(
+            vecs, subset_ids, front_trim=start, end_trim=shift_from_gt,
+            diff_order = diff_order
+        ), axis=0)
+        if use_translation and scale == 0.0:
+            concat = self.translationScaler.transform(concat)
+        elif scale != 0.0:
+            concat /= scale
+        return concat
         
     def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
-            predictions, self.jav_train,
-            self.data_organizer.skip_train_inds_dict, should_print
+            predictions, self.gt_train, self.outVecMode, self.score_scaler,
+            self.data_organizer.skip_train_inds_dict, should_print, self.skip
         )
 
     def getScoresTest(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
-            predictions, self.jav_test, 
-            self.data_organizer.skip_inds_dict, should_print
+            predictions, self.gt_test, self.outVecMode, self.score_scaler,
+            self.data_organizer.skip_inds_dict, should_print, self.skip
         )
     
     def getScoresValidation(self, predictions: NDArray, should_print: bool = True):
         return self._scoreHelper(
-            predictions, self.jav_validation,
-            self.data_organizer.skip_validation_inds_dict, should_print
+            predictions, self.gt_validation, self.outVecMode, self.score_scaler,
+            self.data_organizer.skip_validation_inds_dict, should_print,
+            self.skip
         )
 
     @staticmethod
-    def _scoreHelper(preds: NDArray, jav_vals: NDArray, inds: typing.Dict,
-                     should_print):
-        errs: NDArray = poseLossJAV(jav_vals, preds).numpy()
+    def _scoreHelper(preds: NDArray, jav_vals: NDArray, outVecMode: OutVecMode,
+                     sc, inds: typing.Dict, should_print: bool, skip: int):
+        loss_fn = poseLossJAV
+        _preds = preds
+        _gts = jav_vals
+        if outVecMode != OutVecMode.JAV_MULTIPLIERS:
+            loss_fn = poseLossVec3
+            if sc is not None:
+                if isinstance(sc, float):
+                    _preds = preds * sc
+                    _gts = jav_vals * sc
+                else:         
+                    _preds = sc.inverse_transform(preds)
+                    _gts = sc.inverse_transform(jav_vals)
+
+        if skip >= 0:
+            inds = {'skip' + str(skip): ...}
+            
+        errs: NDArray = loss_fn(_gts, _preds).numpy()
         # Print scores on test data.
         scores = {k: np.mean(errs[v]) for k, v in inds.items()}
         if should_print:
@@ -654,24 +908,29 @@ class DataForJAV:
                 print(k + ":", v)
         return scores
     
-bcotjav = DataForJAV(dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, True)
+bcotjav = DataForJAV(
+    dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
+    save_data_for_conf=True, #skip=2
+)
+
+bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, loss=sel_loss)
 
 
 #%% Train the network.
 val_param = None
 if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
-    val_param = (dog.col_subset_validation, bcotjav.jav_validation)
+    val_param = (bcotjav.in_validation, bcotjav.gt_validation)
 bcs_hist = bcs_model.fit(
-    dog.col_subset_train, bcotjav.jav_train, epochs=32, shuffle=True,
+    bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
     validation_data=val_param,
-    batch_size = 1024
+    # batch_size = 1024
 )
 
 #%% Evaluate network on test data.
 
-bcs_pred = bcs_model.predict(dog.col_subset_test, batch_size = 1024)
-bcs_test_errs: NDArray = poseLossJAV(bcotjav.jav_test, bcs_pred).numpy()
-#%% Print scores on test data.
+bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
+bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
+## %% Print scores on test data.
 bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}
 for k, v in bcs_test_scores.items():
     print(k + ":", v)

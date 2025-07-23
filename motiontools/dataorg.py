@@ -26,26 +26,37 @@ from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
 # a list of 3 items, where each list index again corresponds to the frame 
 # skip amount but results are no longer separated by combo.
 # Motivation: We may want to quickly filter out a skip amount for training.
-def concatForComboSubset(data, combo_subset): #, front_trim: int = 0):
+def concatForComboSubset(data, combo_subset,
+                         front_trim: int = 0, end_trim: int = 0,
+                         diff_order: int = 0):
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
     for els_for_skip in data:
         subset_via_ids = [els_for_skip[ck] for ck in combo_subset]
         concated = None
-        front_trim = 0 # May set this via param in future code.
+        # front_trim = 0 # May set this via param in future code.
+        end = -end_trim if end_trim > 0 else None
         if len(subset_via_ids) == 0:
             return []
         elif isinstance(subset_via_ids[0], dict):
             concated = dict()
             for k in subset_via_ids[0].keys():
                 concated[k] = np.concatenate([
-                    svc[k][front_trim:] for svc in subset_via_ids
+                    _concatForComboSubsetHelp(s[k], front_trim, end, diff_order)
+                    for s in subset_via_ids
                 ])
         else:
             concated = np.concatenate([
-                svc[front_trim:] for svc in subset_via_ids
+                _concatForComboSubsetHelp(svc, front_trim, end, diff_order)
+                for svc in subset_via_ids
             ]) 
         ret_val.append(concated)
     return ret_val
+
+def _concatForComboSubsetHelp(arr, front_trim: int, end: int, diff_order: int):
+    ret = arr[front_trim:end]
+    if diff_order > 0:
+        ret = np.diff(ret, diff_order, axis=0)
+    return ret
 
 # This converts List[Dict[Any, NDArray]] items, which are lists of result 
 # dicts of NDarrays indexed by frame skip, into a single 2D NDArray.
@@ -108,9 +119,12 @@ class UnitAwareScaler:
         MOTION_DATA.ROTATION_VEC3, MOTION_DATA.ROT_ACC_VEC3
     )
     
-    def __init__(self, data_column_keys):
+    def __init__(self, data_column_keys, scale_rots: bool = True):
         self.column_keys = data_column_keys
         self.n_features_in_ = 0 # Because we haven't fitted yet.
+        self.pos_scale = 0.0
+        self.rot_scale = 0.0
+        self.scale_rots = scale_rots
 
     @staticmethod
     def _is_positional(key):
@@ -178,24 +192,21 @@ class UnitAwareScaler:
                 and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
             )
         ]
-        print("pos-pos:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_pos_inds])
-        print("rot-rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_rot_rot_inds])
-        print("pos:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_proj_inds])
-        print("rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_rot_proj_inds])
-        print("pos-rot:", [n.name for i, n in enumerate(self.column_keys) if i in nc_pos_rot_inds])
         nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
 
 
-        pos_scale = np.mean(np.std(X[:, nc_pos_proj_inds], axis=0))
-        rot_scale = np.mean(np.std(X[:, nc_rot_proj_inds], axis=0))
+        self.pos_scale = np.mean(np.std(X[:, nc_pos_proj_inds], axis=0))
+        self.rot_scale = 1.0
+        if self.scale_rots:
+            self.rot_scale = np.mean(np.std(X[:, nc_rot_proj_inds], axis=0))
 
         self.scale_ = np.empty(n_keys)
         self.scale_[nc_ang_inds] = 1.0
-        self.scale_[nc_pos_proj_inds] = pos_scale
-        self.scale_[nc_rot_proj_inds] = rot_scale
-        self.scale_[nc_pos_pos_inds] = pos_scale * pos_scale
-        self.scale_[nc_pos_rot_inds] = pos_scale * rot_scale
-        self.scale_[nc_rot_rot_inds] = rot_scale * rot_scale
+        self.scale_[nc_pos_proj_inds] = self.pos_scale
+        self.scale_[nc_rot_proj_inds] = self.rot_scale
+        self.scale_[nc_pos_pos_inds] = self.pos_scale * self.pos_scale
+        self.scale_[nc_pos_rot_inds] = self.pos_scale * self.rot_scale
+        self.scale_[nc_rot_rot_inds] = self.rot_scale * self.rot_scale
 
         self.mean_ = np.zeros(n_keys)
 

@@ -127,6 +127,8 @@ class MOTION_DATA(Enum):
     GT4 = 62
     GT5 = 63
 
+    ROT_JERK_VEC3 = 64
+
 
     # VEL_DOT = 64                             # Units match work per kg (J/kg)
 
@@ -767,6 +769,8 @@ class CalcsForVideo:
             rderivs = RotationDerivativeCollection(timescaled_vel_axes)
             rot_accs = rderivs.accelerations / step
 
+            rot_jerks = np.diff(rot_accs, 1, axis=0) / step
+
 
             pderivs = PositionDerivativeCollection(translation_diffs[:-1])
             deg1_vels = pderivs.velocities
@@ -1162,6 +1166,7 @@ class CalcsForVideo:
                 MD.JERK_ERR_VEC3: V3D(prev_jerk_errs, unit_snaps, prev_jerk_err_mags),
                 MD.CRACKLE_VEC3: V3D(crackles, None, None),
                 MD.ROT_ACC_VEC3: V3D(rot_accs, None, None),
+                MD.ROT_JERK_VEC3: V3D(rot_jerks, None, None),
                 MD.VEL_DEG1_VEC3: V3D(
                     deg1_vels / step, unit_vels_deg1, timescaled_speeds_deg1_full
                 )
