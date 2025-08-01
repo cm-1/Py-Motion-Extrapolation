@@ -30,7 +30,10 @@ from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
 from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
 from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
 
-from motiontools.dataorg import DataOrganizer, concatForComboSubset, UnitAwareScaler
+from motiontools.dataorg import (
+    DataOrganizer, concatForComboSubset, UnitAwareScaler, DataSubsetKind,
+    SkipSubsetKind
+)
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -334,6 +337,23 @@ def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List,
 def poseLossVec3(y_true, y_pred):
     return tf.norm(y_true - y_pred, axis=-1)
 
+
+def poseLossAngle(y_true, y_pred):
+    # 2acos(abs([cos||x/2|| cos||y/2|| + <x>*<y> sin||x/2|| sin||y/2||))
+    ang_true = np.linalg.norm(y_true, axis=-1) + 0.00000001
+    ang_pred = np.linalg.norm(y_pred, axis=-1) + 0.00000001
+    half_ang_true = ang_true / 2
+    half_ang_pred = ang_pred / 2
+    cos_true = np.cos(half_ang_true)
+    cos_pred = np.cos(half_ang_pred)
+    sin_true = np.sin(half_ang_true)
+    sin_pred = np.sin(half_ang_pred)
+    vec3_dots = pm.einsumDot(y_true, y_pred)
+    unit_vec3_dots = vec3_dots / (ang_true * ang_pred)
+    quat_dots = cos_true * cos_pred + unit_vec3_dots * sin_true * sin_pred
+    quat_dots_1 = np.abs(np.clip(quat_dots, -1, 1))
+    return 2 * np.arccos(quat_dots_1) #tf.convert_to_tensor(...)
+
 # Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
 def poseLossJAV(y_true, y_pred):
     '''
@@ -560,17 +580,23 @@ class OutVecMode(Enum):
     WORLD_VEC3 = 3
     WORLD_DISP = 4
     ROT_ALIGNED_VEC3 = 5
+    ROT_AA = 6
+    ROT_VEL_AA = 7
+    ROT_FIXED_AX = 8
 
 WORLD_VEC_MODES = (OutVecMode.WORLD_VEC3, OutVecMode.WORLD_DISP)
-
+ROT_VEC_MODES = (
+    OutVecMode.ROT_AA, OutVecMode.ROT_VEL_AA, OutVecMode.ROT_FIXED_AX
+)
+#%%
 chosen_mode = OutVecMode.JAV_MULTIPLIERS
 
-def getUntrainedNN(in_dim: int, out_dim: int, loss = None, use_resid_data: bool = False):
+def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
+                   nodes_per_layer: int = 128):
 
     dropout_rate = 0.2
-    nodes_per_layer = 128
     vel_nn_activation = 'sigmoid' # Works better than relu for this NN.
-    in_shape = in_dim + (6 if use_resid_data else 0)
+    in_shape = in_dim # + (6 if use_resid_data else 0)
 
     make_dense = lambda num_nodes = nodes_per_layer: keras.layers.Dense(
         num_nodes, activation=vel_nn_activation #, kernel_initializer=initer
@@ -578,8 +604,10 @@ def getUntrainedNN(in_dim: int, out_dim: int, loss = None, use_resid_data: bool 
 
     in_layer = keras.layers.Input((in_shape,))
 
+    # in_layer = keras.layers.GaussianNoise(0.99)(in_layer)
+
     x = make_dense()(in_layer)
-    for _ in range(2):
+    for _ in range(n_layers - 1):
         x = keras.layers.Dropout(dropout_rate)(x)
         x = make_dense()(x)
     
@@ -598,8 +626,12 @@ def getUntrainedNN(in_dim: int, out_dim: int, loss = None, use_resid_data: bool 
 sel_dim = 12
 sel_loss = poseLossJAV
 if chosen_mode != OutVecMode.JAV_MULTIPLIERS:
-    sel_dim = 3
-    sel_loss = poseLossVec3
+    if chosen_mode == OutVecMode.ROT_FIXED_AX:
+        sel_dim = 1
+        sel_loss = 'mae'
+    else:
+        sel_dim = 3
+        sel_loss = 'mse' if chosen_mode in ROT_VEC_MODES else poseLossVec3 
     
 JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
@@ -608,22 +640,23 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
-bcs_scaler = UnitAwareScaler(nonco_col_ks)
+bcs_scaler = UnitAwareScaler(nonco_col_ks) #, False)
 
 class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
-                 outVecMode: OutVecMode, skip: int = -1, *,
-                 save_data_for_conf: bool = False):
+                 outVecMode: OutVecMode,
+                 skip: typing.Union[int|SkipSubsetKind] = SkipSubsetKind._all,
+                 *, save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
         self.outVecMode = outVecMode
-        self.scaler_scale = 0.0
+        self.pos_scale = 0.0
         self.rot_scale = 0.0
         self.skip = skip
         if isinstance(bcs_scaler, UnitAwareScaler):
-            self.scaler_scale = bcs_scaler.pos_scale
+            self.pos_scale = bcs_scaler.pos_scale
             self.rot_scale = bcs_scaler.rot_scale
         elif outVecMode != OutVecMode.JAV_MULTIPLIERS:
             raise NotImplementedError(
@@ -634,7 +667,9 @@ class DataForJAV:
         self.save_data_for_conf = save_data_for_conf
         self.jav_per_combo = None
         _rot_align = self.outVecMode == OutVecMode.ROT_ALIGNED_VEC3 
+        _rot_output = self.outVecMode in ROT_VEC_MODES
         need_rot_vel = _rot_align or self.outVecMode in WORLD_VEC_MODES
+        need_rot_vel |= _rot_output
         need_rot = need_rot_vel or _rot_align
 
         save_data_for_conf |= self.outVecMode in WORLD_VEC_MODES
@@ -673,91 +708,182 @@ class DataForJAV:
         if need_rot_vel:
             self._rot_vels_JAV = jav_res[jav_tup_ind]
             jav_tup_ind += 1
+            if self.outVecMode == OutVecMode.ROT_FIXED_AX:
+                prev_angs = [
+                    {
+                        k: np.linalg.norm(v, axis=-1, keepdims=True)
+                        for k, v in d.items()
+                    }
+                    for d in self._rot_vels_JAV
+                ]
+                self._prev_vel_axes = [
+                    {
+                        k: pm.safelyNormalizeArray(v, prev_angs[i][k])
+                        for k, v in d.items()
+                    }
+                    for i, d in enumerate(self._rot_vels_JAV)
+                ]
+                self._prev_vel_ax_concat = self._worldvec_concats(
+                    1, diff_ord=0, scale=1.0, use_translation=False,
+                    vecs=self._prev_vel_axes, curr_diff_ord=1
+                )
+                self._prev_ang_concat = self._worldvec_concats(
+                    1, diff_ord=0, scale=self.rot_scale, use_translation=False,
+                    vecs=prev_angs, curr_diff_ord=1
+                )
         
         
         jav_split = dataForComboSplitJAV(
-            data_organizer.train_ids, data_organizer.test_ids,
-            data_organizer.validation_ids,
+            data_organizer.subset_ids[DataSubsetKind.TRAIN],
+            data_organizer.subset_ids[DataSubsetKind.TEST],
+            data_organizer.subset_ids[DataSubsetKind.VALIDATION],
             precalc_per_combo=self.jav_per_combo
         )
         self.jav_train, self.jav_test = jav_split[:2]
         self.jav_validation = np.empty((0, ) + self.jav_train.shape[1:])
-        if len(data_organizer.validation_ids) > 0:
+        if len(data_organizer.subset_ids[DataSubsetKind.VALIDATION]) > 0:
             self.jav_validation = jav_split[2]
+
+        _javs_by_subset = {
+            DataSubsetKind.TRAIN: self.jav_train,
+            DataSubsetKind.TEST: self.jav_test,
+            DataSubsetKind.VALIDATION: self.jav_validation
+        }
 
         # Set default values for the neural network input values and ground
         # truth values.
         b, e = None, None # Beginning and ending JAV columns
+        self.ref_prediction_name = "Const vel" if _rot_output else "Quadratic" 
+        self.ref_predictions = { # Quadratic acc JAV multipliers.
+            # TODO: These assume constant timesteps for now.
+            k: np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
+            for k in DataSubsetKind.nonWholeValues()
+        }
         if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
             b, e = 12, 15
-        skip_str = "skip" + str(skip)
+            for k, _ref_javs in _javs_by_subset.items():
+                _ref_preds = np.empty((len(_ref_javs), 3))
+                # Constructing quadratic interpolation predictions.
+                # TODO: These assume constant timesteps for now.
+                _ref_preds[:, 0] = _ref_javs[:, 0] + _ref_javs[:, 1]
+                _ref_preds[:, 1] = _ref_javs[:, 2]
+                _ref_preds[:, 2] = 0.0
+                self.ref_predictions[k] = _ref_preds
         _dog = self.data_organizer
-        self.in_train = _dog.col_subset_train
-        self.in_test = _dog.col_subset_test
-        self.in_validation = _dog.col_subset_validation
-        self.gt_train = self.jav_train[:, b:e]
-        self.gt_test = self.jav_test[:, b:e]
-        self.gt_validation = self.jav_validation[:, b:e]
+        self._in_arrs = {
+            DataSubsetKind.TRAIN: _dog.col_subset_train,
+            DataSubsetKind.TEST: _dog.col_subset_test,
+            DataSubsetKind.VALIDATION: _dog.col_subset_validation
+        }
+        self._gt_arrs = {k: j[:, b:e] for k, j in _javs_by_subset.items()}
 
+            
         self.translationScaler = None
-        if self.scaler_scale != 0.0:
-            self._fitWorldScaler(self.scaler_scale)
+        if self.pos_scale != 0.0 and need_pos:
+            self._fitWorldScaler(self.pos_scale)
 
         self.score_scaler = 0.0
+        relevant_scale = self.rot_scale if _rot_output else self.pos_scale
         if self.outVecMode == OutVecMode.WORLD_VEC3:
             self.score_scaler = self.translationScaler
         elif self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
-            self.score_scaler = self.scaler_scale
+            self.score_scaler = relevant_scale
+        
+        self.score_fn = poseLossJAV
+        if outVecMode != OutVecMode.JAV_MULTIPLIERS:
+            if outVecMode in ROT_VEC_MODES:
+                self.score_fn = poseLossAngle 
+            else:
+                self.score_fn = poseLossVec3
 
-
-        if self.outVecMode in WORLD_VEC_MODES or _rot_align:
-            _r_mats_prev = None
-            _r_mats_gt = None
+        if self.outVecMode in WORLD_VEC_MODES or _rot_align or _rot_output:
+            if self.outVecMode == OutVecMode.ROT_FIXED_AX:
+                self._gt_rot_vels = self._worldvec_concats(
+                    0, diff_ord=0, scale=self.rot_scale, use_translation=False,
+                    vecs=self._rot_vels_JAV, curr_diff_ord=1
+                )
+            _w2l_mats_prev = {k: None for k in DataSubsetKind.nonWholeValues()}
 
             if _rot_align:
-                _r_mats_prev = self._worldvec_concats(
+                _l2w_mats_prev = self._worldvec_concats(
                     1, 0, 0.0, vecs=r_mats
                 )
-                _r_mats_gt = self._worldvec_concats(
-                    0, 0, 0.0, vecs=r_mats
-                )
-                _r_mats_gt = tuple(np.swapaxes(r, -2, -1) for r in _r_mats_gt)
+                _w2l_mats_prev = {
+                    k: np.swapaxes(v, -2, -1) for k, v in _l2w_mats_prev.items()
+                }
             
-            self.in_train = self._world_coord_cols(
-                self.in_train, data_organizer.train_ids, _r_mats_prev[0]
-            )
-            self.in_test = self._world_coord_cols(
-                self.in_test,  data_organizer.test_ids, _r_mats_prev[1]
-            )
-            self.in_validation = self._world_coord_cols(
-                self.in_validation, data_organizer.validation_ids,
-                _r_mats_prev[2]
-            )
-
-            _diff_ord = 0; _scale = 0.0
-            if _rot_align or self.outVecMode == OutVecMode.WORLD_DISP:
-                _diff_ord = 1; _scale = self.scaler_scale
-
-            gt_wct_res = self._worldvec_concats(
-                0, diff_ord = _diff_ord, scale = _scale, use_translation=True
-            )
-            if _r_mats_gt is not None:
-                gt_wct_res = tuple(
-                    pm.einsumMatVecMul(r, g)
-                    for r, g in zip(_r_mats_gt, gt_wct_res)
+            for k, _w2l_mats_prev_sub in _w2l_mats_prev.items():
+                self._in_arrs[k] = self._world_coord_cols(
+                    self._in_arrs[k], k, _w2l_mats_prev_sub
                 )
-            self.gt_train, self.gt_test, self.gt_validation = gt_wct_res
-                
 
-        tr_inds = ... if skip < 0 else _dog.skip_train_inds_dict[skip_str]
-        te_inds = ... if skip < 0 else _dog.skip_inds_dict[skip_str]
-        va_inds = ... if skip < 0 else _dog.skip_validation_inds_dict[skip_str]
-        self.in_train = self.in_train[tr_inds]
-        self.in_test = self.in_test[te_inds]
-        self.in_validation = self.in_validation[va_inds]
-        self.gt_train = self.gt_train[tr_inds]
-        self.gt_test = self.gt_test[te_inds]
-        self.gt_validation = self.gt_validation[va_inds]
+            _diff_ord = 0; _scale = 0.0; _curr_diff_ord = 0
+            _use_t = True; _vecs = None
+            if _rot_align or self.outVecMode == OutVecMode.WORLD_DISP:
+                _diff_ord = 1; _scale = self.pos_scale
+            elif _rot_output:
+                _scale = self.rot_scale
+                _use_t = False
+                if self.outVecMode == OutVecMode.ROT_VEL_AA:
+                    _curr_diff_ord = 1
+                    _vecs = self._rot_vels_JAV
+                elif self.outVecMode == OutVecMode.ROT_FIXED_AX:
+                    _curr_diff_ord = 2
+                    _vecs = []
+                    for i, r_mats_for_skip in enumerate(r_mats):
+                        d = dict()
+                        for k, rms in r_mats_for_skip.items():
+                            d[k] = pm.closestAnglesAboutAxis(
+                                rms[1:-1], rms[2:],
+                                self._prev_vel_axes[i][k][:-1]
+                            ).reshape(-1, 1)
+                        _vecs.append(d)
+                elif self.outVecMode == OutVecMode.ROT_AA:
+                    _vecs = self._aas_JAV
+
+            self._gt_arrs = self._worldvec_concats(
+                0, diff_ord = _diff_ord, scale = _scale, use_translation=_use_t,
+                vecs=_vecs, curr_diff_ord=_curr_diff_ord
+            )
+            if self.outVecMode == OutVecMode.ROT_FIXED_AX:
+                for k, v in self._gt_arrs.items():
+                    self._gt_arrs[k] = v / self._prev_ang_concat[k]
+                    # From plotting the gt for the near-zero angles, it seems
+                    # that a multiplier of 0.0 is the mean of a fairly normal
+                    # -looking histogram. So 0.0 is probably the safest bet.
+                    self._gt_arrs[k][self._prev_ang_concat[k] == 0.0] = 0.0
+            if _rot_align:
+                for k in DataSubsetKind.nonWholeValues():
+                    self._gt_arrs[k] = pm.einsumMatVecMul(
+                        _w2l_mats_prev[k], self._gt_arrs[k]
+                    )
+
+        # If we want to only use data for one skip value, we filter things here.
+        skip_inds = {
+            k: ... if skip == SkipSubsetKind._all else v[skip]
+            for k, v in _dog.subset_skip_inds.items()
+        }
+        self._in_arrs = {k: v[skip_inds[k]] for k, v in self._in_arrs.items()}
+        self._gt_arrs = {k: v[skip_inds[k]] for k, v in self._gt_arrs.items()}
+        self.ref_predictions = {
+            k: v[skip_inds[k]] for k, v in self.ref_predictions.items()
+        }
+        
+        # These wouldn't have been scaled earlier. Might want to move/fix things
+        # so that all scaling happens in the same place, though.
+        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
+            for k in DataSubsetKind.nonWholeValues():
+                self._gt_arrs[k] /= self.pos_scale
+                self.ref_predictions[k] /= self.pos_scale
+
+
+        self.in_train = self._in_arrs[DataSubsetKind.TRAIN]
+        self.in_test = self._in_arrs[DataSubsetKind.TEST]
+        self.in_validation = self._in_arrs[DataSubsetKind.VALIDATION]
+
+        self.gt_train = self._gt_arrs[DataSubsetKind.TRAIN]
+        self.gt_test = self._gt_arrs[DataSubsetKind.TEST]
+        self.gt_validation = self._gt_arrs[DataSubsetKind.VALIDATION]
 
         
         # self.jav_train = np.concatenate(
@@ -767,10 +893,12 @@ class DataForJAV:
         #     (partial_jav_test, jav_te_append), axis=-1
         # )
 
-    def _world_coord_cols(self, curr_cols, subset_ids, rotations = None):
-        scs = self.scaler_scale
+    def _world_coord_cols(self, curr_cols: NDArray, subset_kind: DataSubsetKind,
+                          w2l_rotations: typing.Optional[NDArray] = None):
+        scs = self.pos_scale
         rs = self.rot_scale
         _ts = self.translations_JAV
+        subset_ids = self.data_organizer.subset_ids[subset_kind]
         coords = self._worldvec_helper(subset_ids, 1, use_translation=True)
         coords_tm1 = self._worldvec_helper(subset_ids, 2, use_translation=True)
         coords_tm2 = self._worldvec_helper(subset_ids, 3, use_translation=True)
@@ -780,10 +908,10 @@ class DataForJAV:
         jerks = self._worldvec_helper(subset_ids, 1, 3, scale=scs, vecs = _ts)
         aas = self._worldvec_helper(subset_ids, 1, vecs=self._aas_JAV)
         rmatv9s = self._worldvec_helper(subset_ids, 1, vecs=self._rmatsv9)
-        rot_vels = self._worldvec_helper(
-            subset_ids, 1, current_diff_order=1, vecs=self._rot_vels_JAV,
-            scale = rs
+        rot_vels_unscaled = self._worldvec_helper(
+            subset_ids, 1, current_diff_order=1, vecs=self._rot_vels_JAV
         )
+        rot_vels = rot_vels_unscaled / rs
         rot_accs = self._worldvec_helper(
             subset_ids, 1, diff_order=1,
             current_diff_order=1, vecs=self._rot_vels_JAV, scale = rs
@@ -792,25 +920,49 @@ class DataForJAV:
             subset_ids, 1, diff_order=2,
             current_diff_order=1, vecs=self._rot_vels_JAV, scale=rs
         )
-        w2ls_concat = np.concatenate(concatForComboSubset(
+        w2ls_concat: NDArray = np.concatenate(concatForComboSubset(
             self.w2ls_JAV, subset_ids
         ), axis=0)
         other_coords = (coords_tm1, coords_tm2, coords_tm3)
         other_vecs = (vels, accs, jerks, aas, rot_vels, rot_accs, rot_jerks)
         w2l_thing = (w2ls_concat.reshape(-1, 9), )
-        if rotations is not None:
-            # Transpose rotations so they're world-to-local.
-            rs_T = np.swapaxes(rotations, -2, -1)
+        if w2l_rotations is not None:
             other_coords = tuple(
-                pm.einsumMatVecMul(rs_T, c - coords) for c in other_coords
+                pm.einsumMatVecMul(w2l_rotations, c - coords)
+                for c in other_coords
             )
-            other_vecs = tuple(pm.einsumMatVecMul(rs_T, v) for v in other_vecs)
-            local_to_vel = pm.einsumMatMatMul(w2ls_concat, rotations)
+            other_vecs = tuple(
+                pm.einsumMatVecMul(w2l_rotations, v) for v in other_vecs
+            )
+            local_to_vel = pm.einsumMatMatMul(w2ls_concat, w2l_rotations)
             w2l_thing = (local_to_vel.reshape(-1, 9), )
 
         combined_tuple = (curr_cols, ) + other_coords + other_vecs + w2l_thing
-        if rotations is None:
+        if w2l_rotations is None:
             combined_tuple += (coords, rmatv9s)
+
+        # TODO: These assume constant timesteps for now.
+        if self.outVecMode == OutVecMode.WORLD_VEC3:
+            self.ref_predictions[subset_kind] = coords + vels + accs
+        elif self.outVecMode == OutVecMode.WORLD_DISP:
+            self.ref_predictions[subset_kind] = vels + accs
+        elif self.outVecMode == OutVecMode.ROT_ALIGNED_VEC3:
+            self.ref_predictions[subset_kind] = other_vecs[0] + other_vecs[1]
+        elif self.outVecMode == OutVecMode.ROT_FIXED_AX:
+            # self.ref_predictions[subset_kind] = \
+            #     self._prev_ang_concat[subset_kind]
+            self.ref_predictions[subset_kind] = np.ones((1, 1))
+        elif self.outVecMode == OutVecMode.ROT_VEL_AA:
+            self.ref_predictions[subset_kind] = rot_vels
+        elif self.outVecMode == OutVecMode.ROT_AA:
+            vel_qs = pm.quatsFromAxisAngleVec3s(rot_vels_unscaled)
+            extrap_vel_qs = pm.multiplyQuatLists(
+                vel_qs, pm.quatsFromAxisAngleVec3s(aas)
+            )
+            self.ref_predictions[subset_kind] = pm.axisAngleVec3sFromQuats(
+                extrap_vel_qs
+            ) / rs
+
         return np.concatenate(combined_tuple, axis=-1)
     
     def _fitWorldScaler(self, scale: float):
@@ -820,7 +972,8 @@ class DataForJAV:
         
         scaler.fit(
             concatForComboSubset(
-                self.translations_JAV, self.data_organizer.train_ids
+                self.translations_JAV,
+                self.data_organizer.subset_ids[DataSubsetKind.TRAIN]
             )[0]
         )
         scaler.scale_[:] = scale
@@ -828,20 +981,16 @@ class DataForJAV:
         self.translationScaler = scaler
     
     def _worldvec_concats(self, shift_from_gt: int, diff_ord: int, scale: float,
-                          use_translation: bool = False, vecs = None):
-        tr = self._worldvec_helper(
-            self.data_organizer.train_ids, shift_from_gt, diff_ord, scale=scale,
-             vecs=vecs, use_translation=use_translation
-        )
-        te = self._worldvec_helper(
-            self.data_organizer.test_ids, shift_from_gt, diff_ord, scale=scale,
-            vecs=vecs, use_translation=use_translation
-        )
-        va = self._worldvec_helper(
-            self.data_organizer.validation_ids, shift_from_gt, diff_ord,
-            scale=scale, vecs=vecs, use_translation=use_translation
-        )
-        return tr, te, va
+                          use_translation: bool = False, vecs = None,
+                          curr_diff_ord: int = 0):
+        ret_dict = dict()
+        for k in DataSubsetKind.nonWholeValues():
+            ret_dict[k] = self._worldvec_helper(
+                self.data_organizer.subset_ids[k], shift_from_gt, diff_ord,
+                scale=scale, vecs=vecs, use_translation=use_translation,
+                current_diff_order=curr_diff_ord
+            )
+        return ret_dict
     
     def _worldvec_helper(self, subset_ids, shift_from_gt: int,
                          diff_order: int = 0, current_diff_order: int = 0,
@@ -861,59 +1010,117 @@ class DataForJAV:
         elif scale != 0.0:
             concat /= scale
         return concat
-        
-    def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
+    
+    # TODO: move this to dataorg.py
+    @staticmethod
+    def _getSubsetVals(val_dict: typing.Dict[DataSubsetKind, NDArray],
+                       subset_kind: DataSubsetKind):
+        '''Concatenates subsets if necessary (e.g., if we ask for the whole)
+        and otherwise just performs dictionary key access.'''
+        if subset_kind == DataSubsetKind.WHOLE:
+            return np.concatenate([
+                val_dict[k] for k in DataSubsetKind.nonWholeValues()
+            ], axis=0)
+        return val_dict[subset_kind]
+
+    def getRefPredictions(self, subset: DataSubsetKind):
+        ret = self._getSubsetVals(self.ref_predictions, subset)
+        # For "constant" predictions like with the JAV multipliers, where
+        # we rely on broadcasting, we ensure the broadcasting doesn't break.
+        if len(self.gt_train) == 1:
+            raise ValueError("You only have one training sample???!")
+        elif len(self.ref_predictions[DataSubsetKind.TRAIN]) == 1:
+            # Unless something ELSE broke, a ref prediction of len 1 means that
+            # our ref predictions are constant. So to make sure broadcasting
+            # still works, we need to ensure we keep the len at 1.
+            return ret[:1]
+        return ret        
+
+    def getScoresSubset(self, subset: DataSubsetKind, predictions: NDArray,
+                        should_print: bool = True):
+
+        _predictions = predictions
+        gt_source = self._gt_arrs
+        if self.outVecMode == OutVecMode.ROT_FIXED_AX:
+            ref_axes = self._getSubsetVals(self._prev_vel_ax_concat, subset)
+            ref_angs = self._getSubsetVals(self._prev_ang_concat, subset)
+            _predictions = (predictions * ref_angs) * ref_axes
+            gt_source = self._gt_rot_vels
+
+        inds: typing.Dict[str, NDArray] = dict() 
+        gt_param = self._getSubsetVals(gt_source, subset)
+        if subset == DataSubsetKind.WHOLE:
+            ttvks = DataSubsetKind.nonWholeValues()
+            inds = {
+                s: np.concatenate(
+                    [self.data_organizer.subset_skip_inds[t][s] for t in ttvks]
+                ) for s in SkipSubsetKind if s >= 0
+            }
+            inds[SkipSubsetKind._all] = ...
+        else:
+            inds = self.data_organizer.subset_skip_inds[subset]
+
         return self._scoreHelper(
-            predictions, self.gt_train, self.outVecMode, self.score_scaler,
-            self.data_organizer.skip_train_inds_dict, should_print, self.skip
+            _predictions, gt_param, self.score_fn, self.score_scaler, inds,
+            should_print, self.skip
+        )
+    
+    
+    def getScoresTrain(self, predictions: NDArray, should_print: bool = True):
+        return self.getScoresSubset(
+            DataSubsetKind.TRAIN, predictions, should_print
         )
 
     def getScoresTest(self, predictions: NDArray, should_print: bool = True):
-        return self._scoreHelper(
-            predictions, self.gt_test, self.outVecMode, self.score_scaler,
-            self.data_organizer.skip_inds_dict, should_print, self.skip
+        return self.getScoresSubset(
+            DataSubsetKind.TEST, predictions, should_print
         )
     
     def getScoresValidation(self, predictions: NDArray, should_print: bool = True):
-        return self._scoreHelper(
-            predictions, self.gt_validation, self.outVecMode, self.score_scaler,
-            self.data_organizer.skip_validation_inds_dict, should_print,
-            self.skip
+        return self.getScoresSubset(
+            DataSubsetKind.VALIDATION, predictions, should_print
         )
 
     @staticmethod
-    def _scoreHelper(preds: NDArray, jav_vals: NDArray, outVecMode: OutVecMode,
-                     sc, inds: typing.Dict, should_print: bool, skip: int):
-        loss_fn = poseLossJAV
+    def _scoreHelper(preds: NDArray, gt_vals: NDArray,
+                     score_fn: typing.Callable, sc, inds: typing.Dict,
+                     should_print: bool, skip: SkipSubsetKind):
         _preds = preds
-        _gts = jav_vals
-        if outVecMode != OutVecMode.JAV_MULTIPLIERS:
-            loss_fn = poseLossVec3
-            if sc is not None:
-                if isinstance(sc, float):
-                    _preds = preds * sc
-                    _gts = jav_vals * sc
-                else:         
-                    _preds = sc.inverse_transform(preds)
-                    _gts = sc.inverse_transform(jav_vals)
+        _gts = gt_vals
+        if sc is not None and sc != 0.0:
+            if isinstance(sc, float):
+                _preds = preds * sc
+                _gts = gt_vals * sc
+            else:         
+                _preds = sc.inverse_transform(preds)
+                _gts = sc.inverse_transform(gt_vals)
 
         if skip >= 0:
-            inds = {'skip' + str(skip): ...}
+            inds = {SkipSubsetKind(skip) : ...}
             
-        errs: NDArray = loss_fn(_gts, _preds).numpy()
+        errs: NDArray = score_fn(_gts, _preds)
+        if not isinstance(errs, np.ndarray):
+            errs = errs.numpy()
         # Print scores on test data.
         scores = {k: np.mean(errs[v]) for k, v in inds.items()}
         if should_print:
             for k, v in scores.items():
-                print(k + ":", v)
+                print(k.display_name + ":", v)
         return scores
     
 bcotjav = DataForJAV(
     dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
     save_data_for_conf=True, #skip=2
 )
+#%%
+print("Reference scores for whole dataset (i.e., no train/test split).")
+print("Reference method:", bcotjav.ref_prediction_name)
+print("Reference scores:")
+bcotjav.getScoresSubset(DataSubsetKind.WHOLE, bcotjav.getRefPredictions(DataSubsetKind.WHOLE), True)
 
-bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, loss=sel_loss)
+#%%
+bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 256)
+
 
 
 #%% Train the network.
@@ -929,11 +1136,9 @@ bcs_hist = bcs_model.fit(
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
+bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
+#%% Print scores on test data.
 bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
-## %% Print scores on test data.
-bcs_test_scores = {k: np.mean(bcs_test_errs[v]) for k, v in dog.skip_inds_dict.items()}
-for k, v in bcs_test_scores.items():
-    print(k + ":", v)
 
 
 
@@ -1050,8 +1255,7 @@ def errsForColScramble(model: keras.Model, data: NDArray, col_ind: int, y_true: 
 
 # For each column and for each skip amount, scramble the column and find the new
 # score.
-skip_keys = dog.skip_inds_dict.keys()
-scramble_scores = np.empty((dog.col_subset_test.shape[1], len(skip_keys)))
+scramble_scores = np.empty((dog.col_subset_test.shape[1], len(SkipSubsetKind)))
 print()
  
 
@@ -1066,8 +1270,10 @@ for col_ind in range(num_nonco_cols):
     errs = errsForColScramble(
         bcs_model, dog.col_subset_test, col_ind, bcotjav.jav_test
     )
-    for i, k in enumerate(skip_keys):
-        scramble_scores[col_ind, i] = np.mean(errs[dog.skip_inds_dict[k]])
+    for i, k in enumerate(SkipSubsetKind):
+        scramble_scores[col_ind, i] = np.mean(
+            errs[dog.subset_skip_inds[DataSubsetKind.TEST][k]]
+        )
 #%%
 scramble_rank = np.argsort(scramble_scores, axis=0)[::-1]
 print("Most important feature inds:", scramble_rank[:10], sep='\n')
@@ -1153,7 +1359,7 @@ num_muls = shap_values_tf.shape[-1]
 for mul in range(num_muls):
     plt.bar(
         nonco_arange + mul / num_muls, shap_accum[:, mul],
-        width = 1/12, label="mul " + str(skip)
+        width = 1/12, label="mul " + str(mul)
     )
 plt.legend()
 plt.xticks(nonco_arange[::5])
@@ -1245,16 +1451,18 @@ import matplotlib.pyplot as plt
 big_tree_preds = big_tree.predict(dog.concat_test_data)
 tree_errs_for_plt = dog.getClassErrsTest(big_tree_preds)
 
-acc_only_preds = np.full_like(
-    big_tree_preds, dog.motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
+acc_only_preds = np.full(
+    (len(dog.col_subset_test), 1),
+    dog.motion_mod_keys.index(MOTION_MODEL.ACC_DEG2)
 )
 acc_errs_for_plt = dog.getClassErrsTest(acc_only_preds)
 
 
-bar_skip_key = 'skip2'
+bar_skip_key = SkipSubsetKind.skip2
 bar_data: typing.List[NDArray] = [
     tree_errs_for_plt[bar_skip_key], acc_errs_for_plt[bar_skip_key],
-    bcs_test_errs[dog.skip_inds_dict[bar_skip_key]], error_lim_all[bar_skip_key]
+    bcs_test_errs[dog.subset_skip_inds[DataSubsetKind.TEST][bar_skip_key]],
+    error_lim_all[bar_skip_key]
 ]
 bar_labels = ['Tree', 'Acc Only', 'JAV NN', "Classification lim"]
 for i, arr in enumerate(bar_data):
@@ -1316,28 +1524,28 @@ ax = plt.figure().add_subplot(projection='3d')
 
 data_to_3d_plot = bcot_ajnn_pred[:, :3]
 
-inds_dict = dog.skip_train_inds_dict
+inds_dict = dog.subset_skip_inds[DataSubsetKind.TRAIN]
 
-for k in skip_keys:
-    if k == 'all':
+for k in SkipSubsetKind:
+    if k == SkipSubsetKind._all:
         continue
     dp = data_to_3d_plot[inds_dict[k]]
     inds = np.random.choice(len(dp), 1000)
 
     # print(dp[inds].T.shape)
-    ax.scatter3D(*dp[inds].T, label="BCOT " + k)
+    ax.scatter3D(*dp[inds].T, label="BCOT " + k.display_name)
 
 data_to_3d_plot = tudl_ajnn_pred[:, :3]
-inds_dict = tdog.skip_train_inds_dict
+inds_dict = tdog.subset_skip_inds[DataSubsetKind.TRAIN]
 
-for k in skip_keys:
-    if k == 'all':
+for k in SkipSubsetKind:
+    if k == SkipSubsetKind._all:
         continue
     dp = data_to_3d_plot[inds_dict[k]]
     inds = np.random.choice(len(dp), 1000)
 
     # print(dp[inds].T.shape)
-    ax.scatter3D(*dp[inds].T, label="TUDL " + k)
+    ax.scatter3D(*dp[inds].T, label="TUDL " + k.display_name)
 
 ax.set_xlabel("i")
 ax.set_ylabel("j")
@@ -1560,7 +1768,7 @@ def getRandSubset(data, gt, n):
     inds = np.random.choice(len(data), n)
     return data[inds], gt[inds]
 
-skis = [dog.skip_train_inds_dict['skip{}'.format(i)] for i in range(3)]
+skis = [dog.subset_skip_inds[DataSubsetKind.TRAIN][i] for i in range(3)]
 bcot_sub_data = []
 bcot_sub_gt = []
 bcot_sub_nn = []
@@ -1731,10 +1939,10 @@ def testAllDiscreteJAV(aj_combos = None):
                                 jerk_opts[j0], jerk_opts[j1], jerk_opts[j2]
                             ))
 
-    ajnp = np.empty((len(aj_combos), len(skip_keys)))
+    ajnp = np.empty((len(aj_combos), len(SkipSubsetKind)))
     for i, ajc in enumerate(aj_combos):
         ajscore = bcotjav.getScoresTrain(np.array([[*ajc]]), False)
-        for j, sk in enumerate(skip_keys):
+        for j, sk in enumerate(SkipSubsetKind):
             ajnp[i, j] = ajscore[sk]
     return ajnp
 #%%
@@ -1754,8 +1962,8 @@ for i, b in enumerate(base2):
     all_base_errs[:, i] = poseLossJAV(bcotjav.jav_train, np.asarray(b).reshape(1, -1))
 
 min_base_errs = np.min(all_base_errs, axis=-1)
-for k, v in dog.skip_train_inds_dict.items():
-    print(k, ":", np.mean(min_base_errs[v]))
+for k, v in dog.subset_skip_inds[DataSubsetKind.TRAIN].items():
+    print(k.display_name, ":", np.mean(min_base_errs[v]))
 
 argmin_base_errs = np.argmin(all_base_errs, axis=-1)
 plt.bar(*np.unique(argmin_base_errs, return_counts=True))
@@ -1834,5 +2042,5 @@ class_resid_losses = poseLossJAV(
     bcotjav.jav_test, class_resid_test
 )
 
-for k, v in dog.skip_inds_dict.items():
+for k, v in dog.subset_skip_inds[DataSubsetKind.TEST].items():
     print(k, np.mean(class_resid_losses[v]))

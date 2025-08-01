@@ -149,7 +149,7 @@ RELATIVE_VECTOR = typing.Union[MOTION_DATA, OTHER_DIRECTION]
 ALL_RELATIVE_VECTORS = (
     MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG2_VEC3, MOTION_DATA.ACC_VEC3,
     MOTION_DATA.JERK_VEC3, MOTION_DATA.JERK_ERR_VEC3, MOTION_DATA.ROTATION_VEC3,
-    MOTION_DATA.ROT_ACC_VEC3,
+    MOTION_DATA.ROT_ACC_VEC3, MOTION_DATA.ROT_JERK_VEC3,
     OTHER_DIRECTION.ACC_ORTHO_DEG1, OTHER_DIRECTION.PLANE_ORTHO
 )
 
@@ -770,6 +770,7 @@ class CalcsForVideo:
             rot_accs = rderivs.accelerations / step
 
             rot_jerks = np.diff(rot_accs, 1, axis=0) / step
+            rot_jerks = np.pad(rot_jerks, ((1, 0), (0, 0)))
 
 
             pderivs = PositionDerivativeCollection(translation_diffs[:-1])
