@@ -23,6 +23,9 @@ TRANSLATION_THRESH = 20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
+skipAmount = 2
+WEIGHT_SCORES_BY_LEN = True
+
 ADD_NUMERICAL_TESTS = False
 
 SPLINE_DEGREE = 1
@@ -190,20 +193,30 @@ class PredictionResult:
                  errors: typing.Dict[typing.Tuple[int, int], np.ndarray],
                  scores: typing.Dict[typing.Tuple[int, int], float]
                  ):
-        self.name: str = name
+        self.name = name
         # predictions: np.ndarray
-        self.errors: typing.Dict[typing.Tuple[int, int], np.ndarray] = errors
-        self.scores: typing.Dict[typing.Tuple[int, int], float] = scores
-        self.scores2D: np.ndarray = np.full(
-            (len(gtc.BCOT_BODY_NAMES), len(gtc.BCOT_SEQ_NAMES)), np.nan
-        )
-        for k, v in scores.items():
-            self.scores2D[k[0], k[1]] = v
-        
-    def addScore(self, bodSeqIDTuple: typing.Tuple[int, int], score: float):
-        self.scores[bodSeqIDTuple] = score
-        self.scores2D[bodSeqIDTuple[0], bodSeqIDTuple[1]] = score
+        self.errors = errors
+        self.scores = scores
+        shape_2D = (len(gtc.BCOT_BODY_NAMES), len(gtc.BCOT_SEQ_NAMES))
+        self.scores2D = np.full(shape_2D, np.nan)
+        self.weighted_scores_2D = np.full(shape_2D, np.nan)
+        self.num_errors_2D = np.zeros(shape_2D, dtype=np.int32)
+        for k, k_errs in errors.items():
+            self._updateResult(k, scores[k], k_errs)
 
+    def _updateResult(self, bodSeqIDTuple: typing.Tuple[int, int], score: float,
+                      errs: np.ndarray):
+        self.scores2D[bodSeqIDTuple] = score
+        n_errs = len(errs)
+        self.weighted_scores_2D[bodSeqIDTuple] = score * n_errs
+        self.num_errors_2D[bodSeqIDTuple] = n_errs
+        
+    def addResult(self, bodSeqIDTuple: typing.Tuple[int, int], score: float,
+                  errs: np.ndarray):
+        self.scores[bodSeqIDTuple] = score
+        self.errors[bodSeqIDTuple] = errs
+        self._updateResult(bodSeqIDTuple, score, errs)
+        
 class POSE_COMPONENT(Enum):
     TRANSLATION = 1
     ROTATION = 2
@@ -232,6 +245,7 @@ class ConsolidatedResults:
 
         self._translations_gt = None
         self._axisangles_gt = None
+        self._angvels_gt = None
         self._quaternions_gt = None
 
         self._currentKey = None # Current (body, sequence) key.
@@ -264,11 +278,15 @@ class ConsolidatedResults:
 
         return values[1:] - full_predictions
     
-    def updateGroundTruth(self, translations, axisangles, quats, bod_ID, seq_ID):
+    def updateGroundTruth(self, translations, axisangles, quats, angvels, bod_ID, seq_ID):
         self._currentKey = (bod_ID, seq_ID)
         self._allBodSeqKeys.add(self._currentKey)
         self._translations_gt = translations
         self._axisangles_gt = axisangles
+        # We need a prediction for every possible "next frame".
+        # So for the first frame where no angular velocity exists, we'll give it
+        # a value of zero.
+        self._angvels_gt = np.pad(angvels, ((1,0), (0,0)))
         self._quaternions_gt = quats
         t_perfect_errs = ConsolidatedResults.getTranslationError(
             translations, translations[1:]
@@ -307,6 +325,15 @@ class ConsolidatedResults:
     def addAxisAngleResult(self, name, predictions):
         errs = ConsolidatedResults.getAxisAngleError(
             self._axisangles_gt, predictions
+        )
+        score = ConsolidatedResults.applyThreshold(errs, ROTATION_THRESH_RAD)
+        self._addPredictionResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            name, errs, score)
+        
+    def addAngVelResult(self, name, predictions):
+        errs = ConsolidatedResults.getAxisAngleError(
+            self._angvels_gt, predictions
         )
         score = ConsolidatedResults.applyThreshold(errs, ROTATION_THRESH_RAD)
         self._addPredictionResult(
@@ -378,8 +405,7 @@ class ConsolidatedResults:
 
     def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
         if name in all_results_dict.keys():
-            all_results_dict[name].errors[self._currentKey] = errs
-            all_results_dict[name].addScore(self._currentKey, score)
+            all_results_dict[name].addResult(self._currentKey, score, errs)
         else:
             errs_dict = {self._currentKey: errs}
             score_dict = {self._currentKey: score}
@@ -498,10 +524,17 @@ class ConsolidatedResults:
                 print("{v:>{w}} ".format(v=val_str, w=width), end = "")
             print() # Newline after row.
 
+    @staticmethod
+    def weightedScoreAvg(result_obj: PredictionResult, mean_ax):
+        score_sum = np.nansum(result_obj.weighted_scores_2D, axis=mean_ax)
+        score_count = np.sum(result_obj.num_errors_2D, axis=mean_ax)
+        return score_sum / score_count
 
     def prepareDataForPrint(self, group_mode: DisplayGrouping,
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None):
+                            weight_scores_by_len: bool,
+                            pose_component: POSE_COMPONENT,
+                            thresh_name: str = "", 
+                            cols_to_exclude: typing.List[str] = None):
         mean_ax = None
         row_names = []
         # If we split up by rows, we need a different axis for the mean calc
@@ -527,10 +560,19 @@ class ConsolidatedResults:
             results = self.rotation_results
 
         # Calculate the averages along the chosen axis.
-        ordered_score_means = [
-            np.nanmean(results[n].scores2D, axis=mean_ax)
-            for n in ordered_names
-        ]
+
+        ordered_score_means: typing.List[np.ndarray] = []
+        if weight_scores_by_len:
+            ordered_score_means = [
+                self.weightedScoreAvg(results[n], mean_ax)
+                for n in ordered_names
+            ]
+        else:
+            ordered_score_means = [
+                np.nanmean(results[n].scores2D, axis=mean_ax)
+                for n in ordered_names
+            ]
+
         # Filter out nan values, because the easiest temporary way to skip the 
         # "duplicate" 2nd camera sequences was to leave their values as nan 
         # rather than work with skipped indices.
@@ -570,9 +612,13 @@ class ConsolidatedResults:
             means_names_zip = zip(ordered_score_means, ordered_names)
             for c, (means, name) in enumerate(means_names_zip):
                 if include_bools[c]:
-                    overall_avg = np.fromiter(
-                        results[name].scores.values(), dtype=float
-                    ).mean()
+                    overall_avg = np.inf # Placeholder
+                    if weight_scores_by_len:
+                        overall_avg = self.weightedScoreAvg(results[name], None)
+                    else:
+                        overall_avg = np.fromiter(
+                            results[name].scores.values(), dtype=float
+                        ).mean()
                     means = np.append(means, overall_avg)
                     selected_means.append(means)
         else:
@@ -609,11 +655,13 @@ class ConsolidatedResults:
         )
     
     def printResults(self, group_mode: DisplayGrouping,
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
+                     weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
+                     thresh_name: str = "", 
                      cols_to_exclude: typing.List[str] = None):
         
         ti = self.prepareDataForPrint(
-            group_mode, pose_component, thresh_name, cols_to_exclude
+            group_mode, weight_scores_by_len, pose_component, thresh_name,
+            cols_to_exclude
         )
 
         annotations = None
@@ -665,13 +713,15 @@ class ConsolidatedResults:
             print("Excluded columns:", excluded_str)
         return
     
-    def latexResults(self, group_mode: DisplayGrouping, 
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
+    def latexResults(self, group_mode: DisplayGrouping,
+                     weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
+                     thresh_name: str = "", 
                      cols_to_exclude: typing.List[str] = None,
                      num_to_highlight = 0, max_is_better = True, dec_round = 2,
                      data_func = None):
         ti = self.prepareDataForPrint(
-            group_mode, pose_component, thresh_name, cols_to_exclude
+            group_mode, weight_scores_by_len, pose_component, thresh_name,
+            cols_to_exclude
         )
         ConsolidatedResults.printLatexTable(
             ti, num_to_highlight, max_is_better, dec_round, data_func
@@ -684,7 +734,6 @@ for b in range(len(gtc.BCOT_BODY_NAMES)):
         if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b,s))
 
-skipAmount = 2
 
 fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
@@ -742,10 +791,22 @@ for i, combo in enumerate(combos):
     #     rotations_gt_quats
     # )
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
+    
+    rev_rotations_quats = pm.conjugateQuats(rotations_quats)
+
+    rotation_quat_diffs = pm.multiplyQuatLists(
+        rotations_quats[1:], rev_rotations_quats[:-1]
+    )
+
+    
+    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
+    angles = angles.flatten()
+    scaled_axes = pm.scalarsVecsMul(angles, fixed_axes)
 
     allResultsObj.updateGroundTruth(
-        translations_gt, rotations_aa_gt, rotations_gt_quats, combo[0], combo[1]
+        translations_gt, rotations_aa_gt, rotations_gt_quats, scaled_axes, combo[0], combo[1]
     )
+
     maxTimestampsWhenSkipped = max(maxTimestampsWhenSkipped, len(translations))
 
 
@@ -753,14 +814,6 @@ for i, combo in enumerate(combos):
     rotation_aa_diffs = np.diff(rotations, axis=0)
 
     
-    
-    rev_rotations_quats = pm.conjugateQuats(rotations_quats)
-
-
-
-    rotation_quat_diffs = pm.multiplyQuatLists(
-        rotations_quats[1:], rev_rotations_quats[:-1]
-    )
 
     # At this time, logging the finite difference acceleration at the last
     # timestep isn't required, as there's no further prediction to make with it.
@@ -904,8 +957,7 @@ for i, combo in enumerate(combos):
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
     r_mats = calculator.getRotationMatsGTNP()[::(skipAmount + 1)]
-    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
-    angles = angles.flatten()
+
     #rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
     r_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
     r_next_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[:-2], r_mats[1:-1], fixed_axes[1:])
@@ -981,11 +1033,10 @@ for i, combo in enumerate(combos):
     r_movaxis_preds[0] = r_vel_preds[0]
     r_movaxis_preds[1:] = pm.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
 
-    scaled_axes = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
     # test_quats = pm.quatsFromAxisAngleVec3s(scaled_axes)
     # max_scaledax_diff = np.abs(test_quats - rotation_quat_diffs[:-1]).max()
-    ang_accels = np.diff(scaled_axes, 1, axis=0)
-    naive_lin_axes = pm.replaceAtEnd(scaled_axes, scaled_axes[1:] + ang_accels, 1)
+    ang_accels = np.diff(scaled_axes[:-1], 1, axis=0)
+    naive_lin_axes = pm.replaceAtEnd(scaled_axes[:-1], scaled_axes[1:-1] + ang_accels, 1)
     naive_lin_q_diffs = pm.quatsFromAxisAngleVec3s(naive_lin_axes)
     r_naive_lin_preds = pm.multiplyQuatLists(
         naive_lin_q_diffs, rotations_quats[1:-1]
@@ -1228,9 +1279,13 @@ disp_groupings = (
 for disp_grouping in disp_groupings:
     for pose_comp, thresh_col in zip(pose_comps, thresh_cols):
         if disp_grouping == DisplayGrouping.TOTAL_ONLY:
-            allResultsObj.printResults(disp_grouping, pose_comp)
+            allResultsObj.printResults(
+                disp_grouping, WEIGHT_SCORES_BY_LEN, pose_comp
+            )
         else:
-            allResultsObj.printResults(disp_grouping, pose_comp, thresh_col)
+            allResultsObj.printResults(
+                disp_grouping, WEIGHT_SCORES_BY_LEN, pose_comp, thresh_col
+            )
         print()
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
 def stat_results(vals: np.ndarray):
