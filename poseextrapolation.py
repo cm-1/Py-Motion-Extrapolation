@@ -248,9 +248,11 @@ def camObjConstAngularVelPreds(known_rotations_qs: np.ndarray, backup_prediction
         rotation_q_diffs[1:], rotation_q_diffs[:-1]
     )
 
-    step1_diff_aas = pm.axisAnglesFromQuats(rotation_q_diffs)
+    step1_diff_aas = pm.axisAnglesFromQuats(rotation_q_diffs, False)
     step1_diff_unit_axes, step1_diff_angles = step1_diff_aas
-    step2_diff_unit_axes, _ = pm.axisAnglesFromQuats(rotation_q_step2_diffs)
+    step2_diff_unit_axes, _ = pm.axisAnglesFromQuats(
+        rotation_q_step2_diffs, False
+    )
     unnormed_plane_axes = np.cross(
         step1_diff_unit_axes[1:], step2_diff_unit_axes
     )

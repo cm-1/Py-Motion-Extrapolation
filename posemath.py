@@ -4,6 +4,7 @@ from collections import namedtuple
 import numpy as np
 
 HALF_PI_NP = np.pi/2.0
+DEFAULT_ZERO_ANG_THRESH = 0.0001
 
 PlaneInfoType = namedtuple(
     "PlaneInfo", ['plane_axes', 'normals', 'offset_dists']
@@ -624,35 +625,94 @@ def closestAnglesAboutAxis(rotatingFrames, targetFrames, axes):
 
     return thetas
 
-# Angles returned should be in the 0-PI range.
-def axisAnglesFromQuats(quatVals: np.ndarray):
+def _axisAnglesFromQuatsHelp(quatVals: np.ndarray, remove_jumps: bool,
+                             zeroAngleThresh: float = DEFAULT_ZERO_ANG_THRESH):
     halfAngles = np.arccos(np.clip(quatVals[..., 0:1], -1, 1))
-    sinHalf = np.sin(halfAngles)
-    tooLarge = (halfAngles > HALF_PI_NP)
-    sinHalf[tooLarge] = -sinHalf[tooLarge]
-    halfAngles[tooLarge] = np.pi - halfAngles[tooLarge]
-    angles = halfAngles + halfAngles
-
-    axes = safelyNormalizeArray(quatVals[..., 1:], sinHalf)
-    return axes, angles
-
-def axisAngleVec3sFromQuats(quatVals: np.ndarray):
-    halfAngles = np.arccos(np.clip(quatVals[..., 0:1], -1, 1))
-    sinHalf = np.sin(halfAngles)
-    tooLarge = (halfAngles > HALF_PI_NP)
-    sinHalf[tooLarge] = -sinHalf[tooLarge]
-    halfAngles[tooLarge] = np.pi - halfAngles[tooLarge]
-    angles = halfAngles + halfAngles
-
-
-    zero_angs = (angles[..., 0] == 0.0)
-    nonzero_angs = ~zero_angs
-    scaled_axes = np.empty(quatVals.shape[:-1] + (3,))
-    scaled_axes[zero_angs] = 0.0
-    scalars = angles[nonzero_angs] / sinHalf
-    scaled_axes[nonzero_angs] = scalars * quatVals[nonzero_angs, 1:]
     
-    return scaled_axes
+    # For zero angle quats, we'll need to propogate the last nonzero axis.
+    # First, we get the indices of the last nonzero axis for each zero axis.
+    zeroHalfAngleThresh =  zeroAngleThresh / 2
+    zeroAngleInds = np.nonzero((halfAngles < zeroHalfAngleThresh).flatten())
+    angleInds = np.arange(len(halfAngles))
+    angleInds[zeroAngleInds] = 0
+    angleInds = np.maximum.accumulate(angleInds, axis = -1)
+    angPropInds = angleInds[zeroAngleInds]
+
+    # We want to propagate the non unit axes before looking for flips for
+    # relatively obvious reasons.
+    nonUnitAxes = quatVals[..., 1:].copy()
+    nonUnitAxes[zeroAngleInds] = nonUnitAxes[angPropInds]
+    if remove_jumps:
+        # At this step, all angles SHOULD be positive.
+        angle_dots = einsumDot(
+            nonUnitAxes[..., 1:, :], nonUnitAxes[..., :-1, :]
+        ) 
+        needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
+        halfAngles[..., 1:, :][needs_flip] = -halfAngles[..., 1:, :][needs_flip]
+
+    # We can calculate the values of sine after any angle flipping because
+    # of sign cancellation stuff that preserves the final rotation.
+    sinHalf = np.sin(halfAngles)
+    # Propagate what we're dividing by too so that we, in essence, propagate
+    # the unit axes.
+    sinHalf[zeroAngleInds] = sinHalf[angPropInds]
+
+    # If the first rotations are zero-angle, then they have no previous axis to
+    # copy. So they'll still be NaNs or whatever, so we should fix those.
+    numIssueAxesAtFront = 0
+    while numIssueAxesAtFront < len(halfAngles):
+        if halfAngles[numIssueAxesAtFront] >= zeroHalfAngleThresh:
+            break
+        numIssueAxesAtFront += 1
+    # Sine we don't know what axis to use at the start in a real live scenario,
+    # we'll choose an arbitrary axis, [1, 0, 0], and ensure we scale it by
+    # 1 later so that it stays unit length.
+    nonUnitAxes[:numIssueAxesAtFront] = [1, 0, 0]
+    sinHalf[:numIssueAxesAtFront] = 1
+
+    if not remove_jumps:
+        tooLarge = (halfAngles > HALF_PI_NP)
+        sinHalf[tooLarge] = -sinHalf[tooLarge]
+        halfAngles[tooLarge] = np.pi - halfAngles[tooLarge]
+        angles = halfAngles + halfAngles
+        return angles, sinHalf, nonUnitAxes
+
+    # Now comes the jump removal version.
+    angles = halfAngles + halfAngles
+
+    # For comments describing the correctness of this code, see the mat3->aa
+    # function comments.
+    np_tau = 2.0 * np.pi
+    tau_facs = np.round(np.diff(angles) / np_tau)
+    angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
+    angles[..., 1:] -= angle_corrections
+    return angles, sinHalf, nonUnitAxes
+
+
+# Angles returned should be in the 0-PI range unless we remove jumps.
+def axisAnglesFromQuats(quatVals: np.ndarray, remove_jumps: bool,
+                        zeroAngleThresh: float = DEFAULT_ZERO_ANG_THRESH):
+    '''Angles returned will be in the 0-PI range if `remove_jumps` is False.
+    Otherwise, axes and angles will be returned such that the angles between
+    consecutive axes are not obtuse and the angle values do not jump from,
+    for example, 2pi minus epsilon to epsilon, but instead go to 2pi plus
+    epsilon in such a case.'''
+    angles, sinHalf, nonUnitAxes = _axisAnglesFromQuatsHelp(
+        quatVals, remove_jumps, zeroAngleThresh
+    )
+    return nonUnitAxes / sinHalf, angles
+
+def axisAngleVec3sFromQuats(quatVals: np.ndarray, remove_jumps: bool,
+                            zeroAngleThresh: float = DEFAULT_ZERO_ANG_THRESH):
+    '''Angles returned will be in the 0-PI range if `remove_jumps` is False.
+    Otherwise, axes and angles will be returned such that the angle values do
+    not jump from, for example, 2pi minus epsilon to epsilon, but instead go to
+    2pi plus epsilon in such a case.'''
+    angles, sinHalf, nonUnitAxes = _axisAnglesFromQuatsHelp(
+        quatVals, remove_jumps, zeroAngleThresh
+    )
+    scalars = angles / sinHalf
+    return scalars * nonUnitAxes
 
 def multiplyQuatLists(q0, q1):
     num_qs = len(q0) if q0.ndim > 1 else len(q1)
@@ -715,10 +775,27 @@ def matsFromScaledAxisAngleArray(scaledAxisAngles):
     axes[posInds] = scaledAxisAngles[posInds] / angles[posInds][..., np.newaxis]
     return matsFromAxisAngleArrays(angles, axes)
 
+def matsFromQuaternions(quats: np.ndarray):
+    # Math source: https://www.songho.ca/opengl/gl_quaternion.html
+    s, x, y, z = quats.transpose()
+    _2x2 = 2*x**2
+    _2y2 = 2*y**2
+    _2z2 = 2*z**2
+    _2xy = 2*x*y
+    _2xz = 2*x*z
+    _2yz = 2*y*z
+    _2sx = 2*s*x
+    _2sy = 2*s*y
+    _2sz = 2*z*z
+    return np.moveaxis(np.array([
+        [1 - _2y2 - _2z2,  _2xy - _2sz,      _2xz + _2sy],
+        [_2xy + _2sz,      1 - _2x2 - _2z2,  _2yz - _2sx],
+        [_2xz - _2sy,      _2yz + _2sx,      1 - _2x2 - _2y2]
+    ]), -1, 0)
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
-def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
+def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH):
     # Reusability-TODO: I think the only parts of the code below that do not yet support
     # more than 3 dimensions are the handling of axes for angles of zero.
     # There may not yet be a *benefit* to full support, but noting just in case.
@@ -870,7 +947,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     zeroAngleInds = np.nonzero(angles < zeroAngleThresh)
     angleInds[zeroAngleInds] = 0
     angleInds = np.maximum.accumulate(angleInds, axis = -1)
-    nonUnitAxes[zeroAngleInds] = nonUnitAxes[angleInds[zeroAngleInds]]
+    angPropInds = angleInds[zeroAngleInds]
+    nonUnitAxes[zeroAngleInds] = nonUnitAxes[angPropInds]
 
     # TL;DR: Angles for the 1st case of Shepperd's algorithm, as output of acos,
     # start out in interval [0, pi]. Thus, the similar rotations
@@ -951,7 +1029,7 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = 0.0001):
     sinVals = np.sin(angles[useDiag]/2.0)
     unitAxes[useDiag] = nonUnitAxes[useDiag] / (sinVals + sinVals)[..., np.newaxis]
     # Then zero-angle:
-    unitAxes[zeroAngleInds] = unitAxes[angleInds[zeroAngleInds]]
+    unitAxes[zeroAngleInds] = unitAxes[angPropInds]
     # If the first rotations are zero-angle, then they have no previous axis to
     # copy. So they'll still be NaNs or whatever, so we should fix those.
     numIssueAxesAtFront = 0

@@ -68,17 +68,9 @@ for combo in combos:
     
     # Converts quaternions to axis-angle, then corrects jumps.
     # Cleanup-TODO: Document, maybe find way to combine with mat->AA code?
-    unitAxes, angles = pm.axisAnglesFromQuats(r_slerp_preds)
+    unitAxes, angles = pm.axisAnglesFromQuats(r_slerp_preds, True)
     angles = angles.flatten()
 
-    angle_dots = pm.einsumDot(unitAxes[1:], unitAxes[:-1]) 
-    needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
-    angles[1:][needs_flip] = -angles[1:][needs_flip]
-    unitAxes[1:][needs_flip] = -unitAxes[1:][needs_flip]
-    np_tau = 2.0 * np.pi
-    tau_facs = np.round(np.diff(angles) / np_tau)
-    angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
-    angles[1:] -= angle_corrections
     r_slerp_preds_aa = pm.scalarsVecsMul(angles, unitAxes)
     
     r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))

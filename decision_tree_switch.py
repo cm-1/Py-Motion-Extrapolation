@@ -960,7 +960,7 @@ class DataForJAV:
                 vel_qs, pm.quatsFromAxisAngleVec3s(aas)
             )
             self.ref_predictions[subset_kind] = pm.axisAngleVec3sFromQuats(
-                extrap_vel_qs
+                extrap_vel_qs, True
             ) / rs
 
         return np.concatenate(combined_tuple, axis=-1)

@@ -45,7 +45,7 @@ for combo in combos:
     aa_rotations = calculator.getRotationsGTNP()[::(SKIP_AMT + 1)]
     qs = pm.quatsFromAxisAngleVec3s(aa_rotations)
     quatDiffs = pm.multiplyQuatLists(qs[1:], pm.conjugateQuats(qs[:-1]))
-    axes, angles = pm.axisAnglesFromQuats(quatDiffs)
+    axes, angles = pm.axisAnglesFromQuats(quatDiffs, True)
     combo_rotations[combo] = RotationInfo(qs, axes, angles)
 
 

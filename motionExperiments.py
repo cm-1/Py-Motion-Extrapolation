@@ -799,7 +799,7 @@ for i, combo in enumerate(combos):
     )
 
     
-    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
+    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs, True)
     angles = angles.flatten()
     scaled_axes = pm.scalarsVecsMul(angles, fixed_axes)
 
@@ -978,7 +978,7 @@ for i, combo in enumerate(combos):
     wahba_outputs = wahba(wahba_inputs)
     wahba_pred = np.empty_like(r_aa_vel_preds)
     wahba_pred[1:] = pm.axisAngleFromMatArray(wahba_outputs) 
-    first_vel_ax, first_vel_ang = pm.axisAnglesFromQuats(r_vel_preds[:1])
+    first_vel_ax, first_vel_ang = pm.axisAnglesFromQuats(r_vel_preds[:1], False)
     wahba_pred[0] = pm.scalarsVecsMul(first_vel_ang.flatten(), first_vel_ax)[0]
 
 

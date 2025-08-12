@@ -756,7 +756,7 @@ class CalcsForVideo:
             inv_quats = pm.conjugateQuats(quats)
             quat_diffs = pm.multiplyQuatLists(quats[1:], inv_quats[:-1])
 
-            vel_axes, vel_angs_unflat = pm.axisAnglesFromQuats(quat_diffs)
+            vel_axes, vel_angs_unflat = pm.axisAnglesFromQuats(quat_diffs, True)
             vel_angs = vel_angs_unflat.flatten()
             vel_angs_timescaled = vel_angs / step
             timescaled_vel_axes = pm.scalarsVecsMul(vel_angs_timescaled, vel_axes)
