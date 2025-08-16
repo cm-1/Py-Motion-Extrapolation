@@ -193,7 +193,8 @@ def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
 def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
                          vecs1: typing.Optional[np.ndarray] = None,
                          vecs2: typing.Optional[np.ndarray] = None, 
-                         vecs0_are_unit_len: bool = False):
+                         vecs0_are_unit_len: bool = False,
+                         zero_thresh = DEFAULT_ZERO_ANG_THRESH):
     vecs1_na = (vecs1 is None)
     vecs2_na = (vecs2 is None)
 
@@ -219,8 +220,36 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
     vecs_o1 = vecs1 - vecs_p1 # Orthogonal vec3
     mags_o1 = np.linalg.norm(vecs_o1, axis=-1) # Orthogonal magnitude
 
-    unit_vecs1 = safelyNormalizeArray(
-        vecs_o1, mags_o1[:, np.newaxis]
+    # vecs_o1[i] will be zero vectors, and can't be normalized, if any vecs0[i]
+    # and vecs1[i] are parallel for some i.
+    # First, we need to figure out where that happens.
+    is_parallel = (mags_o1 < zero_thresh)
+    # Find out, further, when we are also parallel to [1, 0, 0].
+    is_parallel_x_sub = (
+        np.linalg.norm(unit_vecs0[is_parallel][..., 1:], axis=-1) < zero_thresh
+    )
+    is_parallel_x = is_parallel.copy()
+    is_parallel_not_x = is_parallel.copy()
+    is_parallel_x[is_parallel] &= is_parallel_x_sub
+    is_parallel_not_x[is_parallel] &= (~is_parallel_x_sub)
+
+
+    unit_vecs1 = np.empty_like(unit_vecs0)
+    unit_vecs1[is_parallel_x] = [0.0, 1.0, 0.0]
+    # Replacement of vecs_o1 via Householde transformation:
+    refls = np.empty((np.count_nonzero(is_parallel_not_x), 3))
+    unit_vecs0_not_x = unit_vecs0[is_parallel_not_x]
+    refls[..., 1:] = unit_vecs0_not_x[..., 1:]
+    refls[..., 0] = unit_vecs0_not_x[..., 0] - 1.0
+    refl_scale = 2 / einsumDot(refls, refls)
+    unit_vecs1[is_parallel_not_x] = -scalarsVecsMul(
+        refl_scale * refls[..., 2], refls
+    )
+    unit_vecs1[is_parallel_not_x, 2] += 1.0 
+
+    is_not_parallel = ~is_parallel
+    unit_vecs1[is_not_parallel] = safelyNormalizeArray(
+        vecs_o1[is_not_parallel], mags_o1[is_not_parallel, np.newaxis]
     )
 
     if not vecs1_na:
@@ -228,7 +257,7 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
 
     unit_vecs2: np.ndarray
     if vecs2_na:
-        unit_vecs2= np.cross(unit_vecs0, unit_vecs1)
+        unit_vecs2 = np.cross(unit_vecs0, unit_vecs1)
     else:
         mags_p20 = einsumDot(vecs2, unit_vecs0) # Parallel magnitude
         vecs_p20 = scalarsVecsMul(mags_p20, unit_vecs0)
@@ -237,9 +266,26 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
         vecs_o2 = vecs2 - (vecs_p20 + vecs_p21)
         mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
 
-        unit_vecs2 = safelyNormalizeArray(
-            vecs_o2, mags_o2[:, np.newaxis]
+        unit_vecs2 = np.empty_like(unit_vecs0)
+        unit_vecs2[is_parallel_x] = [0.0, 0.0, 1.0]
+        # Householder version also applied here:
+        unit_vecs2[is_parallel_not_x] = -scalarsVecsMul(
+            refl_scale * refls[..., 1], refls
         )
+        unit_vecs2[is_parallel_not_x, 1] += 1.0
+
+        # We might also have vecs0 and vecs1 be non-parallel but have vecs2 lie
+        # in their plane, which we must also deal with.
+        is_planar = (mags_o2 < zero_thresh) & is_not_parallel
+        unit_vecs2[is_planar] = np.cross(
+            unit_vecs0[is_planar], unit_vecs1[is_planar]
+        )
+
+        is_not_planar = is_not_parallel & (~is_planar) # A^!(B^A)=A^(!Bv!A)
+        unit_vecs2[is_not_planar] = safelyNormalizeArray(
+            vecs_o2[is_not_planar], mags_o2[is_not_planar, np.newaxis]
+        )
+
 
         ret_mags += (mags_p20, mags_p21, mags_o2)
 
@@ -248,14 +294,11 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
     all_unit_vecs = (unit_vecs0, unit_vecs1, unit_vecs2)
     if not areAxisArraysOrthonormal(all_unit_vecs, loud=True):
         raise Exception((
-            "Generated matrices were not orthonormal! Likely cause: I have not "
-            "yet handled the case where the generating vectors are parallel or "
-            "zero (e.g., vecs_0 == vecs_1)."
+            "Generated matrices were not orthonormal!"
         ))
     mats = np.stack(all_unit_vecs, axis=stack_ax)
 
     return ret_mags, mats
-
 
    
 
