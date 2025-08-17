@@ -646,7 +646,7 @@ class DataForJAV:
     def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
-                 skip: typing.Union[int|SkipSubsetKind] = SkipSubsetKind._all,
+                 skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
                  *, save_data_for_conf: bool = False):
 
         self.data_organizer = data_organizer
