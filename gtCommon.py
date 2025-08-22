@@ -62,6 +62,25 @@ class VidBCOT(typing.NamedTuple):
     body_ind: int
     seq_ind: int
 
+class _LoadedPoses:
+    def __init__(self, translations: NDArray,
+                 mat_rotations: typing.Optional[NDArray] = None,
+                 aa_rotations: typing.Optional[NDArray] = None):
+        if aa_rotations is None and mat_rotations is None:
+            raise ValueError("Must supply either AA or matrix rotations!")
+        
+        self.translations = translations
+        self.mat_rotations = mat_rotations
+        self.aa_rotations = aa_rotations
+        if mat_rotations is None:
+            self.mat_rotations = pm.matsFromScaledAxisAngleArray(aa_rotations)
+        if aa_rotations is None:
+            self.aa_rotations = pm.axisAngleFromMatArray(mat_rotations)
+
+class _LoadedData(typing.NamedTuple):
+    gt_data: typing.Optional[_LoadedPoses]
+    cv_data: typing.Optional[_LoadedPoses] 
+    
 class PoseLoader(ABC):
 
     def __init__(self, are_timestamps_const: bool):
@@ -72,6 +91,11 @@ class PoseLoader(ABC):
 
         self._rotationsGTNP = np.zeros((0,3), dtype=np.float64)
         self._rotationsCalcNP = np.zeros((0,3), dtype=np.float64)
+
+        self._rotationMatsGTNP = np.zeros((0,3,3), dtype=np.float64)
+        self._rotationMatsCalcNP = np.zeros((0,3,3), dtype=np.float64)
+
+
         self._dataLoaded = False
 
         self._are_timestamps_const = are_timestamps_const
@@ -171,11 +195,7 @@ class PoseLoader(ABC):
         cls._setPosePathsFromJSON(d)
     
     @abstractmethod
-    def _getPosesFromDisk(self) -> \
-        typing.Tuple[
-            typing.Tuple[NDArray, NDArray],
-            typing.Optional[typing.Tuple[NDArray, NDArray]]
-        ]:
+    def _getPosesFromDisk(self) -> _LoadedData:
         pass
             
     def loadData(self):
@@ -184,30 +204,15 @@ class PoseLoader(ABC):
 
         gtMatData, calcMatData = self._getPosesFromDisk()
 
-        rots_are_mats = (
-            gtMatData[0].ndim == 3 and gtMatData[0].shape[-2:] == (3, 3)
-        )
-
-        self._translationsGTNP = gtMatData[1]
-
-        if rots_are_mats:
-            self._rotationMatsGTNP = gtMatData[0]
-            self._rotationsGTNP = pm.axisAngleFromMatArray(gtMatData[0])
-        else:
-            if not (gtMatData[0].ndim == 2 and gtMatData[0].shape[-1] == 3):
-                raise Exception(
-                    "Rotations don't seem to be axis-angle or matrices!"
-                )
-
-            self._rotationsGTNP = gtMatData[0]
-            self._rotationMatsGTNP = pm.matsFromScaledAxisAngleArray(
-                gtMatData[0]
-            )
+        self._translationsGTNP = gtMatData.translations
+        self._rotationMatsGTNP = gtMatData.mat_rotations
+        self._rotationsGTNP = gtMatData.aa_rotations
 
         # Check if file for CV-calculated pose data exists; if so, load it too.
         if calcMatData is not None:
-            self._translationsCalcNP = calcMatData[1]
-            self._rotationsCalcNP = pm.axisAngleFromMatArray(calcMatData[0])
+            self._translationsCalcNP = calcMatData.translations
+            self._rotationMatsCalcNP = calcMatData.mat_rotations
+            self._rotationsCalcNP = calcMatData.aa_rotations
 
         # This was a test for "bad" flips in the axis angle creation from
         # matrix arrays. I say "bad" flips because "small" flips from, say,
@@ -251,7 +256,7 @@ class PoseLoader(ABC):
         # rotation matrix entries and the last 3 are the translation.
         rotations = data[:, :9].reshape((-1, 3, 3)) 
         translations = data[:, 9:12]
-        return (rotations, translations)
+        return _LoadedPoses(translations, rotations)
 
     def getTranslationsGTNP(self):
         self.loadData()
@@ -348,9 +353,9 @@ class SyntheticPoseLoader(PoseLoader):
             iden = np.eye(3).reshape(1, 3, 3)
             rotations = np.repeat(iden, self.num_frames, axis=0)
 
-        gtMatData = [rotations, translations]
+        gtMatData = _LoadedPoses(translations, rotations)
         calcMatData = None # May use this in the future somehow?
-        return (gtMatData, calcMatData)
+        return _LoadedData(gtMatData, calcMatData)
 
     # Updates self and then returns the random rotation.
     @staticmethod
@@ -621,7 +626,7 @@ class PoseLoaderBCOT(PoseLoader):
         if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
             calcMatData = PoseLoader.posesFromMatsTXT(self.posePathCalc)
 
-        return (gtMatData, calcMatData)
+        return _LoadedData(gtMatData, calcMatData)
 
     @staticmethod
     def isBodySeqPairValid(bodyIndex: int, seqIndex: int, exclude_cam2: bool = False):
@@ -804,13 +809,13 @@ class PoseLoaderPauwels(PoseLoader):
     
         v3_rotations = data[:, 3:]
         translations = data[:, :3]
-        gtMatData = (pm.matsFromScaledAxisAngleArray(v3_rotations), translations)
+        gtMatData = _LoadedPoses(translations, None, v3_rotations)
 
         calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
         # if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
         #     calcMatData = PoseLoader.posesFromMatsTXT(self.posePathCalc)
 
-        return (gtMatData, calcMatData)
+        return _LoadedData(gtMatData, calcMatData)
 
     def getRotationsGTNP(self):
         raise NotImplementedError("Could make this > efficient?")
