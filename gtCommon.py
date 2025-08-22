@@ -821,31 +821,36 @@ class PoseLoaderPauwels(PoseLoader):
         raise NotImplementedError("Could make this > efficient?")
         return super().getRotationsGTNP()
 
+class SepPoseComponents(typing.NamedTuple):
+    translations: NDArray
+    rot_mats: NDArray
+    rot_aas: NDArray # Axis-angles
 
 class PoseLoaderClipsHOT3D(PoseLoader):
-    class CAM_TYPE(Enum):
-        ARIA = 1
-        QUEST = 2
 
     # _FRAMES_PER_VID = 150
     # _ZEROS_WIDTH = 6
 
-    _ALL_CAM_KEYS = {
-        CAM_TYPE.ARIA: ("1201-1", "1201-2", "214-1"),
-        CAM_TYPE.QUEST: ("1201-1", "1201-2")
-    }
+    # _ALL_CAM_KEYS = {
+    #     CAM_TYPE.ARIA: ("1201-1", "1201-2", "214-1"),
+    #     CAM_TYPE.QUEST: ("1201-1", "1201-2")
+    # }
 
-    # The value for the Quest3 does not actually matter, since both of its
-    # cameras always output the exact same timestamp.
-    _ALL_REF_CAM_IDXS = {CAM_TYPE.ARIA: 2, CAM_TYPE.QUEST: 0}
+    # # The value for the Quest3 does not actually matter, since both of its
+    # # cameras always output the exact same timestamp.
+    # _ALL_REF_CAM_IDXS = {CAM_TYPE.ARIA: 2, CAM_TYPE.QUEST: 0}
+
+    class CAM_TYPE(Enum):
+        ARIA = 1
+        QUEST = 2
 
     _CAM_TYPE_CLIP_RANGES = {
         CAM_TYPE.ARIA: (1849, 3364), CAM_TYPE.QUEST: (0, 1287)
     }
 
     _POSE_FNAMES = {
-        CAM_TYPE.ARIA: "hot3d_aria_poses.npz",
-        CAM_TYPE.QUEST: "hot3d_quest_poses.npz"
+        CAM_TYPE.ARIA: "hot3d_all_aria_poses.npz",
+        CAM_TYPE.QUEST: "hot3d_all_quest_poses.npz"
     }
 
     _TIMESTAMP_FNAMES = {
@@ -857,25 +862,38 @@ class PoseLoaderClipsHOT3D(PoseLoader):
     # _CV_POSE_EXPORT_DIR = None
     _dir_paths_initialized = False
 
-    # TODO: Change this when using more than one 3D model!
-    _ALL_POSES: typing.Dict[int, NDArray] = dict()
+    _ALL_CLIP_OBJS: typing.Dict[CAM_TYPE, NDArray] = dict()
+    _ALL_CLIP_BASE_INDS: typing.Dict[CAM_TYPE, NDArray] = dict()
+    _ALL_INV_CAM_POSES: typing.Dict[CAM_TYPE, SepPoseComponents] = dict()
+    _ALL_OBJ_CAM_POSES: typing.Dict[CAM_TYPE, SepPoseComponents] = dict()
+    _ALL_OBJ_WORLD_POSES: typing.Dict[CAM_TYPE, SepPoseComponents] = dict()
     _ALL_TIMESTAMPS: typing.Dict[int, NDArray] = dict()
 
-    def __init__(self, clip_num: int):
-        # ASDFASDFD ASDFASDF EFSDAASDFDASD SFDF SDFSEFD
-        super(PoseLoaderClipsHOT3D, self).__init__(  True  ) # SDF;lkSDFLK:SFD:LKSDF:LKKSDFL:K
 
+    def __init__(self, clip_num: int, obj_num: int, ignore_cam: bool = False):
+        '''Use an `obj_num` of 0 to indicate "stationary" objects, which means
+        you basically just get the camera motion.'''
+        super(PoseLoaderClipsHOT3D, self).__init__(  False  )  
+        if obj_num < 0:
+            raise ValueError("Object number must be positive!")
+        elif obj_num == 0 and ignore_cam:
+            raise ValueError("Cannot ignore camera for static object poses!")
+        
         self._clip_num = clip_num
+        self._obj_num = obj_num
+        self._ignore_cam = ignore_cam
         cam_type_found = False
 
-        # Just need an arbitary default before finding correct val via loop.
-        self.clip_type = PoseLoaderClipsHOT3D.CAM_TYPE.ARIA
+        self.clip_type: PoseLoaderClipsHOT3D.CAM_TYPE
+        lower_clip_ind = 0
         # Loop over camera/device types to see which one this clip belongs to.
         for key, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
             if self._clip_num >= rnge[0] and self._clip_num <= rnge[1]:
                 self.clip_type = key
                 cam_type_found = True
+                lower_clip_ind = rnge[0]
                 break
+        self._local_clip_ind = self._clip_num - lower_clip_ind
 
         if not cam_type_found:
             raise Exception("Clip #" + str(clip_num) + " not recognized!")
@@ -886,19 +904,66 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         self.poseDirGT = PoseLoaderClipsHOT3D._DATASET_DIR 
         self.posePathGT = self.poseDirGT / poses_fname
         self.timesPathGT = self.poseDirGT / times_fname
+
+        self._ind_in_loaded = -1
         
 
     def getVidID(self):
-        return (self._clip_num, ) # TODO: Add in model number, *maybe* others.
+        return (self._clip_num, self._obj_num, self._ignore_cam)
 
     @classmethod
-    def getAllIDs(cls):
+    def getAllIDs(cls, include_o2c = False, include_w2c = False,
+                  include_o2w = False):
+        if not (include_o2c or include_o2w or include_w2c):
+            raise ValueError("Must specify which pose kinds to include!")
+        
+        # We need to load info on which objects are moving in each clip.
+        if not PoseLoaderClipsHOT3D._dir_paths_initialized:
+            PoseLoaderClipsHOT3D._setupPosePaths()
+
+        # (Clip #, ObjectID (0 for stationary), )
         # TODO: Need to include model numbers here too!
         ret = []
         for cam, rnge in PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES.items():
-            ret += [(x, ) for x in range(rnge[0], rnge[1] + 1)]
+            # First, all of the cam-only 
+            if include_w2c:
+                ret += [(x, 0, False) for x in range(rnge[0], rnge[1] + 1)]
+            if include_o2c or include_o2w:
+                bool_opts = []
+                if include_o2c:
+                    bool_opts.append(False)
+                if include_o2w:
+                    bool_opts.append(True)
+                obj_enumeration = enumerate(
+                    PoseLoaderClipsHOT3D._ALL_CLIP_OBJS[cam]
+                )
+                for clip_offset, objs in obj_enumeration:
+                    clip = clip_offset + rnge[0]
+                    for b in bool_opts:
+                        ret += [(clip, obj, b) for obj in objs if obj > 0]
         return ret
-
+    
+    @staticmethod
+    def _np_load_single(arr: NDArray, multiplier: float = 1.0):
+        ac = arr.copy()
+        if multiplier != 1.0:
+            ac *= multiplier
+        ac.setflags(write=False)
+        return ac
+    
+    @staticmethod
+    def _np_load_sep(arr_load, base_str: str):
+        ts = PoseLoaderClipsHOT3D._np_load_single(
+            arr_load[base_str + "translations"], 1000.0
+        )
+        mats = PoseLoaderClipsHOT3D._np_load_single(
+            arr_load[base_str + "rmats"]
+        )
+        aas = PoseLoaderClipsHOT3D._np_load_single(
+            arr_load[base_str + "axisangles"]
+        )
+        return SepPoseComponents(ts, mats, aas)
+    
     @classmethod
     def _setPosePathsFromJSON(cls, json_read_result):
         if PoseLoaderClipsHOT3D._dir_paths_initialized:
@@ -913,30 +978,38 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         #     json_read_result["hot3d_result_directory"]
         # )
 
-        print("Just picking first model's poses for now!") # TODO
-        last_key = -1
-
         # Because all of the dataset pose info is stored in just a few *sorta*
         # small files, it makes more sense for efficiency to store those
         # entire files in memory than to keep opening/closing the same one over
         # and over again. 
         for ct in PoseLoaderClipsHOT3D.CAM_TYPE:
             pose_path = data_dir / PoseLoaderClipsHOT3D._POSE_FNAMES[ct]
-            with np.load(pose_path) as np_load:
-                # clip_pt = "clip{:06d}".format(self._clip_num)
-                for key in np_load.files:
-                    clipn = int(key[4:10])
-                    if clipn != last_key:
-                        PoseLoaderClipsHOT3D._ALL_POSES[clipn] = np_load[key]
-                    last_key = key        
-            np_load.close()
+            with np.load(pose_path) as f:
+                PoseLoaderClipsHOT3D._ALL_CLIP_OBJS[ct] = \
+                    PoseLoaderClipsHOT3D._np_load_single(f['obj_ids'])
+                PoseLoaderClipsHOT3D._ALL_CLIP_BASE_INDS[ct] = \
+                    PoseLoaderClipsHOT3D._np_load_single(f[
+                        'moving_data_base_ind_per_clip'
+                    ])     
+                PoseLoaderClipsHOT3D._ALL_INV_CAM_POSES[ct] = \
+                    PoseLoaderClipsHOT3D._np_load_sep(f, 'w2c_')
+                PoseLoaderClipsHOT3D._ALL_OBJ_CAM_POSES[ct] = \
+                    PoseLoaderClipsHOT3D._np_load_sep(f, 'o2c_')
+                PoseLoaderClipsHOT3D._ALL_OBJ_WORLD_POSES[ct] = \
+                    PoseLoaderClipsHOT3D._np_load_sep(f, 'o2w_')     
+            f.close()
+
             times_path = data_dir / PoseLoaderClipsHOT3D._TIMESTAMP_FNAMES[ct]
             clip_range = PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES[ct]
             clip_nums_copy = None
             all_ts_copy = None
             with np.load(times_path) as np_load:
-                clip_nums_copy = np_load['clip_nums'].copy()
-                all_ts_copy = np_load['timestamps'].copy()
+                clip_nums_copy = PoseLoaderClipsHOT3D._np_load_single(
+                    np_load['clip_nums']
+                )
+                all_ts_copy = PoseLoaderClipsHOT3D._np_load_single(
+                    np_load['timestamps']
+                )
             np_load.close()
             for row, clipn in enumerate(clip_nums_copy):
                 if clipn >= clip_range[0] and clipn <= clip_range[1]:
@@ -947,13 +1020,40 @@ class PoseLoaderClipsHOT3D(PoseLoader):
     def _getPosesFromDisk(self):
         # print("Key:", self._clip_num, ". Pose path:", self.posePathGT)
 
-        self._timestamps = PoseLoaderClipsHOT3D._ALL_TIMESTAMPS[self._clip_num]
-        poses = PoseLoaderClipsHOT3D._ALL_POSES[self._clip_num]
+        self._timestamps = \
+            PoseLoaderClipsHOT3D._ALL_TIMESTAMPS[self._clip_num]
 
-        aas = poses[:, :3]
-        translations = 1000.0 * poses[:, 3:] # Unit conversion.
-        gtMatData = (aas, translations)
+        poses_to_sel_from: typing.Optional[SepPoseComponents] = None
+        self._ind_in_loaded = self._local_clip_ind
+        if self._obj_num == 0:
+            poses_to_sel_from = \
+                PoseLoaderClipsHOT3D._ALL_INV_CAM_POSES[self.clip_type]
+        else:
+            pose_ind = \
+                PoseLoaderClipsHOT3D._ALL_CLIP_BASE_INDS[self.clip_type][self._local_clip_ind]
+            objs_for_clip = \
+                PoseLoaderClipsHOT3D._ALL_CLIP_OBJS[self.clip_type][self._local_clip_ind]
+            sub_ind = 0
+            for obj_num in objs_for_clip:
+                if obj_num > 0 and obj_num != self._obj_num:
+                    sub_ind += 1
+                elif obj_num == self._obj_num:
+                    break
+            pose_ind += sub_ind
+            self._ind_in_loaded = pose_ind
+
+            if self._ignore_cam:
+                poses_to_sel_from = \
+                    PoseLoaderClipsHOT3D._ALL_OBJ_CAM_POSES[self.clip_type]
+            else:
+                poses_to_sel_from = \
+                    PoseLoaderClipsHOT3D._ALL_OBJ_WORLD_POSES[self.clip_type]
+
+        translations = poses_to_sel_from.translations[self._ind_in_loaded]
+        mats = poses_to_sel_from.rot_mats[self._ind_in_loaded]
+        aas = poses_to_sel_from.rot_aas[self._ind_in_loaded]
+        gtMatData = _LoadedPoses(translations, mats, aas)
         calcMatData = None
 
-        return (gtMatData, calcMatData)
+        return _LoadedData(gtMatData, calcMatData)
     
