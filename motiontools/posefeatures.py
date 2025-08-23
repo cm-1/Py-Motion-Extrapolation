@@ -600,14 +600,16 @@ class CalcsForVideo:
 
         # For the 1st combo, check to make sure all keys are there.
         # This way we can stop a lot sooner if we are missing a key.
-        result_for_1st = self.getInputFeatures(
+        result_for_1st = self.getInputFeaturesFromLoaders(
             pose_loaders[0], True
         )[1]
 
         remaining_loaders = pose_loaders[1:]
 
         if num_procs == 1:
-            results = dict(map(self.getInputFeatures, remaining_loaders))
+            results = dict(map(
+                self.getInputFeaturesFromLoaders, remaining_loaders
+            ))
         else: 
             cpu_count = joblib.cpu_count()
             # If caller did not specify how many children processes...
@@ -634,14 +636,15 @@ class CalcsForVideo:
                 ))
                 with joblib.parallel_config(backend="loky", inner_max_num_threads=per):
                     results_list = Parallel(n_jobs=num_procs)(
-                        delayed(self.getInputFeatures)(c)
+                        delayed(self.getInputFeaturesFromLoaders)(c)
                         for c in remaining_loaders
                     )
                     results = dict(results_list)
             else:
                 print("Running {} processes.".format(num_procs))
                 results_list = Parallel(n_jobs=num_procs)(
-                    delayed(self.getInputFeatures)(c) for c in remaining_loaders
+                    delayed(self.getInputFeaturesFromLoader)(c)
+                    for c in remaining_loaders
                 )
                 results = dict(results_list)
         results[pose_loaders[0].getVidID()] = result_for_1st
@@ -727,8 +730,28 @@ class CalcsForVideo:
                 dict_to_update[kabidir] = pm.getAcuteAngles(curr_angs)
 
 
-    def getInputFeatures(self, pose_loader: gtc.PoseLoader,
-                         check_key_completeness: bool = False):
+    def getInputFeaturesFromLoaders(self, pose_loader: gtc.PoseLoader,
+                                    check_key_completeness: bool = False):
+
+        
+        all_translations = pose_loader.getTranslationsGTNP()
+        aa_rotations = pose_loader.getRotationsGTNP()
+        all_rotation_mats = pose_loader.getRotationMatsGTNP()
+
+        res = self.getInputFeatures(
+            all_translations, aa_rotations, all_rotation_mats,
+            check_key_completeness
+        )
+
+        return (pose_loader.getVidID(), res)
+
+
+
+    def getInputFeatures(self, all_translations: NDArray, aa_rotations: NDArray,
+                         all_rotation_mats: typing.Optional[NDArray] = None,
+                         check_key_completeness: bool = False,
+                         min_step: int = 1, max_step: int = 3):
+
         # The below code will use MOTION_DATA_KEY_TYPE classes so often that some
         # shorter aliases might be helpful.
         MD = MOTION_DATA
@@ -737,18 +760,16 @@ class CalcsForVideo:
         AM = ANG_OR_MAG
         V3D = Vec3Data
 
-        
-        all_translations = pose_loader.getTranslationsGTNP()
-        aa_rotations = pose_loader.getRotationsGTNP()
         all_quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
-        all_rotation_mats = pose_loader.getRotationMatsGTNP()
+        if all_rotation_mats is None:
+            all_rotation_mats = pm.matsFromScaledAxisAngleArray(aa_rotations)
 
         motion_datas = []
         all_err_norms = []
         min_err_labels = []
         min_err_vecs = []
 
-        for step in range(1, 4):
+        for step in range(min_step, max_step + 1):
             step_sq = step*step
             translations = all_translations[::step]
 
@@ -1382,9 +1403,9 @@ class CalcsForVideo:
             all_err_norms.append(curr_err_norms_dict)
             min_err_vecs.append(curr_min_norm_vecs)
 
-        return (pose_loader.getVidID(), FeaturesAndResultsForVid(
+        return FeaturesAndResultsForVid(
             motion_datas, all_err_norms, min_err_labels, min_err_vecs
-        ))
+        )
         # all_motion_data[skip_amt][c2] = motion_data
         # err_norm_lists[skip_amt][c2] = curr_err_norms_dict
         # # err3D_lists[skip_amt][c2] = curr_errs_3D
@@ -1400,6 +1421,59 @@ OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 
 def _listOfEmptyDicts(size: int):
     return [dict() for _ in range(size)]
+
+def dataForPositionsJAV(vec_order: OrderForJAV, all_translations: NDArray,
+                        all_times: typing.Optional[NDArray], step: int):
+    translations = all_translations[::step]
+    times = all_times
+    if all_times is not None:
+        times = all_times[::step][:-1]
+    displacements = np.diff(translations, axis=0)
+    # We need a displacement for the last timestep, but not an acceleration,
+    # because we need the vectors that take each current position to the next
+    # when calculating the "ground truth" for displacement predictions.
+    mds = PositionDerivativeCollection(displacements[:-1], times)
+    vels = mds.velocities
+    accs = mds.accelerations
+    jerks = mds.jerks
+    snaps = np.insert(mds.snaps, 0, np.zeros(3), axis=0)
+    crackles = np.concatenate((np.zeros((2, 3)), mds.crackles), axis=0)
+
+    # Here we specify which order in which we orthonormalize our
+    # velocity, acceleration, and jerk vectors into orthonormal frames.
+    # The first-chosen of these gets aligned exactly with an axis, while
+    # the others only get orthogonal components aligned with an axis.
+    
+    # To only calculate as much as we need, we clip the arrays' fronts
+    # off when we can.
+    default_ordered = (vels[2:], accs[1:], jerks)
+    ordered = copy.copy(default_ordered)
+    if vec_order is not None:
+        ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
+
+
+    all_mags, mats = pm.getOrthonormalFrames(True, *ordered, False)
+                
+    # Transform each third vector and to-next-frame displacement into
+    # this frame via matmul.
+    # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
+    local_diffs = pm.einsumMatVecMul(mats, displacements[3:])
+    local_snaps = pm.einsumMatVecMul(mats, snaps)
+    local_crackles = pm.einsumMatVecMul(mats, crackles)
+
+    # We'll now return all of the data needed to convert velocity,
+    # acceleration, and jerk multipliers into local vectors in these
+    # new frames. To do this, we don't need to return the coordinate
+    # frames themselves: we just need to know the velocity in this
+    # frame (a vector [speed, 0, 0]), the acceleration in this frame
+    # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
+    # we can just return the following:
+    c_res = (
+        *all_mags, *(local_snaps.T), *(local_crackles.T),
+        *(local_diffs.T)
+    )
+
+    return np.stack(c_res, axis=-1), translations, mats
 
 def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                      return_world2locals: bool = False, 
@@ -1442,58 +1516,14 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         
         for skip in range(skip_end):
             step = skip + 1
-            translations = curr_translations[::step]
-            displacements = np.diff(translations, axis=0)
-            # We need a velocity for the last timestep, but not an acceleration,
-            # because we need the vectors that take each current position to
-            # the next when calculating the "ground truth" for displacement
-            # predictions. This is the velocity vector; acceleration vectors
-            # are not needed for this; we only need "current" acceleration.
             times: typing.Optional[NDArray] = None
             if not calc_obj.areTimestampsConst():
-                times = calc_obj.getTimestamps()[::step][:-1]
-            mds = PositionDerivativeCollection(displacements[:-1], times)
-            vels = mds.velocities
-            accs = mds.accelerations
-            jerks = mds.jerks
-            snaps = np.insert(mds.snaps, 0, np.zeros(3), axis=0)
-            crackles = np.concatenate((np.zeros((2, 3)), mds.crackles), axis=0)
+                times = calc_obj.getTimestamps()
 
-            # Here we specify which order in which we orthonormalize our
-            # velocity, acceleration, and jerk vectors into orthonormal frames.
-            # The first-chosen of these gets aligned exactly with an axis, while
-            # the others only get orthogonal components aligned with an axis.
-            
-            # To only calculate as much as we need, we clip the arrays' fronts
-            # off when we can.
-            default_ordered = (vels[2:], accs[1:], jerks)
-            ordered = copy.copy(default_ordered)
-            if vec_order is not None:
-                ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
-
-
-            all_mags, mats = pm.getOrthonormalFrames(True, *ordered, False)
-                        
-            # Transform each third vector and to-next-frame displacement into
-            # this frame via matmul.
-            # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
-            local_diffs = pm.einsumMatVecMul(mats, displacements[3:])
-            local_snaps = pm.einsumMatVecMul(mats, snaps)
-            local_crackles = pm.einsumMatVecMul(mats, crackles)
-
-            # We'll now return all of the data needed to convert velocity,
-            # acceleration, and jerk multipliers into local vectors in these
-            # new frames. To do this, we don't need to return the coordinate
-            # frames themselves: we just need to know the velocity in this
-            # frame (a vector [speed, 0, 0]), the acceleration in this frame
-            # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
-            # we can just return the following:
-            c_res = (
-                *all_mags, *(local_snaps.T), *(local_crackles.T),
-                *(local_diffs.T)
+            all_data[skip][c], translations, mats = dataForPositionsJAV(
+                vec_order, curr_translations, times, step
             )
 
-            all_data[skip][c] = np.stack(c_res, axis=-1)
             if return_world2locals:
                 all_world2local_mats[skip][c] = mats
             if return_translations:

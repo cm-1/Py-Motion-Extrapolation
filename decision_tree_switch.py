@@ -1133,6 +1133,28 @@ bcs_hist = bcs_model.fit(
     # batch_size = 1024
 )
 
+#%%
+# We need 7 input points to get crackle calculations because my code currently
+# assumes the last one is ground truth for which it shouldn't generate any
+# predictions, and we need 6 input points to calculate nonzero crackle.
+jav_collection = np.empty((1000, 12))
+
+rand_pts = np.random.uniform(-33, 33, (7, 3))
+default_aas = np.ones_like(rand_pts) 
+default_aas += np.random.normal(scale=0.01, size=rand_pts.shape) # Avoid NaN
+rand_all_cols = cfc.getInputFeatures(
+    rand_pts, default_aas, max_step = 1
+).motion_data[0]
+rand_all_cols_np = np.stack(
+    [rand_all_cols[k] for k in dog.motion_data_keys], axis=-1
+)
+rand_inputs = bcs_scaler.transform(rand_all_cols_np[:, nonco_cols])
+# print(rand_inputs)
+rand_out_JAV = bcs_model.predict(rand_inputs, verbose=0)
+jav_collection[i] = rand_out_JAV[-1]
+
+
+
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
