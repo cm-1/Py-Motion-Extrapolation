@@ -302,19 +302,20 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
 
    
 
-def getPlaneAxes(roughAxes0, roughAxes1):
-    nax0 = normalizeAll(roughAxes0)
-    dots01 = einsumDot(nax0, roughAxes1)
-    ax1 = roughAxes1 - scalarsVecsMul(dots01, nax0)
-    ax1_norms = np.linalg.norm(ax1, axis=-1, keepdims=True)
-    # Reusability-TODO: Maybe I want non-nan behaviour for zero norms here.
-    nax1  = ax1 / ax1_norms
-    return (nax0, nax1)
+# def getPlaneAxes(roughAxes0, roughAxes1):
+#     nax0 = normalizeAll(roughAxes0)
+#     dots01 = einsumDot(nax0, roughAxes1)
+#     ax1 = roughAxes1 - scalarsVecsMul(dots01, nax0)
+#     ax1_norms = np.linalg.norm(ax1, axis=-1, keepdims=True)
+#     # Reusability-TODO: Maybe I want non-nan behaviour for zero norms here.
+#     nax1  = ax1 / ax1_norms
+#     return (nax0, nax1)
 
 def getPlaneInfo(roughAxes0, roughAxes1, ptsOnPlane):
-    norm_axes = getPlaneAxes(roughAxes0, roughAxes1)
+    _, all_axes = getOrthonormalFrames(True, roughAxes0, roughAxes1)
+    norm_axes = (all_axes[..., 0, :], all_axes[..., 1, :])
 
-    normals = np.cross(*norm_axes)
+    normals = all_axes[..., 2, :]
     offset_dists = einsumDot(ptsOnPlane, normals)
     return PlaneInfoType(norm_axes, normals, offset_dists)
 
@@ -461,10 +462,47 @@ def integrateAngularVelocityRK(angular_velocities, starting_poses, order=1):
     # Return only the final poses
     return current_poses
 
+def _safeDivideHelper(numerator, denominator: np.ndarray, out_arr_creator,
+                      denom_nz: typing.Optional[np.ndarray] = None):
+    if denom_nz is None:
+        denom_nz = (denominator != 0.0)
+    if np.all(denom_nz):
+        return numerator / denominator, True, denom_nz
+    out_arr: np.ndarray = out_arr_creator(denominator.shape)
+    np.divide(numerator, denominator, out=out_arr, where=denom_nz)
+    return out_arr, False, denom_nz
+
+def safeDivideElseZero(numerator, denominator: np.ndarray,
+                       denom_nonzero_bools: typing.Optional[np.ndarray] = None):
+    '''Performs normal division where the denominator is nonzero and outputs
+    0 for any indicies where the denominator is zero.'''
+    
+    # Because np.zeros() is way faster than np.full(), we can save a few
+    # steps in this particular case. 
+    return _safeDivideHelper(
+        numerator, denominator, lambda s: np.zeros(s), denom_nonzero_bools
+    )[0]
+
+    
+def safeDivide(numerator, denominator: np.ndarray, na_value: float,
+               denom_nonzero_bools: typing.Optional[np.ndarray] = None,
+               denom_zero_bools: typing.Optional[np.ndarray] = None):
+    '''Note: If na_value is 0, faster to use safeDivideElseZero()!'''
+
+    ret, all_good, denom_nz = _safeDivideHelper(
+        numerator, denominator, lambda s: np.empty(s), denom_nonzero_bools
+    )
+    if all_good:
+        return ret
+    if denom_nonzero_bools is None:
+        denom_zero_bools = ~denom_nz
+    ret[denom_zero_bools] = na_value
+    return ret
+
 
 # Takes in array of 2D points and, for each 3 consecutive points, gives the 
 # centre of the circle defined by them.
-def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
+def circleCentres2D(pts2D_0, pts2D_1, pts2D_2, na_value = np.inf):
     # Let x_i be the points on the circle and let m_i = (x_i + x_{i+1})/2 be the
     # midpoints. Let o_0 be orthogonal to (x_1 - x_0). The circle centre is
     # located at m_0 t*o_0 for t such that m_0 + t*o_0 - m_1 is orthogonal 
@@ -482,7 +520,8 @@ def circleCentres2D(pts2D_0, pts2D_1, pts2D_2):
     # as then there is no circle going through the points (only a line).
 
     numerator_dot = einsumDot(pts2D_2 - pts2D_0, diffs_2m1)
-    t_vals = numerator_dot / einsumDot(ortho_dirs, diffs_2m1)
+    denominator_dot = einsumDot(ortho_dirs, diffs_2m1)
+    t_vals = safeDivide(numerator_dot, denominator_dot, na_value)
     t_scaled_orthos = scalarsVecsMul(t_vals, ortho_dirs)
     centres = (pts2D_0 + pts2D_1 + t_scaled_orthos) / 2
 

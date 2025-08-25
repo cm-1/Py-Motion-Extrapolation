@@ -691,7 +691,11 @@ class CalcsForVideo:
         # Storing/calculating the data.
         if other_norms is not None or dots_with_unit_axis is not None:
             if dots_with_unit_axis is None:
-                dots_with_unit_axis = dot_products / other_norms
+                # TODO: Is there a bettle way to handle undefined direction vecs
+                # than setting the projection value to 0?
+                dots_with_unit_axis = pm.safeDivideElseZero(
+                    dot_products, other_norms
+                )
                 # TODO: Handle jerk, snap, and crackle better here.
                 # Probably best to have a param where if these columns are included,
                 # then the beginning "zero" rows are excluded?
@@ -820,7 +824,7 @@ class CalcsForVideo:
 
 
             cma = pex.CircularMotionAnalysis(
-                translations, translation_diffs, None
+                translations, translation_diffs, None, na_value=FLOAT_32_MAX
             )
 
             temp_preds = dict()
@@ -848,33 +852,56 @@ class CalcsForVideo:
                                                 = unit_rot_ax_diff_mags / step
 
             deg1_speeds_full = np.linalg.norm(deg1_vels, axis=-1, keepdims=True)
-            deg1_speeds = deg1_speeds_full[-n_jerk_preds:].flatten()
+            deg1_speeds_full_flat = deg1_speeds_full.flatten()
+            deg1_speeds = deg1_speeds_full_flat[-n_jerk_preds:]
             deg2_speeds_full = np.linalg.norm(deg2_vels, axis=-1, keepdims=True)
             timescaled_speeds_deg2_full = deg2_speeds_full / step
-            timescaled_speeds_deg1_full = deg1_speeds_full / step
-            timescaled_speeds_deg1 = \
-                timescaled_speeds_deg1_full.flatten()[-n_jerk_preds:]
+            timescaled_speeds_deg1_full = deg1_speeds_full_flat / step
+            timescaled_speeds_deg1 = timescaled_speeds_deg1_full[-n_jerk_preds:]
 
 
             acc_mags_full = np.linalg.norm(deg2_accs, axis=-1, keepdims=True)
             acc_mags = acc_mags_full[-n_jerk_preds:].flatten()
 
-            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = timescaled_speeds_deg1 / acc_mags
+            motion_data[MOTION_DATA.SPEED_ACC_RATIO] = pm.safeDivide(
+                timescaled_speeds_deg1, acc_mags, FLOAT_32_MAX
+            )
             vel_dots = pm.einsumDot(
                 deg1_vels[-n_jerk_preds:], deg1_vels[-(n_jerk_preds + 1):-1]
             )
-            vel_bcs_ratios = vel_dots / (deg1_speeds[-n_jerk_preds:]**2)
-            motion_data[MOTION_DATA.VEL_BCS_RATIOS] = vel_bcs_ratios
-            motion_data[MOTION_DATA.INV_VEL_BCS_RATIOS] = 1.0 / vel_bcs_ratios
+            all_vs_0 = (deg1_speeds_full_flat == 0.0)
+            all_vs_pos = ~all_vs_0
+            last_vs_0 = all_vs_0[-n_jerk_preds:]
+            last_vs_pos = all_vs_pos[-n_jerk_preds:]
 
-            disp_mag_diffs = np.diff(deg1_speeds_full, 1, axis=0)[-n_jerk_preds:].flatten()
+            sq_v_for_ratio = deg1_speeds**2
+            vel_bcs_ratios = pm.safeDivide(
+                vel_dots, sq_v_for_ratio, FLOAT_32_MAX, last_vs_pos, last_vs_0
+            )
+            motion_data[MOTION_DATA.VEL_BCS_RATIOS] = vel_bcs_ratios
+            invvel_bcs_ratios = pm.safeDivide(
+                sq_v_for_ratio, vel_dots, FLOAT_32_MAX
+            )
+
+            motion_data[MOTION_DATA.INV_VEL_BCS_RATIOS] = invvel_bcs_ratios
+
+            disp_mag_diffs = np.diff(deg1_speeds_full_flat, 1, axis=0)[-n_jerk_preds:]
             motion_data[MOTION_DATA.DISP_MAG_DIFF] = disp_mag_diffs
             if not self.exclude_timescaled:
                 motion_data[MOTION_DATA.DISP_MAG_DIFF_TIMESCALED] \
                     = disp_mag_diffs / step
-            disp_mag_div = deg1_speeds_full[1:] / deg1_speeds_full[:-1]
-            motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div[-n_jerk_preds:].flatten()
-            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = 1.0 / disp_mag_div[-n_jerk_preds:].flatten()
+            prev_vs_0 = all_vs_0[-(n_jerk_preds + 1):-1]
+            prev_vs_pos = all_vs_pos[-(n_jerk_preds + 1):-1]
+            disp_mag_div = pm.safeDivide(
+                deg1_speeds_full_flat[2:], deg1_speeds_full_flat[1:-1],
+                FLOAT_32_MAX, prev_vs_pos, prev_vs_0
+            ).flatten()
+            motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div
+            inv_disp_mag_div = pm.safeDivide(
+                deg1_speeds_full_flat[1:-1], deg1_speeds_full_flat[2:],
+                FLOAT_32_MAX, last_vs_pos, last_vs_0
+            ).flatten()
+            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = inv_disp_mag_div
 
             unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
             unit_vels_deg2 = pm.safelyNormalizeArray(deg2_vels, deg2_speeds_full)
@@ -980,14 +1007,14 @@ class CalcsForVideo:
                         = speed_deg2_diffs / step
 
 
-            d_under_thresh = deg1_speeds_full < self.obj_static_thresh_mm
+            d_under_thresh = deg1_speeds_full_flat < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
         
             mj_preds = None
             acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
             if self.min_jerk_opt_iter_lim > 0:
                 mj_preds = mj.min_jerk_lsq(
-                    prev_translations, d_under_thresh.flatten(), 
+                    prev_translations, d_under_thresh, 
                     a_over_thresh.flatten(),
                     max_opt_iters=self.min_jerk_opt_iter_lim,
                     vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks[1:]
@@ -1106,8 +1133,8 @@ class CalcsForVideo:
         
 
 
-            avd1m = pm.einsumDot(deg2_accs, deg1_vels[1:])
-            acc_vel_deg1_mag = avd1m / deg1_speeds_full[1:].flatten()
+            acc_vel_deg1_mag = pm.einsumDot(deg2_accs, unit_vels_deg1[1:])
+            avd1m = acc_vel_deg1_mag * deg1_speeds_full_flat[1:]
             acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
             
             acc_ortho_deg1_vecs = deg2_accs - acc_vel_deg1_parallel
@@ -1126,8 +1153,10 @@ class CalcsForVideo:
 
             
 
-            jvd1m = pm.einsumDot(scaled_jerks[1:], deg1_vels[2:])
-            jerk_vel_deg1_mags = jvd1m / deg1_speeds
+            jerk_vel_deg1_mags = pm.einsumDot(
+                scaled_jerks[1:], unit_vels_deg1[2:]
+            )
+            jvd1m = jerk_vel_deg1_mags * deg1_speeds
             
             jerk_acc_ortho_mags = pm.einsumDot(
                 scaled_jerks[1:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
@@ -1309,12 +1338,23 @@ class CalcsForVideo:
                 jerk_ortho_norms.flatten(), jerk_norms[1:].flatten()
             )
 
-            jerk_mags = vec3s_dict[MD.JERK_VEC3].norms
-            acc_jerk_ratio = acc_mags / jerk_mags[-n_jerk_preds:]
-            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = timescaled_speeds_deg1 / jerk_mags[-n_jerk_preds:]
-            motion_data[MOTION_DATA.ACC_JERK_RATIO] = acc_jerk_ratio
-            motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = \
-                timescaled_speeds_deg1 / acc_ortho_deg1_mags.flatten()[-n_jerk_preds:]
+            jerk_mags = vec3s_dict[MD.JERK_VEC3].norms[-n_jerk_preds:]
+            jerk_mags_pos = (jerk_mags != 0.0)
+            jerk_mags_0 = ~jerk_mags_pos
+            motion_data[MOTION_DATA.SPEED_JERK_RATIO] = pm.safeDivide(
+                timescaled_speeds_deg1, jerk_mags, FLOAT_32_MAX,
+                jerk_mags_pos, jerk_mags_0
+            )
+            motion_data[MOTION_DATA.ACC_JERK_RATIO] = pm.safeDivide(
+                acc_mags, jerk_mags, FLOAT_32_MAX, jerk_mags_pos, jerk_mags_0
+            )
+            
+            oacc_deg1_mags_nj = acc_ortho_deg1_mags[-n_jerk_preds:].flatten()
+            speed_oacc_ratio = pm.safeDivide(
+                timescaled_speeds_deg1, oacc_deg1_mags_nj, FLOAT_32_MAX
+            )
+
+            motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = speed_oacc_ratio
 
 
             if not self.exclude_past_muls:
@@ -1347,7 +1387,7 @@ class CalcsForVideo:
                 motion_data[MOTION_DATA.GT4] = gt_jav6[:, 4]
                 motion_data[MOTION_DATA.GT5] = gt_jav6[:, 5]
 
-            ck_denom = deg1_speeds_full.flatten()[1:]**(3/2)
+            ck_denom = deg1_speeds_full_flat[1:]**(3/2)
             ck_num_terms = []
             vel_vecs = deg1_vels[1:]
             for exc_i in range(3):
@@ -1358,7 +1398,11 @@ class CalcsForVideo:
                     pderivs.accelerations[:, exc_ip] * vel_vecs[:, exc_i]
                 ck_num_terms.append(ck_num_term**2)
             ck_num = np.sqrt(np.sum(ck_num_terms, axis=0))
-            curvatures = ck_num / ck_denom
+            # If the denominator is zero, i.e. velocity is zero, then it makes
+            # more sense to say there's 0 curvature than inf curvature IMO.
+            curvatures = pm.safeDivideElseZero(
+                ck_num, ck_denom, all_vs_pos[1:]
+            )
             motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
             motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
 
