@@ -1598,3 +1598,25 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         return res
     return all_data
 
+
+def getVelFrameDisplacements(y_true, y_pred):
+    disp = np.empty((len(y_true), 3))
+
+    # y_pred2 = y_pred + y_true[:, 9:15]
+    # Calculating the local displacement is the same as custom tf loss function.
+    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
+        + y_true[:, 9] * y_pred[:, 9]
+    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
+    disp[:, 2] = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
+        + y_true[:, 11] * y_pred[:, 11]
+
+    return disp
+
+def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+    disp = getVelFrameDisplacements(y_true, y_pred)
+
+    # Convert local displacement into world displacement.
+    local2worlds = np.swapaxes(world2locals, -1, -2)
+    return pm.einsumMatVecMul(local2worlds, disp) 

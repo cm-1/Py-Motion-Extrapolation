@@ -5,6 +5,9 @@ import time
 from collections import defaultdict
 from enum import Enum
 
+import datetime
+
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -23,12 +26,18 @@ import gtCommon as gtc
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.posefeatures import MOTION_DATA, MOTION_MODEL, ANG_OR_MAG, JAV # Enums
-from motiontools.posefeatures import SpecifiedMotionData, OneHotMotionData
-# Classes, functions, and type hints:
-from motiontools.posefeatures import CalcsForVideo, dataForCombosJAV
-from motiontools.posefeatures import gtMultipliers6, getBaselineJAV6
-from motiontools.posefeatures import PoseLoaderList, NumpyForSkipAndID, OrderForJAV
+from motiontools.posefeatures import (
+    MOTION_DATA, MOTION_MODEL, ANG_OR_MAG, JAV,     # Enums
+    SpecifiedMotionData, OneHotMotionData,          # Other "labels" for columns
+    NumpyForSkipAndID, OrderForJAV, PoseLoaderList, # Types
+    dataForCombosJAV, getWorldFrameDisplacements,
+    gtMultipliers6, getBaselineJAV6,
+    CalcsForVideo                                   # Classes
+)
+    
+from nn_utilities.nn_losses import (
+    poseLossJAV, poseLossResidualJAV, poseLossVec3
+)
 
 from motiontools.dataorg import (
     DataOrganizer, concatForComboSubset, UnitAwareScaler, DataSubsetKind,
@@ -334,9 +343,6 @@ def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List,
     return train_res, test_res
 
 
-def poseLossVec3(y_true, y_pred):
-    return tf.norm(y_true - y_pred, axis=-1)
-
 
 def poseLossAngle(y_true, y_pred):
     # 2acos(abs([cos||x/2|| cos||y/2|| + <x>*<y> sin||x/2|| sin||y/2||))
@@ -354,93 +360,6 @@ def poseLossAngle(y_true, y_pred):
     quat_dots_1 = np.abs(np.clip(quat_dots, -1, 1))
     return 2 * np.arccos(quat_dots_1) #tf.convert_to_tensor(...)
 
-# Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
-def poseLossJAV(y_true, y_pred):
-    '''
-    When we create the "JAV" data, we specify the permutation of
-    (velocity, acceleration, jerk) to orthonormalize into frames. For simplicity
-    below, assume the order is in fact velocity, then acceleration, then jerk.
-
-    In that case, y_true contains the following columns, in order:
-     - speed
-     - accel parallel to velocity
-     - accel ortho to velocity
-     - jerk parallel to speed, ortho to speed but in acc plane, ortho to plane
-     - correct pose displacement in the same "coordinate frame" as the jerk.
-
-    In other words, we are working in an orthonormal coordinate frame where the 
-    x-axis is aligned with velocity, the y with acceleration, and then z is
-    orthogonal to both.
-    
-    Then, y_pred contains the multipliers for velocity, acceleration, and jerk, 
-    respectively. The predicted "local" displacement is thus:
-    [[speed, acc_x, jerk_x],       [vel_multiplier,
-     [0,     acc_y, jerk_y],     x  acc_multiplier,
-     [0,     0,     jerk_z]]        jerk_multiplier]
-
-    Then after this matrix multiplication, we find the distance between it and
-    the correct pose displacement, both vec3s.
-    '''
-
-    # y_pred2 = y_pred + y_true[:, 9:15]
-
-    pred_disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
-        + y_true[:, 9] * y_pred[:, 9]
-    pred_disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
-        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
-    pred_disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
-        + y_true[:, 11] * y_pred[:, 11]
-
-    pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
-    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
-
-    true_disp = y_true[:, 12:15] #6:9]
-
-    err_vec3 = true_disp - pred_disp
-    return tf.norm(err_vec3, axis=-1)
-
-def poseLossResidualJAV(y_true, y_pred):
-
-    y_pred2 = y_pred + y_true[:, 15:27] #9:15]
-
-    pred_disp_0 = y_true[:, 0] * y_pred2[:, 0] + y_true[:, 1] * y_pred2[:, 1] \
-        + y_true[:, 3] * y_pred2[:, 3] + y_true[:, 6] * y_pred2[:, 6] \
-        + y_true[:, 9] * y_pred2[:, 9]
-    pred_disp_1 = y_true[:, 2] * y_pred2[:, 2] + y_true[:, 4] * y_pred2[:, 4] \
-        + y_true[:, 7] * y_pred2[:, 7] + y_true[:, 10] * y_pred2[:, 10]
-    pred_disp_2 = y_true[:, 5] * y_pred2[:, 5] + y_true[:, 8] * y_pred2[:, 8] \
-        + y_true[:, 11] * y_pred2[:, 11]
-
-    pred_disp = tf.stack([pred_disp_0, pred_disp_1, pred_disp_2], axis=-1)
-    # pred_disp = tf.gather(y_true, (0,2,5), axis=-1) * y_pred
-
-    true_disp = y_true[:, 12:15] #6:9]
-
-    err_vec3 = true_disp - pred_disp
-    return tf.norm(err_vec3, axis=-1)
-
-def getVelFrameDisplacements(y_true, y_pred):
-    disp = np.empty((len(y_true), 3))
-
-    # y_pred2 = y_pred + y_true[:, 9:15]
-    # Calculating the local displacement is the same as custom tf loss function.
-    disp[:, 0] = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
-        + y_true[:, 9] * y_pred[:, 9]
-    disp[:, 1] = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
-        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
-    disp[:, 2] = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
-        + y_true[:, 11] * y_pred[:, 11]
-
-    return disp
-
-def getWorldFrameDisplacements(y_true, y_pred, world2locals):
-    disp = getVelFrameDisplacements(y_true, y_pred)
-
-    # Convert local displacement into world displacement.
-    local2worlds = np.swapaxes(world2locals, -1, -2)
-    return pm.einsumMatVecMul(local2worlds, disp) 
 
 #%%
 # A lot of the features we calculated might be collinear (especially since a lot 
@@ -1119,6 +1038,12 @@ print("Reference scores:")
 bcotjav.getScoresSubset(DataSubsetKind.WHOLE, bcotjav.getRefPredictions(DataSubsetKind.WHOLE), True)
 
 #%%
+import pickle
+with open("./results/models/scaler.pickle", "wb") as f:
+    pickle.dump(bcs_scaler, f)
+
+
+#%%
 bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 256)
 
 
@@ -1133,32 +1058,17 @@ bcs_hist = bcs_model.fit(
     # batch_size = 1024
 )
 
-#%%
-# We need 7 input points to get crackle calculations because my code currently
-# assumes the last one is ground truth for which it shouldn't generate any
-# predictions, and we need 6 input points to calculate nonzero crackle.
-jav_collection = np.empty((1000, 12))
-
-rand_pts = np.random.uniform(-33, 33, (7, 3))
-default_aas = np.ones_like(rand_pts) 
-default_aas += np.random.normal(scale=0.01, size=rand_pts.shape) # Avoid NaN
-rand_all_cols = cfc.getInputFeatures(
-    rand_pts, default_aas, max_step = 1
-).motion_data[0]
-rand_all_cols_np = np.stack(
-    [rand_all_cols[k] for k in dog.motion_data_keys], axis=-1
-)
-rand_inputs = bcs_scaler.transform(rand_all_cols_np[:, nonco_cols])
-# print(rand_inputs)
-rand_out_JAV = bcs_model.predict(rand_inputs, verbose=0)
-jav_collection[i] = rand_out_JAV[-1]
-
-
-
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
 bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
+
+#%% Saving model to disk.
+model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
+    chosen_mode.name, datetime.datetime.now()
+)
+bcs_model.save(model_name)
+
 #%% Print scores on test data.
 bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
 
