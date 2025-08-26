@@ -1,3 +1,4 @@
+#%%
 import typing
 import pickle
 import glob
@@ -14,6 +15,8 @@ from motiontools.dataorg import UnitAwareScaler
 # Needed when loading model, even though IDE syntax highlighting marks this as
 # "unused"!
 from nn_utilities.nn_losses import poseLossJAV
+
+GRAPH_RES = 50
 
 scaler: UnitAwareScaler
 with open("./results/models/scaler.pickle", "rb") as f:
@@ -51,23 +54,32 @@ def processAllInputs(tupleList: typing.Tuple[NDArray, NDArray, NDArray]):
     rand_out_vec3 = getWorldFrameDisplacements(rand_in_jav, rand_out_JAV, w2ls)
     return rand_out_vec3
 
+#%%
 # We need 7 input points to get crackle calculations because my code currently
 # assumes the last one is ground truth for which it shouldn't generate any
 # predictions, and we need 6 input points to calculate nonzero crackle.
-rand_pts = np.random.normal(0.0, 0.0001, (7,3))# zeros((7,3))
-default_aas = np.ones_like(rand_pts) 
-rand_pts[-3, 0] = 1.0
-GRAPH_RES = 50
+rand_pts = np.random.normal(0.0, 0.0010, (7,3))# zeros((7,3))
+default_aas = np.ones_like(rand_pts)
+# rand_pts[:-4] = 0
+origin_pt = rand_pts[-4]
+origin_pt[:] = 0
+last_fixed_pt = rand_pts[-3]
+last_fixed_pt[:] = (15, 0, 0)
 print(end="")
 outlist = []
-for xi in range(GRAPH_RES):
-    x = (xi / GRAPH_RES) * 2 - 1
+all_in_disp_mags = (np.arange(GRAPH_RES) / GRAPH_RES) * 2 - 1
+all_in_disp_mags *= 50
+x_pts = last_fixed_pt[0] + all_in_disp_mags
+y_pts = last_fixed_pt[1] + all_in_disp_mags
+for xi, x in enumerate(x_pts):
     print("\rx index =", xi, end="", flush=True)
-    for yi in range(GRAPH_RES):
-        y = (yi / GRAPH_RES) * 2 - 1
+    for yi, y in enumerate(y_pts):
         rand_pts[-2, :2] = (x, y)
         outlist.append(getSingleInput(rand_pts, default_aas))
-
+#%%
+Y, X = np.meshgrid(y_pts, x_pts)
+xyz_ins = np.dstack((X, Y, np.broadcast_to(last_fixed_pt[2], X.shape)))
+rand_out_vec3s = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
 rand_out_vec3s = processAllInputs(outlist).reshape(GRAPH_RES, GRAPH_RES, 3)
 #%%
 import matplotlib.pyplot as plt
@@ -76,18 +88,20 @@ fig = plt.figure(0)
 fig.clear()
 
 ax = fig.add_subplot(111, projection='3d')
-
-
-# Loop through each 2D slice in the 3D array and plot it as a surface
+ax.clear()
 for level in range(3):
-    # Get the 2D slice at the current level    
-    Z = rand_out_vec3s[..., level]
-    
-    X, Y = np.meshgrid(np.arange(Z.shape[1]), np.arange(Z.shape[0]))
-
     surf = ax.plot_surface(
-        X, Y, Z, alpha=0.7, label=f'k={level}'
+        X, Y, rand_out_vec3s[..., level], alpha=0.32, label='xyz'[level]
     )
+surf_n = ax.plot_surface(
+    X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
+      alpha=0.32, label='|d|'
+)
+ax.plot(*(rand_pts[:-2].T),'x-')
+for i, pt in enumerate(rand_pts[:-2]):
+    ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
+ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+ax.legend()
 
 plt.show()
 
