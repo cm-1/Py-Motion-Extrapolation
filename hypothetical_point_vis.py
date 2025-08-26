@@ -84,25 +84,62 @@ rand_out_vec3s = processAllInputs(outlist).reshape(GRAPH_RES, GRAPH_RES, 3)
 #%%
 import matplotlib.pyplot as plt
 
-fig = plt.figure(0)
-fig.clear()
+# fig = plt.figure(0)
+# fig.clear()
 
-ax = fig.add_subplot(111, projection='3d')
-ax.clear()
-for level in range(3):
-    surf = ax.plot_wireframe(
-        X, Y, rand_out_vec3s[..., level], label='xyz'[level],
-        color="C" + str(level)
+# ax = fig.add_subplot(111, projection='3d')
+# ax.clear()
+# for level in range(3):
+#     surf = ax.plot_wireframe(
+#         X, Y, rand_out_vec3s[..., level], label='xyz'[level],
+#         color="C" + str(level)
+#     )
+# surf_n = ax.plot_wireframe(
+#     X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
+#     color="C3", label='|d|'
+# )
+# ax.plot(*(rand_pts[:-2].T),'x-')
+# for i, pt in enumerate(rand_pts[:-2]):
+#     ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
+# ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+# ax.legend()
+
+# plt.show()
+
+#%%
+import plotly.graph_objects as go
+
+fig = go.Figure()
+
+# Add the three xyz surfaces
+for level, name in enumerate("xyz"):
+    fig.add_trace(go.Surface(
+        x=X, y=Y, z=rand_out_vec3s[..., level],
+        opacity=0.32, name=name, showscale=False
+    ))
+
+# Add |d| surface
+fig.add_trace(go.Surface(
+    x=X, y=Y, z=np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
+    opacity=0.32, name="|d|", showscale=False, legendrank=2
+))
+
+# Add polyline and markers
+fig.add_trace(go.Scatter3d(
+    x=rand_pts[:-2, 0], y=rand_pts[:-2, 1], z=rand_pts[:-2, 2],
+    mode="lines+markers+text",
+    text=[f"x{i}" for i in range(len(rand_pts) - 2)],
+    textposition="top center",
+    line=dict(color="black"),
+    marker=dict(size=5, symbol="x")
+))
+
+fig.update_layout(
+    scene=dict(
+        xaxis_title="x", yaxis_title="y", zaxis_title="z",
+        aspectmode="cube"
     )
-surf_n = ax.plot_wireframe(
-    X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
-    color="C3", label='|d|'
 )
-ax.plot(*(rand_pts[:-2].T),'x-')
-for i, pt in enumerate(rand_pts[:-2]):
-    ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
-ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
-ax.legend()
+fig.update_traces(showlegend=True)#, showscale=False)
 
-plt.show()
-
+fig.show()
