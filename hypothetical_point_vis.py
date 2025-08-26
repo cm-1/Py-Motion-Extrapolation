@@ -90,12 +90,13 @@ fig.clear()
 ax = fig.add_subplot(111, projection='3d')
 ax.clear()
 for level in range(3):
-    surf = ax.plot_surface(
-        X, Y, rand_out_vec3s[..., level], alpha=0.32, label='xyz'[level]
+    surf = ax.plot_wireframe(
+        X, Y, rand_out_vec3s[..., level], label='xyz'[level],
+        color="C" + str(level)
     )
-surf_n = ax.plot_surface(
+surf_n = ax.plot_wireframe(
     X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
-      alpha=0.32, label='|d|'
+    color="C3", label='|d|'
 )
 ax.plot(*(rand_pts[:-2].T),'x-')
 for i, pt in enumerate(rand_pts[:-2]):
