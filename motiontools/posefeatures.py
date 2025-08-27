@@ -1180,15 +1180,15 @@ class CalcsForVideo:
                 (MD.JERK_VEC3, OD.PLANE_ORTHO)
             ]
 
-            precalced_mags = [
-                deg1_speeds_full, deg2_speeds_full, acc_mags_full,
-                sin_vel_deg2_acc_angs, jerk_ortho_norms
-            ]
-            for mags in precalced_mags:
-                mags_0 = mags[0]
-                mags_0_v = mags_0 if np.isscalar(mags_0) else mags_0[0]
-                if mags_0_v == 0.0:
-                    raise ValueError("Relative axes cannot have a norm of 0.0!")
+            # precalced_mags = [
+            #     deg1_speeds_full, deg2_speeds_full, acc_mags_full,
+            #     sin_vel_deg2_acc_angs, jerk_ortho_norms
+            # ]
+            # for mags in precalced_mags:
+            #     mags_0 = mags[0]
+            #     mags_0_v = mags_0 if np.isscalar(mags_0) else mags_0[0]
+            #     if mags_0_v == 0.0:
+            #         raise ValueError("Relative axes cannot have a norm of 0.0!")
             
             # NOTE: We *could* use the orthogonal component of jerk to set the
             # sign/direction of the plane normals instead of just using the sign

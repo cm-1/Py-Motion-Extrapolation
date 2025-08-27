@@ -17,6 +17,7 @@ from motiontools.dataorg import UnitAwareScaler
 from nn_utilities.nn_losses import poseLossJAV
 
 GRAPH_RES = 50
+DISP_RADIUS = 32.0
 
 scaler: UnitAwareScaler
 with open("./results/models/scaler.pickle", "rb") as f:
@@ -60,7 +61,7 @@ def processAllInputs(tupleList: typing.Tuple[NDArray, NDArray, NDArray]):
 # predictions, and we need 6 input points to calculate nonzero crackle.
 rand_pts = np.random.normal(0.0, 0.0010, (7,3))# zeros((7,3))
 default_aas = np.ones_like(rand_pts)
-# rand_pts[:-4] = 0
+rand_pts[:-4] = 0
 origin_pt = rand_pts[-4]
 origin_pt[:] = 0
 last_fixed_pt = rand_pts[-3]
@@ -68,7 +69,7 @@ last_fixed_pt[:] = (15, 0, 0)
 print(end="")
 outlist = []
 all_in_disp_mags = (np.arange(GRAPH_RES) / GRAPH_RES) * 2 - 1
-all_in_disp_mags *= 50
+all_in_disp_mags *= DISP_RADIUS
 x_pts = last_fixed_pt[0] + all_in_disp_mags
 y_pts = last_fixed_pt[1] + all_in_disp_mags
 for xi, x in enumerate(x_pts):
@@ -79,10 +80,10 @@ for xi, x in enumerate(x_pts):
 #%%
 Y, X = np.meshgrid(y_pts, x_pts)
 xyz_ins = np.dstack((X, Y, np.broadcast_to(last_fixed_pt[2], X.shape)))
-rand_out_vec3s = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
-rand_out_vec3s = processAllInputs(outlist).reshape(GRAPH_RES, GRAPH_RES, 3)
+rand_out_vec3s_ca = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
+rand_out_vec3s = xyz_ins + processAllInputs(outlist).reshape(GRAPH_RES, GRAPH_RES, 3)
 #%%
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 # fig = plt.figure(0)
 # fig.clear()
@@ -112,16 +113,44 @@ import plotly.graph_objects as go
 fig = go.Figure()
 
 # Add the three xyz surfaces
-for level, name in enumerate("xyz"):
-    fig.add_trace(go.Surface(
-        x=X, y=Y, z=rand_out_vec3s[..., level],
-        opacity=0.32, name=name, showscale=False
-    ))
 
+# for level, name in enumerate("xyz"):
+#     fig.add_trace(go.Surface(
+#         x=X, y=Y, z=rand_out_vec3s[..., level],
+#         opacity=0.32, name=name, showscale=False
+#     ))
+
+
+disp_mags = np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1)
 # Add |d| surface
-fig.add_trace(go.Surface(
-    x=X, y=Y, z=np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
-    opacity=0.32, name="|d|", showscale=False, legendrank=2
+# fig.add_trace(go.Surface(
+#     x=X, y=Y, z=disp_mags,
+#     opacity=0.32, name="|d|", showscale=False, legendrank=2
+# ))
+
+disp_mags2 = np.linalg.norm(xyz_ins - last_fixed_pt, axis=-1).flatten()
+out_vec3s_list = rand_out_vec3s.reshape(-1, 3)
+disp_cols = 20 * disp_mags2/disp_mags2.max()
+fig.add_trace(go.Scatter3d(
+    x=out_vec3s_list[:, 0], y=out_vec3s_list[:, 1], z=np.zeros_like(out_vec3s_list[:,0]), #out_vec3s_list[:, 2],
+    mode='markers',
+    marker=dict(
+        size=1,
+        color=disp_cols.flatten(),                # set color to an array/list of desired values
+        colorscale='Viridis',   # choose a colorscale
+        opacity=0.8
+    )
+))
+out_vec3s_list = rand_out_vec3s_ca.reshape(-1, 3)
+fig.add_trace(go.Scatter3d(
+    x=out_vec3s_list[:, 0], y=out_vec3s_list[:, 1], z=np.zeros_like(out_vec3s_list[:,0]), #out_vec3s_list[:, 2],
+    mode='markers',
+    marker=dict(
+        size=1,
+        color=disp_cols.flatten(),                # set color to an array/list of desired values
+        colorscale='Viridis',   # choose a colorscale
+        opacity=0.8
+    )
 ))
 
 # Add polyline and markers
