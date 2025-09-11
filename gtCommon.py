@@ -7,6 +7,7 @@ import typing
 
 import numpy as np
 from numpy.typing import NDArray
+from motiontools.shared_constants import *
 
 import posemath as pm
 
@@ -296,6 +297,40 @@ class PoseLoader(ABC):
     def _randFloat(upper: float, lower: typing.Optional[float] = None):
         # Return single float extracted from array of length 1.
         return PoseLoader._randHelper(1, upper, lower)[0]
+    
+    @classmethod
+    def getStaticStartSample(cls, vid_ids, realign, thresh = 4.0):
+        loaders = [cls(*i) for i in vid_ids]
+        found_ind = -1
+        for tl in loaders:
+            num_non_gt_frames = GT_PT_IND
+            tl_diffs = np.diff(tl.getTranslationsGTNP(), 1, axis=0)
+            tl_diff_subset = tl_diffs[:num_non_gt_frames]
+            for i in range(0, len(tl_diffs) - num_non_gt_frames + 1):
+                tl_diff_subset = tl_diffs[i:(i + num_non_gt_frames)]
+                early_speeds = np.linalg.norm(
+                    tl_diff_subset[:LAST_FIXED_PT_IND], axis=-1
+                )
+                if np.sum(early_speeds) < thresh:
+                    found_ind = i
+                    # break
+            if found_ind >= 0:
+                end_found = found_ind + num_non_gt_frames
+                tl_diff_subset = tl_diffs[found_ind:end_found]
+                aas_subset = tl.getRotationsGTNP()[found_ind:(end_found + 1)]
+                pts_subset = tl.getTranslationsGTNP()[found_ind:(end_found + 1)]
+                if realign:
+                    diff_mat = pm.getOrthonormalFrames(
+                        False,
+                        tl_diff_subset[LAST_FIXED_PT_IND - 1:LAST_FIXED_PT_IND],
+                        tl_diff_subset[LAST_FIXED_PT_IND:DYNAMIC_PT_IND]
+                    )[1][0]
+                    aas_subset = aas_subset @ diff_mat
+                    new_frame_pts = pts_subset @ diff_mat
+                    pts_subset = new_frame_pts - new_frame_pts[LAST_FIXED_PT_IND - 1]
+                break
+        return pts_subset, aas_subset
+
 
 class SyntheticPoseLoader(PoseLoader):
     def __init__(self, num_frames: int, const_rot_accel: bool, helix: bool,

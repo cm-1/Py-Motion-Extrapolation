@@ -1964,8 +1964,37 @@ class HypotheticalInputsForNN:
 
         return ret[:, self.to_nn_permut], jav_stack, curr_ortho_mats
 
+    @staticmethod
+    def getInputGridOfVec3s(resolution: int, extent: float, generating_vec3_pt: NDArray,):
+        deltas_1D = (np.arange(resolution) / resolution) * 2 - 1
+        deltas_1D *= extent
 
+        deltaYs, deltaXs = np.meshgrid(deltas_1D, deltas_1D)
+        hyp_deltas = np.dstack((deltaXs, deltaYs, np.zeros_like(deltaXs)))
+        hyp_pts_grid = hyp_deltas + generating_vec3_pt
+        return hyp_pts_grid.reshape(-1, 3)        
 
+    @staticmethod
+    def getMostlyStaticPrevPts(position_noise: float = 0.0, rotation_noise: float = 0.0):
+        # We need 7 input points to get crackle calculations because my code currently
+        # assumes the last one is ground truth for which it shouldn't generate any
+        # predictions, and we need 6 input points to calculate nonzero crackle.
+        pts_shape = (7, 3)
+        rand_pts = np.zeros(pts_shape)
+        rand_pts[-3] = (15, 0, 0)
+        default_aas = np.ones_like(rand_pts)
+    
+        if position_noise > 0.0:    
+            rand_pts += np.random.normal(0.0, position_noise, pts_shape)
+        if rotation_noise > 0.0:
+            default_aas += np.random.normal(0.0, rotation_noise, pts_shape)
+        return rand_pts, default_aas
+
+    def getConstAccPreds(self, all_x5_choices: NDArray):
+        x4 = self.x0_through_4[4]
+        x3 = self.x0_through_4[3]
+        return (3 * all_x5_choices) - (3 * x4) + x3
+    
 # ALL_RELATIVE_VECTORS = (
 #     MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG2_VEC3, MOTION_DATA.ACC_VEC3,
 #     MOTION_DATA.JERK_VEC3, MOTION_DATA.JERK_ERR_VEC3, MOTION_DATA.ROTATION_VEC3,
