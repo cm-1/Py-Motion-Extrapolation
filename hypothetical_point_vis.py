@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 import keras
 
 from motiontools.posefeatures import (
-    CalcsForVideo, dataForPositionsJAV, JAV, getWorldFrameDisplacements,
+    CalcsForVideo, JAV, getWorldFrameDisplacements,
     HypotheticalInputsForNN
 )
 from motiontools.dataorg import UnitAwareScaler
@@ -153,6 +153,7 @@ print("time:", time_delt, "({})fps".format(int(1.0/time_delt)))
 
 rand_out_vec3s_ca = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
 rand_out_vec3s = xyz_ins + processAllInputs(hypOut, hypJav, hypMats).reshape(GRAPH_RES, GRAPH_RES, 3)
+nn_out_list = rand_out_vec3s.reshape(-1, 3)
 
 rand_pts_copy = rand_pts.copy()
 sel_out_vec3 = processAllInputs(*(hypCalcer.calculateInputsForNN(rand_pts[5:6].copy())))[0]
@@ -185,42 +186,43 @@ plt.show()
 
 #%%
 import plotly.graph_objects as go
+import ipywidgets as widgets
 
-fig = go.Figure()
+fig = go.FigureWidget()
 
 # Add the three xyz surfaces
 
-for level, name in enumerate("xyz"):
-    fig.add_trace(go.Surface(
-        x=X, y=Y, z=rand_out_vec3s[..., level],
-        opacity=0.32, name=name, showscale=False
-    ))
+# for level, name in enumerate("xyz"):
+#     fig.add_trace(go.Surface(
+#         x=X, y=Y, z=rand_out_vec3s[..., level],
+#         opacity=0.32, name=name, showscale=False
+#     ))
 
 
-disp_mags = np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1)
-# Add |d| surface
-fig.add_trace(go.Surface(
-    x=X, y=Y, z=disp_mags,
-    opacity=0.32, name="|d|", showscale=False, legendrank=2
-))
+# disp_mags = np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1)
+# # Add |d| surface
+# fig.add_trace(go.Surface(
+#     x=X, y=Y, z=disp_mags,
+#     opacity=0.32, name="|d|", showscale=False, legendrank=2
+# ))
 
 
 disp_mags2 = np.linalg.norm(xyz_ins - last_fixed_pt, axis=-1).flatten()
-out_vec3s_list = rand_out_vec3s.reshape(-1, 3)
 disp_cols = 20 * disp_mags2/disp_mags2.max()
 fig.add_trace(go.Scatter3d(
-    x=out_vec3s_list[:, 0], y=out_vec3s_list[:, 1], z=np.zeros_like(out_vec3s_list[:,0]), #out_vec3s_list[:, 2],
+    x=nn_out_list[:, 0], y=nn_out_list[:, 1], z=nn_out_list[:, 2],
     mode='markers',
     marker=dict(
         size=1,
         color=disp_cols.flatten(),                # set color to an array/list of desired values
         colorscale='Viridis',   # choose a colorscale
         opacity=0.8
-    )
+    ),
+    name="nn_out"
 ))
 out_vec3s_list = rand_out_vec3s_ca.reshape(-1, 3)
 fig.add_trace(go.Scatter3d(
-    x=out_vec3s_list[:, 0], y=out_vec3s_list[:, 1], z=np.zeros_like(out_vec3s_list[:,0]), #out_vec3s_list[:, 2],
+    x=out_vec3s_list[:, 0], y=out_vec3s_list[:, 1], z=out_vec3s_list[:, 2],
     mode='markers',
     marker=dict(
         size=1,
@@ -240,12 +242,92 @@ fig.add_trace(go.Scatter3d(
     marker=dict(size=5, symbol="x")
 ))
 
-fig.update_layout(
-    scene=dict(
-        xaxis_title="x", yaxis_title="y", zaxis_title="z",
-        aspectmode="data"
-    )
-)
-fig.update_traces(showlegend=True)#, showscale=False)
+# fig.update_layout(
+#     scene=dict(
+#         xaxis_title="x", yaxis_title="y", zaxis_title="z",
+#         aspectmode="data"
+#     )
+# )
+x_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="X")
+y_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="Y")
+z_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="Z")
 
-fig.show()
+def update_sliders(*args):
+    """When point changes, load its coords into sliders."""
+    idx = -2 #point_selector.value
+    x_slider.value, y_slider.value, z_slider.value = rand_pts_copy[idx]
+
+# point_selector.observe(update_sliders, names="value")
+
+# Keep a list of past x6 positions
+# trail = []
+
+def update_plot(value):
+    """When sliders move, update selected point + recompute x6."""
+    idx = 5 #point_selector.value
+    rand_pts_copy[idx] = np.array([x_slider.value, y_slider.value, z_slider.value])
+
+    # Recompute output
+    # new_x6 = f(*rand_pts_copy)
+
+    # with fig.batch_update():
+        # Update inputs
+    x_pts = rand_pts_copy[idx][0] + all_in_disp_mags
+    y_pts = rand_pts_copy[idx][1] + all_in_disp_mags
+    Y, X = np.meshgrid(y_pts, x_pts)
+    xyz_ins2 = np.dstack((X, Y, np.broadcast_to(rand_pts_copy[idx][2], X.shape)))
+
+    new_nn_outs = xyz_ins2.reshape(-1, 3) + processAllInputs(*(hypCalcer.calculateInputsForNN(xyz_ins2.reshape(-1, 3))))
+    # nn_out_scatter.x = new_nn_outs[:, 0]
+    # nn_out_scatter.y = new_nn_outs[:, 1]
+    # nn_out_scatter.z = new_nn_outs[:, 2]
+
+    # Update current output
+    # fig.data[1].x = [new_x6[0]]
+    # fig.data[1].y = [new_x6[1]]
+    # fig.data[1].z = [new_x6[2]]
+
+    # # Update trail (third trace)
+    # if len(fig.data) < 3:
+    #     fig.add_scatter3d(
+    #         x=[p[0] for p in trail],
+    #         y=[p[1] for p in trail],
+    #         z=[p[2] for p in trail],
+    #         mode="lines+markers",
+    #         line=dict(color="gray", width=2, dash="dot"),
+    #         marker=dict(size=3, color="gray", opacity=0.6),
+    #         name="Trail"
+    #     )
+    # else:
+    #     fig.data[2].x = [p[0] for p in trail]
+    #     fig.data[2].y = [p[1] for p in trail]
+    #     fig.data[2].z = [p[2] for p in trail]
+    # fig.update_layout(
+    #     scene=dict(
+    #         aspectmode="cube",
+    #         xaxis=dict(range=[-5, 5]),
+    #         yaxis=dict(range=[-5, 5]),
+    #         zaxis=dict(range=[-5, 5]),
+    #     )
+    # )
+    fig.update_traces(
+        x=new_nn_outs[:, 0], y=new_nn_outs[:, 1], z=new_nn_outs[:, 2],
+        selector=({"name":"nn_out"})
+    )
+
+
+for s in (x_slider, y_slider, z_slider):
+    s.observe(update_plot, names="value")
+
+# Initialize sliders with point 0
+update_sliders()
+update_plot(None)
+
+from IPython.display import display
+
+ui = widgets.VBox([fig, x_slider, y_slider, z_slider])
+display(ui)
+
+# fig.update_traces(showlegend=True)#, showscale=False)
+
+# fig.show()
