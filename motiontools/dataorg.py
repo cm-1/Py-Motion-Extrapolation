@@ -29,9 +29,11 @@ from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
 # Motivation: We may want to quickly filter out a skip amount for training.
 def concatForComboSubset(data, combo_subset,
                          front_trim: int = 0, end_trim: int = 0,
-                         diff_order: int = 0):
+                         diff_order: int = 0, del_original_data: bool = False):
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
-    for els_for_skip in data:
+    for skip_ind in range(len(data) - 1, -1, -1):
+        els_for_skip = data[skip_ind]
+        # print("  - subset_via_ids creation")
         subset_via_ids = [els_for_skip[ck] for ck in combo_subset]
         concated = None
         # front_trim = 0 # May set this via param in future code.
@@ -40,24 +42,36 @@ def concatForComboSubset(data, combo_subset,
             return []
         elif isinstance(subset_via_ids[0], dict):
             concated = dict()
-            for k in subset_via_ids[0].keys():
-                concated[k] = np.concatenate([
-                    _concatForComboSubsetHelp(s[k], front_trim, end, diff_order)
-                    for s in subset_via_ids
-                ])
+            # print("  - dict() creation")
+            if diff_order > 0:
+                concated = {
+                    k: np.concatenate([
+                        np.diff(s[k][front_trim:end], diff_order, axis=0)
+                        for s in subset_via_ids
+                    ]) for k in subset_via_ids[0].keys()
+                }
+            else:
+                concated = {
+                    k: np.concatenate([
+                        s[k][front_trim:end] for s in subset_via_ids
+                    ]) for k in subset_via_ids[0].keys()
+                }
         else:
-            concated = np.concatenate([
-                _concatForComboSubsetHelp(svc, front_trim, end, diff_order)
-                for svc in subset_via_ids
-            ]) 
-        ret_val.append(concated)
+            if diff_order > 0:
+                concated = np.concatenate([
+                    np.diff(svc[front_trim:end], diff_order, axis=0)
+                    for svc in subset_via_ids])
+            else:
+                concated = np.concatenate([
+                    svc[front_trim:end] for svc in subset_via_ids
+                ]) 
+        ret_val.insert(0, concated)
+        
+        if del_original_data:
+            for ck in combo_subset:
+                del els_for_skip[ck]
     return ret_val
 
-def _concatForComboSubsetHelp(arr, front_trim: int, end: int, diff_order: int):
-    ret = arr[front_trim:end]
-    if diff_order > 0:
-        ret = np.diff(ret, diff_order, axis=0)
-    return ret
 
 # This converts List[Dict[Any, NDArray]] items, which are lists of result 
 # dicts of NDarrays indexed by frame skip, into a single 2D NDArray.
@@ -260,7 +274,8 @@ class DataOrganizer:
         
     def __init__(self, all_motion_data, min_norm_labels, err_norm_lists, 
                  train_ids, test_ids, validation_ids = None, 
-                 motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None):
+                 motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None,
+                 del_original_data: bool = False):
         
         # It is fine if this is None for now because, if it is, it will be
         # overwritten later.
@@ -283,25 +298,31 @@ class DataOrganizer:
             DataSubsetKind, typing.Dict[SkipSubsetKind, NDArray]
         ] = dict()
 
+        # print("Starting training data:")
         # Training data:
         sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, train_ids
+            all_motion_data, min_norm_labels, err_norm_lists, train_ids,
+            del_original_data
         )
         self.subset_ids[DSK.TRAIN], self.concat_train_labels = sd[:2]
         self.concat_train_data, self.concat_train_class_errs = sd[2:4]
         self.subset_skip_inds[DSK.TRAIN] = sd[4]
 
+        # print("Starting testing data:")
         # Test data:
         sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, test_ids
+            all_motion_data, min_norm_labels, err_norm_lists, test_ids,
+            del_original_data
         )
         self.subset_ids[DSK.TEST], self.concat_test_labels = sd[:2]
         self.concat_test_data, self.concat_test_class_errs = sd[2:4]
         self.subset_skip_inds[DSK.TEST] = sd[4]
 
+        # print("Starting vals data:")
         # Validation data:
         sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, validation_ids
+            all_motion_data, min_norm_labels, err_norm_lists, validation_ids,
+            del_original_data
         )
         self.subset_ids[DSK.VALIDATION], self.concat_validation_labels = sd[:2]
         self.concat_validation_data, self.concat_validation_class_errs = sd[2:4]
@@ -320,7 +341,8 @@ class DataOrganizer:
 
     def _splitAndConcatSubset(self, all_motion_data, min_norm_labels,
                               err_norm_lists,
-                              subset_ids: typing.Optional[typing.Iterable],):
+                              subset_ids: typing.Optional[typing.Iterable],
+                              del_original_data: bool):
         if subset_ids is None:
             d_empty = np.empty((0, len(self.motion_data_keys)))
             lab_empty = np.empty((0, ), dtype=int)
@@ -335,24 +357,39 @@ class DataOrganizer:
         # separated by skip amount and by column key (if present). E.g., one can
         # quickly slap a "[0]" at the end of each line to just look at data for
         # one skip amount.
-        labels = concatForComboSubset(min_norm_labels, subset_ids)
-        errs = concatForComboSubset(err_norm_lists, subset_ids)
-        data = concatForComboSubset(all_motion_data, subset_ids)
+        # print("- Starting labels.")
+        labels = concatForComboSubset(
+            min_norm_labels, subset_ids, del_original_data=del_original_data
+        )
+        # print("- Starting errs.")
+        errs = concatForComboSubset(
+            err_norm_lists, subset_ids, del_original_data=del_original_data
+        )
+        # print("- Starting data.")
+        data = concatForComboSubset(
+            all_motion_data, subset_ids, del_original_data=del_original_data
+        )
 
-        
+        # print("- Cat labels.")
         # Get 2D NDArrays from the above.
         concat_labels = np.concatenate(labels)
+        del labels # Delete now since it doesn't get used later anyway.
 
+        # print("- Cat data.")
         # Get the "keys" as another return value so that we know the column 
         # names/order.
         self.motion_data_keys, concat_data = get2DArrayFromDataStruct(
             data, self.motion_data_keys, stack_axis=-1
         )
+        del data # Delete now since it doesn't get used later anyway.
         
+        # print("- Cat errs.")
         _, concat_errs = get2DArrayFromDataStruct(
             errs, self.motion_mod_keys, stack_axis=-1
         )
+        del errs # Delete now since it doesn't get used later anyway.
 
+        # print("- Finding skip inds.\n")
         # Get the indices of each skip amount inside the concatenated 2D array
         # we created above. There might be a "smarter" way to do this given how
         # things were previously split into lists by skip amount, but whatever.
