@@ -77,8 +77,9 @@ def getScatterMarkers(input_color_vals: typing.Optional[NDArray] = None,
                       colorscale = 'Viridis', opacity=0.8, size=1):
     marker_spec = dict(size=size, opacity=opacity)
     if input_color_vals is not None:
-        marker_spec["color"] = input_color_vals.flatten()
-        marker_spec["colorscale"] = colorscale 
+        marker_spec.update(
+            {"color": input_color_vals.flatten(), "colorscale": colorscale}
+        )
     return marker_spec
 
 def getLines(name: str, pts: NDArray, min_label_ind: int = 0, color="black",
@@ -124,9 +125,10 @@ fig.update_layout(
     )
 )
 
-x_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="X")
-y_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="Y")
-z_slider = widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description="Z")
+sliders = [
+    widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description=axis)
+    for axis in "XYZ"
+]
 
 rand_pts_copy = rand_pts.copy()
 
@@ -136,7 +138,6 @@ model_selector = widgets.ToggleButtons(
     style={"description_width": "initial"}
 )
 
-# mutable reference to current inference function
 current_model_name = model_prefixes[0]
 
 def set_model(change):
@@ -145,7 +146,6 @@ def set_model(change):
     inferBCOT = functools.partial(
         getHypotheticalOutputsNN, model_loads[current_model_name], scaler
     )
-    # force a redraw with new model immediately
     update_plot(None)
 
 model_selector.observe(set_model, names="value")
@@ -153,7 +153,7 @@ model_selector.observe(set_model, names="value")
 def update_plot(value):
     """When sliders move, update selected point + recompute x6 with selected model."""
     idx = DYNAMIC_PT_IND
-    rand_pts_copy[idx] = np.array([x_slider.value, y_slider.value, z_slider.value])
+    rand_pts_copy[idx] = np.array([s.value for s in sliders])
     main_hyp_pt = rand_pts_copy[idx]
 
     # with fig.batch_update():
@@ -176,44 +176,13 @@ def update_plot(value):
     )
     
 
-for s in (x_slider, y_slider, z_slider):
+for s in sliders:
     s.observe(update_plot, names="value")
 
 # Initialize sliders with point 0
 update_plot(None)
 
 
-ui = widgets.VBox([model_selector, fig, x_slider, y_slider, z_slider])
+ui = widgets.VBox([model_selector, fig, *sliders])
 display(ui)
 
-# fig.update_traces(showlegend=True)#, showscale=False)
-
-
-#%% Matplotlib surface plotter.
-import matplotlib.pyplot as plt
-
-hyp_dyn_pts_grid = hyp_dyn_pts_list.reshape(GRAPH_RES, GRAPH_RES, 3)
-nn_out_grid = nn_out_list.reshape(GRAPH_RES, GRAPH_RES, 3)
-
-mfig = plt.figure(0)
-mfig.clear()
-
-ax = mfig.add_subplot(111, projection='3d')
-ax.clear()
-for level in range(3):
-    surf = ax.plot_wireframe(
-        hyp_dyn_pts_grid[..., 0], hyp_dyn_pts_grid[..., 1], nn_out_grid[..., level], label='xyz'[level],
-        color="C" + str(level)
-    )
-surf_n = ax.plot_wireframe(
-    hyp_dyn_pts_grid[..., 0], hyp_dyn_pts_grid[..., 1],
-    np.linalg.norm(nn_out_grid - last_fixed_pt, axis=-1),
-    color="C3", label='|d|'
-)
-ax.plot(*(rand_pts[:-2].T),'x-')
-for i, pt in enumerate(rand_pts[:-2]):
-    ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
-ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
-ax.legend()
-
-plt.show()
