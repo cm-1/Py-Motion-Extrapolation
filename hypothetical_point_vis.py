@@ -3,13 +3,15 @@ import typing
 import pickle
 import glob
 
+import time
+
 import numpy as np
 from numpy.typing import NDArray
 import keras
 
 from motiontools.posefeatures import (
     CalcsForVideo, dataForPositionsJAV, JAV, getWorldFrameDisplacements,
-    PositionDerivativeCollection
+    HypotheticalInputsForNN
 )
 from motiontools.dataorg import UnitAwareScaler
 import posemath as pm
@@ -26,7 +28,7 @@ with open("./results/models/scaler.pickle", "rb") as f:
     scaler = pickle.load(f)
 selected_keys = scaler.column_keys
 
-matching_models = glob.glob("./results/models/hot_1024*.keras")
+matching_models = glob.glob("./results/models/JAV_M*.keras")
 chosen_model = sorted(matching_models)[-1]
 print("Loading model:", chosen_model)
 loaded_model = keras.models.load_model(chosen_model, custom_objects={"poseLossJAV": poseLossJAV})
@@ -34,27 +36,26 @@ loaded_model = keras.models.load_model(chosen_model, custom_objects={"poseLossJA
 cfc = CalcsForVideo(min_jerk_opt_iter_lim=0, split_min_jerk_opt_iter_lim=0)
 
 jav_order = (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK)
-def getSingleInput(rand_pts: NDArray, rand_aas: NDArray):
-    # default_aas += np.random.normal(scale=0.01, size=rand_pts.shape) # Avoid NaN
-    rand_all_cols = cfc.getInputFeatures(
-        rand_pts, rand_aas, max_step = 1
-    ).motion_data[0]
+# def getSingleInput(rand_pts: NDArray, rand_aas: NDArray):
+#     # default_aas += np.random.normal(scale=0.01, size=rand_pts.shape) # Avoid NaN
+#     rpc = rand_pts.copy()
+#     rpc.setflags(write=False)
+#     rand_all_cols = cfc.getInputFeatures(
+#         rpc, rand_aas, max_step = 1
+#     ).motion_data[0]
 
 
-    rand_all_cols_np = [rand_all_cols[k][-1] for k in selected_keys]
-    # print(rand_inputs)
-    rand_in_jav, _, w2ls = dataForPositionsJAV(jav_order, rand_pts, None, 1)
+#     rand_all_cols_np = [rand_all_cols[k][-1] for k in selected_keys]
+#     # print(rand_inputs)
+#     rand_in_jav, _, w2ls = dataForPositionsJAV(jav_order, rpc, None, 1)
 
-    return (rand_all_cols_np, rand_in_jav[-1], w2ls[-1], )
+#     return (rand_all_cols_np, rand_in_jav[-1], w2ls[-1], )
     
-def processAllInputs(tupleList: typing.Tuple[NDArray, NDArray, NDArray]):
-    unscaled_cols = np.stack([t[0] for t in tupleList], axis=0)
-    rand_in_jav = np.stack([t[1] for t in tupleList], axis=0)
-    w2ls = np.stack([t[2] for t in tupleList], axis=0)
+def processAllInputs(unscaled_cols: NDArray, jav_mags: NDArray, w2ls: NDArray):
     rand_inputs = scaler.transform(unscaled_cols)
     rand_out_JAV = loaded_model.predict(rand_inputs, batch_size=1024, verbose=0)
 
-    rand_out_vec3 = getWorldFrameDisplacements(rand_in_jav, rand_out_JAV, w2ls)
+    rand_out_vec3 = getWorldFrameDisplacements(jav_mags, rand_out_JAV, w2ls)
     return rand_out_vec3
 
 #%%
@@ -98,46 +99,89 @@ for tl in test_loaders:
 last_fixed_pt = rand_pts[-3]
 #%%
 
-outlist = []
 all_in_disp_mags = (np.arange(GRAPH_RES) / GRAPH_RES) * 2 - 1
-all_in_disp_mags *= max(DISP_RADIUS, np.linalg.norm(rand_pts[-3] - rand_pts[-2]) + 5)
+max_mag = min(DISP_RADIUS, np.linalg.norm(rand_pts[-3] - rand_pts[-2]) * 1.1)
+all_in_disp_mags *= max_mag
 x_pts = last_fixed_pt[0] + all_in_disp_mags
 y_pts = last_fixed_pt[1] + all_in_disp_mags
-print(end="")
-for xi, x in enumerate(x_pts):
-    print("\rx index =", xi, end="", flush=True)
-    for yi, y in enumerate(y_pts):
-        rand_pts[-2, :2] = (x, y)
-        outlist.append(getSingleInput(rand_pts, default_aas))
-#%%
 Y, X = np.meshgrid(y_pts, x_pts)
 xyz_ins = np.dstack((X, Y, np.broadcast_to(last_fixed_pt[2], X.shape)))
-rand_out_vec3s_ca = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
-rand_out_vec3s = xyz_ins + processAllInputs(outlist).reshape(GRAPH_RES, GRAPH_RES, 3)
+# %%
+# outlist = []
+# rand_pts_copy = rand_pts.copy()
+# default_aas_copy = default_aas.copy()
+# default_aas_copy.setflags(write=False)
+
+# start = time.time()
+# # print(end="")
+# for xi, x in enumerate(x_pts):
+#     # print("\rx index =", xi, end="", flush=True)
+#     for yi, y in enumerate(y_pts):
+#         rand_pts_copy.setflags(write=True)
+#         rand_pts_copy[-2, :2] = (x, y)
+#         rand_pts_copy.setflags(write=False)
+#         outlist.append(getSingleInput(rand_pts_copy, default_aas_copy))
+# print("time:", time.time() - start)
+
 #%%
-# import matplotlib.pyplot as plt
+start = time.time()
+hypCalcer = HypotheticalInputsForNN(
+    rand_pts[:5].copy(), pm.matsFromScaledAxisAngleArray(default_aas[:6].copy()), 1,
+    selected_keys
+)
+hypOut, hypJav, hypMats = hypCalcer.calculateInputsForNN(xyz_ins.reshape(-1, 3))
+time_delt = time.time() - start
+print("time:", time_delt, "({})fps".format(int(1.0/time_delt)))
 
-# fig = plt.figure(0)
-# fig.clear()
+#%%
+# outcc = np.stack([o[0] for o in outlist], axis=0)
+# outjav = np.stack([o[1] for o in outlist], axis=0)
+# outmats = np.stack([o[2] for o in outlist], axis=0)
+# ac = np.isclose(hypOut, outcc)
+# na = np.isnan(hypOut)
 
-# ax = fig.add_subplot(111, projection='3d')
-# ax.clear()
-# for level in range(3):
-#     surf = ax.plot_wireframe(
-#         X, Y, rand_out_vec3s[..., level], label='xyz'[level],
-#         color="C" + str(level)
-#     )
-# surf_n = ax.plot_wireframe(
-#     X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
-#     color="C3", label='|d|'
-# )
-# ax.plot(*(rand_pts[:-2].T),'x-')
-# for i, pt in enumerate(rand_pts[:-2]):
-#     ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
-# ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
-# ax.legend()
+# explainable = ac | na
+#%%
+# i = 528
+# st = np.stack([hypOut[i], outlist[i][0]], axis=1)
+# ac2 = np.isclose(st[:, 0], st[:, 1])
+# err_tups = [(i, n.name, st[i]) for i, n in enumerate(selected_keys) if not ac2[i]]
+# for e in err_tups:
+#     print(e)
 
-# plt.show()
+#%%
+
+rand_out_vec3s_ca = 3 * xyz_ins - 3 * last_fixed_pt + origin_pt
+rand_out_vec3s = xyz_ins + processAllInputs(hypOut, hypJav, hypMats).reshape(GRAPH_RES, GRAPH_RES, 3)
+
+rand_pts_copy = rand_pts.copy()
+sel_out_vec3 = processAllInputs(*(hypCalcer.calculateInputsForNN(rand_pts[5:6].copy())))[0]
+sel_out_vec3 += rand_pts_copy[-2]
+
+#%%
+import matplotlib.pyplot as plt
+
+fig = plt.figure(0)
+fig.clear()
+
+ax = fig.add_subplot(111, projection='3d')
+ax.clear()
+for level in range(3):
+    surf = ax.plot_wireframe(
+        X, Y, rand_out_vec3s[..., level], label='xyz'[level],
+        color="C" + str(level)
+    )
+surf_n = ax.plot_wireframe(
+    X, Y, np.linalg.norm(rand_out_vec3s - xyz_ins, axis=-1),
+    color="C3", label='|d|'
+)
+ax.plot(*(rand_pts[:-2].T),'x-')
+for i, pt in enumerate(rand_pts[:-2]):
+    ax.text(x=pt[0], y=pt[1], z=pt[2], s="x" + str(i))
+ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+ax.legend()
+
+plt.show()
 
 #%%
 import plotly.graph_objects as go

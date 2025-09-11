@@ -60,10 +60,16 @@ def quatsFromAxisAngles(unit_axes, angles):
     quaternions = np.hstack((np.cos(half_angs), np.sin(half_angs) * unit_axes))
     return quaternions
 
+def _defaultReplacementVec(length):
+    ret = np.zeros(length)
+    ret[0] = 1.0
+    return ret
+
 def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
                          vec_for_zero_norms: np.ndarray = None,
                          propagate_last_nonzero_vec: bool = True,
-                         propagate_back_if_first_vecs_zero: bool = False):
+                         propagate_back_if_first_vecs_zero: bool = False,
+                         zero_norm_inds = None):
     '''
     Normalize an array while handling the case where some elements have a norm 
     of zero, which would cause division errors.
@@ -74,6 +80,7 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
         vec_for_zero_norms (np.ndarray): Default vec to replace 0 vecs.
         propagate_last_nonzero_vec (bool): Self-descriptive.
         propagate_back_if_verst_vecs_zero (bool): Self-descriptive.
+        zero_norm_inds: Boolean indices for which vectors have norm of 0.
 
     Returns:
         np.ndarray: The normalized result.
@@ -83,17 +90,19 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
     if norms is None:
         norms = np.linalg.norm(array, axis=-1, keepdims=True)
 
-    zero_norm_inds = (norms == 0).flatten()
+    if zero_norm_inds is None:
+        zero_norm_inds = (norms == 0)
+    zero_norm_inds = zero_norm_inds.flatten()
 
     if not np.any(zero_norm_inds):
         return array / norms
     
-    pos_norm_inds = np.invert(zero_norm_inds)
+    pos_norm_inds = ~np.asarray(zero_norm_inds)
     normed = np.empty_like(array)
     normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
     # For zero axes, we can either use a supplied default vector, create our
     # own default, or propograte the last nonzero vector.
-    if propagate_last_nonzero_vec:
+    if propagate_last_nonzero_vec  and array.ndim > 1:
         # First, we make sure that if the first vec is zero, that we replace it
         # with some default, since there'd be no previous vec to copy.
         if zero_norm_inds[0]:
@@ -106,8 +115,7 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
                             break
                         search_ind += 1
                 else:
-                    replacement_vec = np.zeros(array.shape[-1])
-                    replacement_vec[0] = 1.0
+                    replacement_vec = _defaultReplacementVec(array.shape[-1])
                     normed[0] = replacement_vec
             else:
                 normed[0] = vec_for_zero_norms
@@ -126,8 +134,7 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
         normed[int_zero_inds] = normed[replacement_inds[int_zero_inds]]
     else:
         if vec_for_zero_norms is None:
-            replacement_vec = np.zeros(array.shape[-1])
-            replacement_vec[0] = 1.0
+            replacement_vec = _defaultReplacementVec(array.shape[-1])
             normed[zero_norm_inds] = replacement_vec
         else:
             normed[zero_norm_inds] = vec_for_zero_norms
@@ -154,31 +161,31 @@ def einsumDot(vecs0: np.ndarray, vecs1: np.ndarray) -> np.ndarray:
     # https://stackoverflow.com/questions/15616742/vectorized-way-of-calculating-row-wise-dot-product-two-matrices-with-scipy
     # (see answer with plots further down page)
 
-    return np.einsum('...ij,...ij->...i', vecs0, vecs1)
+    return np.einsum('...j,...j->...', vecs0, vecs1)
 
 def einsumMatVecMul(mats: np.ndarray, vecs: np.ndarray) -> np.ndarray:
     '''
     Multiply each vector in an array of vectors by the corresponding matrix
     from an array of matrices using np.einsum.
     '''
-    return np.einsum('bij,bj->bi', mats, vecs)
+    return np.einsum('...ij,...j->...i', mats, vecs)
 
 def einsumMatMatMul(mats0: np.ndarray, mats1: np.ndarray) -> np.ndarray:
     '''
     Multiply each matrix in an array of matrices with the corresponding matrix
     from a second such array using np.einsum.
     '''
-    return np.einsum("bij,bjk->bik", mats0, mats1)
+    return np.einsum("...ij,...jk->...ik", mats0, mats1)
 
 def scalarsVecsMul(scalars: np.ndarray, vecs: np.ndarray) -> np.ndarray:
     '''
     Multiply each vector in an array of vectors by the corresponding scalar
     from an array of scalars using np.einsum.
     '''
-    return np.einsum('b,bi->bi', scalars, vecs)
+    return np.einsum('...,...i->...i', scalars, vecs)
 
 def scalarsMatsMul(scalars, mats) -> np.ndarray:
-    return np.einsum('b,bij->bij', scalars, mats)
+    return np.einsum('...,...ij->...ij', scalars, mats)
 
 def parallelAndOrthoParts(vectors, dirs, dirs_already_normalized = False):
     dots = einsumDot(vectors, dirs)
@@ -194,7 +201,8 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
                          vecs1: typing.Optional[np.ndarray] = None,
                          vecs2: typing.Optional[np.ndarray] = None, 
                          vecs0_are_unit_len: bool = False,
-                         zero_thresh = DEFAULT_ZERO_ANG_THRESH):
+                         zero_thresh = DEFAULT_ZERO_ANG_THRESH,
+                         set_zeros_to_zero: bool = False):
     vecs1_na = (vecs1 is None)
     vecs2_na = (vecs2 is None)
 
@@ -207,7 +215,7 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
     ret_mags = (mags0,)
     
     unit_vecs0 = vecs0 if vecs0_are_unit_len else safelyNormalizeArray(
-        vecs0, mags0[:, np.newaxis]
+        vecs0, mags0 if vecs0.ndim == 1 else mags0[:, np.newaxis]
     )
 
     if vecs1_na:
@@ -223,41 +231,25 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
     # vecs_o1[i] will be zero vectors, and can't be normalized, if any vecs0[i]
     # and vecs1[i] are parallel for some i.
     # First, we need to figure out where that happens.
-    is_parallel = (mags_o1 < zero_thresh)
-    # Find out, further, when we are also parallel to [1, 0, 0].
-    is_parallel_x_sub = (
-        np.linalg.norm(unit_vecs0[is_parallel][..., 1:], axis=-1) < zero_thresh
-    )
-    is_parallel_x = is_parallel.copy()
-    is_parallel_not_x = is_parallel.copy()
-    is_parallel_x[is_parallel] &= is_parallel_x_sub
-    is_parallel_not_x[is_parallel] &= (~is_parallel_x_sub)
-
-
+    v1_is_parallel = np.asarray(mags_o1 < zero_thresh)
     unit_vecs1 = np.empty_like(unit_vecs0)
-    unit_vecs1[is_parallel_x] = [0.0, 1.0, 0.0]
-    # Replacement of vecs_o1 via Householde transformation:
-    refls = np.empty((np.count_nonzero(is_parallel_not_x), 3))
-    unit_vecs0_not_x = unit_vecs0[is_parallel_not_x]
-    refls[..., 1:] = unit_vecs0_not_x[..., 1:]
-    refls[..., 0] = unit_vecs0_not_x[..., 0] - 1.0
-    refl_scale = 2 / einsumDot(refls, refls)
-    unit_vecs1[is_parallel_not_x] = -scalarsVecsMul(
-        refl_scale * refls[..., 2], refls
-    )
-    unit_vecs1[is_parallel_not_x, 2] += 1.0 
 
-    is_not_parallel = ~is_parallel
-    unit_vecs1[is_not_parallel] = safelyNormalizeArray(
-        vecs_o1[is_not_parallel], mags_o1[is_not_parallel, np.newaxis]
-    )
+    v1_not_parallel = ~v1_is_parallel
+    mags_o1_div = mags_o1[
+        v1_not_parallel, ... if vecs_o1.ndim == 1 else np.newaxis
+    ]
+    unit_vecs1[v1_not_parallel] = vecs_o1[v1_not_parallel] / mags_o1_div
 
     if not vecs1_na:
         ret_mags += (mags_p1, mags_o1)
 
     unit_vecs2: np.ndarray
+    v2_is_parallel: np.ndarray
+    v2_not_parallel: np.ndarray
     if vecs2_na:
         unit_vecs2 = np.cross(unit_vecs0, unit_vecs1)
+        v2_is_parallel = v1_is_parallel.copy()
+        v2_not_parallel = v1_not_parallel.copy()
     else:
         mags_p20 = einsumDot(vecs2, unit_vecs0) # Parallel magnitude
         vecs_p20 = scalarsVecsMul(mags_p20, unit_vecs0)
@@ -267,35 +259,78 @@ def getOrthonormalFrames(returned_mats_are_world2vecs: bool, vecs0: np.ndarray,
         mags_o2 = np.linalg.norm(vecs_o2, axis=-1)
 
         unit_vecs2 = np.empty_like(unit_vecs0)
-        unit_vecs2[is_parallel_x] = [0.0, 0.0, 1.0]
-        # Householder version also applied here:
-        unit_vecs2[is_parallel_not_x] = -scalarsVecsMul(
-            refl_scale * refls[..., 1], refls
-        )
-        unit_vecs2[is_parallel_not_x, 1] += 1.0
 
-        # We might also have vecs0 and vecs1 be non-parallel but have vecs2 lie
-        # in their plane, which we must also deal with.
-        is_planar = (mags_o2 < zero_thresh) & is_not_parallel
-        unit_vecs2[is_planar] = np.cross(
-            unit_vecs0[is_planar], unit_vecs1[is_planar]
-        )
+        v2_is_parallel = np.asarray(mags_o2 < zero_thresh)
 
-        is_not_planar = is_not_parallel & (~is_planar) # A^!(B^A)=A^(!Bv!A)
-        unit_vecs2[is_not_planar] = safelyNormalizeArray(
-            vecs_o2[is_not_planar], mags_o2[is_not_planar, np.newaxis]
-        )
-
+        v2_not_parallel = ~v2_is_parallel
+        mags_o2_div = mags_o2[
+            v2_not_parallel, ... if vecs_o2.ndim == 1 else np.newaxis
+        ]
+        unit_vecs2[v2_not_parallel] = vecs_o2[v2_not_parallel] / mags_o2_div
+            
 
         ret_mags += (mags_p20, mags_p21, mags_o2)
+    
 
-    stack_ax = 1 if returned_mats_are_world2vecs else 2
+    if set_zeros_to_zero:
+        unit_vecs1[v1_is_parallel] = 0.0
+        unit_vecs2[v2_is_parallel] = 0.0
+    else:
+        # If we have access to non-parallel vec2s, we can use those to set the
+        # parallel vec1s and vice versa.
+        v1_p_v2_n = v1_is_parallel & v2_not_parallel
+        unit_vecs1[v1_p_v2_n] = np.cross(
+            unit_vecs2[v1_p_v2_n], unit_vecs0[v1_p_v2_n]
+        )
+        v2_p_v1_n = v2_is_parallel & v1_not_parallel
+        unit_vecs2[v2_p_v1_n] = np.cross(
+            unit_vecs0[v2_p_v1_n], unit_vecs1[v2_p_v1_n]
+        )
+
+        # For cases where *both* are parallel, we'll use a Householder transform
+        # to craft frame.
+        # TODO: Have option to propagate previous frames via RMF. 
+        v1v2_is_parallel = v1_is_parallel & v2_is_parallel
+
+        # Find out, further, when we vecs0 are parallel to [1, 0, 0].
+        v0_non_x_norms = np.linalg.norm(
+            unit_vecs0[v1v2_is_parallel][..., 1:], axis=-1
+        )
+        v0_x_parallel_subs = np.asarray(v0_non_x_norms < zero_thresh)
+        v0_is_x_parallel = v1v2_is_parallel.copy()
+        v0_not_x_parallel = v1v2_is_parallel.copy()
+        v0_is_x_parallel[v1v2_is_parallel] &= v0_x_parallel_subs
+        v0_not_x_parallel[v1v2_is_parallel] &= (~v0_x_parallel_subs)
+
+        unit_vecs1[v0_is_x_parallel] = [0.0, 1.0, 0.0]
+        unit_vecs2[v0_is_x_parallel] = [0.0, 0.0, 1.0]
+        # Replacement of vecs_o1 via Householder transformation:
+        unit_vecs0_not_x = unit_vecs0[v0_not_x_parallel]
+        refls = np.empty_like(unit_vecs0_not_x)
+        refls[..., 1:] = unit_vecs0_not_x[..., 1:]
+        refls[..., 0] = unit_vecs0_not_x[..., 0] - 1.0
+        refl_scale = 2 / einsumDot(refls, refls)
+
+        unit_vecs1[v0_not_x_parallel] = -scalarsVecsMul(
+            refl_scale * refls[..., 2], refls
+        )
+        unit_vecs1[v0_not_x_parallel, 2] += 1.0
+
+        # Householder version also applied here:
+        unit_vecs2[v0_not_x_parallel] = -scalarsVecsMul(
+            refl_scale * refls[..., 1], refls
+        )
+        unit_vecs2[v0_not_x_parallel, 1] += 1.0
+
+
+    stack_ax = -2 if returned_mats_are_world2vecs else -1
 
     all_unit_vecs = (unit_vecs0, unit_vecs1, unit_vecs2)
-    if not areAxisArraysOrthonormal(all_unit_vecs, loud=True):
-        raise Exception((
-            "Generated matrices were not orthonormal!"
-        ))
+    if not set_zeros_to_zero:
+        if not areAxisArraysOrthonormal(all_unit_vecs, loud=True):
+            raise Exception((
+                "Generated matrices were not orthonormal!"
+            ))
     mats = np.stack(all_unit_vecs, axis=stack_ax)
 
     return ret_mags, mats

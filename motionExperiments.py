@@ -92,7 +92,7 @@ def getRandomQuatError(shape, max_err_rads):
 # - Only use (RK4, fa-acc) when acc is within some sort of time-based limit.
 # -   dot-mag fixed-axis.
 # - O(3)
-def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats):
+def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats, abs_angles):
     # Stuff that's needed for all of the predictions below:
     ang_vel_vecs = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
     ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
@@ -106,7 +106,7 @@ def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations
 
 
     constspeed_extrap_vecs = pm.scalarsVecsMul(
-        angles[1:-1], pm.normalizeAll(extrap_ang_vel_vecs)
+        abs_angles[1:-1], pm.normalizeAll(extrap_ang_vel_vecs)
     )
 
     interp_ang_vels2 = np.linspace(ang_vel_vecs[1:], constspeed_extrap_vecs, 33, axis=1)
@@ -162,7 +162,7 @@ def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations
 
     # Non-numerical fixed-axis dot thing.
     parallel_ang_acc_scalars = pm.einsumDot(ang_acc_vecs, fixed_axes[1:-1])
-    parallel_angs = angles[1:-1] + parallel_ang_acc_scalars**2
+    parallel_angs = angles[1:-1] + parallel_ang_acc_scalars
     accproj_diffs = pm.quatsFromAxisAngles(fixed_axes[1:-1], parallel_angs)
     accproj_preds = pm.multiplyQuatLists(accproj_diffs, rotations_quats[2:-1])
 
@@ -801,6 +801,7 @@ for i, combo in enumerate(combos):
     
     fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs, True)
     angles = angles.flatten()
+    abs_angles = np.abs(angles)
     scaled_axes = pm.scalarsVecsMul(angles, fixed_axes)
 
     allResultsObj.updateGroundTruth(
@@ -984,7 +985,7 @@ for i, combo in enumerate(combos):
 
 
     # angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
-    max_angle = max(max_angle, angles.max())
+    max_angle = max(max_angle, abs_angles.max())
 
 
     angle_diffs = np.diff(angles, 1, axis=0)
@@ -996,7 +997,7 @@ for i, combo in enumerate(combos):
 
     next_axis_angs = pm.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
     angle_diffs2 = angles[1:-1] - next_axis_angs
-    angle_ratios2 = 2 + (np.clip(angle_diffs2, a_min = None, a_max = 0)/angles[1:-1])
+    angle_ratios2 = np.clip(2 + (angle_diffs2/angles[1:-1]), a_min = None, a_max = 2)
 
     r_fixed_axis_preds = np.empty((len(rotations) - 2, 4))
     r_fixed_axis_preds[1:] = pm.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
@@ -1188,7 +1189,7 @@ for i, combo in enumerate(combos):
     if ADD_NUMERICAL_TESTS:
         numerical_res_dict = numericalIdeas(
             angles, fixed_axes, angle_diffs, r_fixed_axis_closest_angs,
-            r_next_fixed_axis_closest_angs, rotations_quats
+            r_next_fixed_axis_closest_angs, rotations_quats, abs_angles
         )
         for numerical_k, numerical_r in numerical_res_dict.items():
             if numerical_r.shape[1] != 4:
@@ -1198,7 +1199,8 @@ for i, combo in enumerate(combos):
             allResultsObj.addQuaternionResult(numerical_k, numerical_r_full)
 
         rk_dec_only = r_vel_preds.copy()
-        ang_dec_inds = angle_diffs[:-1] < 0.0
+        diffs_of_abs_angles = np.diff(abs_angles, 1, axis=0)
+        ang_dec_inds = diffs_of_abs_angles[:-1] < 0.0
         rk_dec_only[1:][ang_dec_inds] = numerical_res_dict["RK"][ang_dec_inds]
 
 
