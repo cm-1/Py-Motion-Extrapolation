@@ -33,20 +33,37 @@ model_loads = loadLatestModels(model_prefixes)
 
 #%% Choose transforms for the first frames.
 from gtCommon import PoseLoaderBCOT
-train_bcot_ids, val_bcot_ids, test_bcot_ids = \
-    PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
-# all_bcot_ids = PoseLoaderBCOT.getAllIDs()
 
-bcot_statics = PoseLoaderBCOT.getStaticStartSample(
-    [v[:2] for v in test_bcot_ids], True, NUM_BCOT_SAMPLES, True
-)
-rand_pts, default_aas = bcot_statics[0]
+# Get the video IDs for each set
+train_bcot_ids, val_bcot_ids, test_bcot_ids = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
 
+# Dictionary to store sequences from each set
+sequence_sets = {
+    'Train': [v[:2] for v in train_bcot_ids],
+    'Validation': [v[:2] for v in val_bcot_ids],
+    'Test': [v[:2] for v in test_bcot_ids]
+}
+
+# Get sequences for each set
+sequences_by_set = {
+    set_name: PoseLoaderBCOT.getStaticStartSample([v[
+        :2] for v in vid_ids], True, NUM_BCOT_SAMPLES, True
+    )
+    for set_name, vid_ids in sequence_sets.items()
+}
+
+# Initialize with test set, first sequence
+current_set = 'Test'
+current_sequences = sequences_by_set[current_set]
+current_seq_idx = 0
+
+rand_pts, default_aas = current_sequences[0]  # Start with first sequence
 rand_pts.setflags(write=False)
 default_aas.setflags(write=False)
 
 last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
 orig_dynamic_pt = rand_pts[DYNAMIC_PT_IND]
+
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
 hc = HypotheticalInputsForNN(
@@ -130,6 +147,26 @@ fig.update_layout(
     )
 )
 
+#%% Interactive controls setup
+# Add set selector and sequence selector before the existing controls
+set_selector = widgets.RadioButtons(
+    options=['Train', 'Validation', 'Test'],
+    value='Test',
+    description='Dataset:',
+    style={'description_width': 'initial'}
+)
+
+# Create sequence selector - will update its max value based on set selection
+seq_selector = widgets.IntSlider(
+    value=0,
+    min=0,
+    max=len(sequences_by_set['Test']) - 1,  # Initial max for test set
+    step=1,
+    description='Sequence:',
+    style={'description_width': 'initial'}
+)
+
+
 sliders = [
     widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description=axis)
     for axis in "XYZ"
@@ -145,6 +182,77 @@ model_selector = widgets.ToggleButtons(
 
 current_model_name = model_prefixes[0]
 
+def update_sequence_selector(change):
+    """Update available sequences when dataset changes"""
+    global current_set, current_sequences, rand_pts, default_aas, last_fixed_pt
+    current_set = change['new']
+
+    current_sequences = sequences_by_set[current_set]
+    
+    # Update sequence selector range
+    seq_selector.max = len(current_sequences) - 1
+    seq_selector.value = 0
+    
+    # Clear and redraw all sequence traces
+    fig.data = []  # Clear all traces
+    
+    # Add background traces for all sequences in gray
+    for pts, _ in current_sequences:
+        fig.add_trace(getLines("fixed_pts_bg", pts[:DYNAMIC_PT_IND], color="lightgray"))
+        fig.add_trace(getLines("gt_pts_bg", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "lightgray"))
+    
+    # Add main visualization traces
+    rand_pts, default_aas = current_sequences[0]
+    last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
+    
+    # Add scatter plots for nn_out and const_acc
+    disp_cols = getColourMags(hyp_dyn_pts_list, last_fixed_pt)
+    fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
+    fig.add_trace(getScatter("const_acc", hc.getConstAccPreds(hyp_dyn_pts_list), disp_cols))
+    
+    # Add highlighted sequence traces
+    fig.add_trace(getLines("fixed_pts", rand_pts[:DYNAMIC_PT_IND], color="black"))
+    fig.add_trace(getLines("gt_pts", rand_pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green"))
+    
+    # Add single point visualization
+    sel_out_vec3 = inferBCOT(hc, rand_pts[DYNAMIC_PT_IND])[0]
+    nn_single_vis_pts = np.stack([rand_pts[DYNAMIC_PT_IND], sel_out_vec3], axis=0)
+    fig.add_trace(getLines("nn_single_pts", nn_single_vis_pts, DYNAMIC_PT_IND, "red"))
+    
+    # Reset sliders to match new sequence
+    update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
+
+def update_selected_sequence(change):
+    """Update visualization when sequence index changes"""
+    global rand_pts, default_aas, last_fixed_pt
+    idx = change['new']
+    rand_pts, default_aas = current_sequences[idx]
+    last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
+    
+    # Update highlighted sequence traces only
+    fig.update_traces(
+        x=rand_pts[:DYNAMIC_PT_IND, 0],
+        y=rand_pts[:DYNAMIC_PT_IND, 1],
+        z=rand_pts[:DYNAMIC_PT_IND, 2],
+        selector={"name": "fixed_pts"}
+    )
+    fig.update_traces(
+        x=rand_pts[DYNAMIC_PT_IND:, 0],
+        y=rand_pts[DYNAMIC_PT_IND:, 1],
+        z=rand_pts[DYNAMIC_PT_IND:, 2],
+        selector={"name": "gt_pts"}
+    )
+    
+    # Update sliders to match new sequence
+    update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
+    # This will trigger update_plot which will update nn_out and const_acc
+
+def update_sliders_from_point(point):
+    """Update slider values without triggering callbacks"""
+    for i in range(3):
+        sliders[i].value = point[i]
+    update_plot(None)
+
 def set_model(change):
     global inferBCOT, current_model_name
     current_model_name = change["new"]
@@ -153,7 +261,6 @@ def set_model(change):
     )
     update_plot(None)
 
-model_selector.observe(set_model, names="value")
 
 def update_plot(value):
     """When sliders move, update selected point + recompute x6 with selected model."""
@@ -179,8 +286,11 @@ def update_plot(value):
         x=new_ca_outs[:, 0], y=new_ca_outs[:, 1], z=new_ca_outs[:, 2],
         marker=markers, selector=({"name": "const_acc"})
     )
-    
 
+# Connect callbacks    
+set_selector.observe(update_sequence_selector, names='value')
+seq_selector.observe(update_selected_sequence, names='value')
+model_selector.observe(set_model, names="value")
 for s in sliders:
     s.observe(update_plot, names="value")
 
@@ -188,6 +298,11 @@ for s in sliders:
 update_plot(None)
 
 
-ui = widgets.VBox([model_selector, fig, *sliders])
+# Display the interactive visualization
+ui = widgets.VBox([
+    widgets.HBox([set_selector, seq_selector]),
+    model_selector,
+    fig
+] + sliders)
 display(ui)
 
