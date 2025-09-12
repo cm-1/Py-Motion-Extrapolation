@@ -299,37 +299,72 @@ class PoseLoader(ABC):
         return PoseLoader._randHelper(1, upper, lower)[0]
     
     @classmethod
-    def getStaticStartSample(cls, vid_ids, realign, thresh = 4.0):
+    def getStaticStartSample(cls, vid_ids, realign: bool, num_to_find: int = -1,
+                             verbose: bool = False, thresh = 4.0):
+        '''
+        Get a set of sample points (enough needed to calculate crackle) from
+        a set of specified videos where the object is barely moving for the 
+        first few frames.
+
+        Parameters:
+            vid_ids (list): List of video identifier tuples to search through
+                for a suitable static start sequence
+            realign (bool): Whether to realign the coordinate frame based on
+                the motion direction between the last fixed point and the
+                dynamic point
+            num_to_find (int): How many such sequences to find (if possible).
+                Defaults to -1, meaning to find all possible ones.
+            verbose (bool, optional): Whether to print out information on
+                successfulness. Defaults to False.
+            thresh (float, optional): Maximum allowable sum of speeds for the
+                early fixed points to consider the sequence "static". Defaults
+                to 4.0.
+
+        Returns:
+            list: A list of 2-tuples of arrays (pts_subset, aas_subset) where:
+                - pts_subset (ndarray): Array of point positions, potentially
+                realigned and translated if realign=True
+                - aas_subset (ndarray): Array of rotations (as axis-angles),
+                potentially realigned if realign=True
+        '''
         loaders = [cls(*i) for i in vid_ids]
-        found_ind = -1
+        rets = []
+        num_found = 0
         for tl in loaders:
             num_non_gt_frames = GT_PT_IND
             tl_diffs = np.diff(tl.getTranslationsGTNP(), 1, axis=0)
             tl_diff_subset = tl_diffs[:num_non_gt_frames]
-            for i in range(0, len(tl_diffs) - num_non_gt_frames + 1):
+            i = 0
+            i_lim = (len(tl_diffs) - num_non_gt_frames + 1)
+            while i < i_lim and (num_found < num_to_find or num_to_find < 0):
                 tl_diff_subset = tl_diffs[i:(i + num_non_gt_frames)]
                 early_speeds = np.linalg.norm(
                     tl_diff_subset[:LAST_FIXED_PT_IND], axis=-1
                 )
                 if np.sum(early_speeds) < thresh:
-                    found_ind = i
-                    # break
-            if found_ind >= 0:
-                end_found = found_ind + num_non_gt_frames
-                tl_diff_subset = tl_diffs[found_ind:end_found]
-                aas_subset = tl.getRotationsGTNP()[found_ind:(end_found + 1)]
-                pts_subset = tl.getTranslationsGTNP()[found_ind:(end_found + 1)]
-                if realign:
-                    diff_mat = pm.getOrthonormalFrames(
-                        False,
-                        tl_diff_subset[LAST_FIXED_PT_IND - 1:LAST_FIXED_PT_IND],
-                        tl_diff_subset[LAST_FIXED_PT_IND:DYNAMIC_PT_IND]
-                    )[1][0]
-                    aas_subset = aas_subset @ diff_mat
-                    new_frame_pts = pts_subset @ diff_mat
-                    pts_subset = new_frame_pts - new_frame_pts[LAST_FIXED_PT_IND - 1]
+                    end_found = i + num_non_gt_frames + 1
+                    aas_subset = tl.getRotationsGTNP()[i:end_found]
+                    pts_subset = tl.getTranslationsGTNP()[i:end_found]
+                    if realign:
+                        diff_mat = pm.getOrthonormalFrames(
+                            False,
+                            tl_diff_subset[LAST_FIXED_PT_IND - 1:LAST_FIXED_PT_IND],
+                            tl_diff_subset[LAST_FIXED_PT_IND:DYNAMIC_PT_IND]
+                        )[1][0]
+                        aas_subset = aas_subset @ diff_mat
+                        new_frame_pts = pts_subset @ diff_mat
+                        pts_subset = new_frame_pts - new_frame_pts[LAST_FIXED_PT_IND - 1]
+                    rets.append((pts_subset, aas_subset))
+                    num_found += 1
+                    i = end_found
+                else:
+                    i += 1
+            if (num_found >= num_to_find and num_to_find > 0):
                 break
-        return pts_subset, aas_subset
+        if verbose:
+            find_str = str(num_to_find) if num_to_find > 0 else "all"
+            print("Found {}/{} static sequences.".format(num_found, find_str))
+        return rets
 
 
 class SyntheticPoseLoader(PoseLoader):

@@ -17,6 +17,8 @@ import posemath as pm
 GRAPH_RES = 50
 DISP_RADIUS = 32.0
 
+NUM_BCOT_SAMPLES = 32
+
 #%% Load things from disk.
 
 # Load the unit scaler that's been saved to disk.
@@ -31,11 +33,14 @@ model_loads = loadLatestModels(model_prefixes)
 
 #%% Choose transforms for the first frames.
 from gtCommon import PoseLoaderBCOT
-_, __, test_bcot_ids = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
+train_bcot_ids, val_bcot_ids, test_bcot_ids = \
+    PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
+# all_bcot_ids = PoseLoaderBCOT.getAllIDs()
 
-rand_pts, default_aas = PoseLoaderBCOT.getStaticStartSample(
-    [v[:2] for v in test_bcot_ids], True
+bcot_statics = PoseLoaderBCOT.getStaticStartSample(
+    [v[:2] for v in test_bcot_ids], True, NUM_BCOT_SAMPLES, True
 )
+rand_pts, default_aas = bcot_statics[0]
 
 rand_pts.setflags(write=False)
 default_aas.setflags(write=False)
