@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 
 from motiontools.posefeatures import HypotheticalInputsForNN
 
-from motiontools.dataorg import UnitAwareScaler
+from motiontools.dataorg import UnitAwareScaler, joinArrays
 from motiontools.shared_constants import *
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.nn_inference import getHypotheticalOutputsNN
@@ -45,51 +45,56 @@ sequence_sets = {
 }
 
 # Get sequences for each set
-sequences_by_set = {
-    set_name: PoseLoaderBCOT.getStaticStartSample([v[
-        :2] for v in vid_ids], True, NUM_BCOT_SAMPLES, True
+sequences_by_set = dict()
+for set_name, vid_ids in sequence_sets.items():
+    tup_list = PoseLoaderBCOT.getStaticStartSample(
+        [v[:2] for v in vid_ids], True, NUM_BCOT_SAMPLES, True
     )
-    for set_name, vid_ids in sequence_sets.items()
-}
+    pose_info = np.stack(tup_list, axis=0)
+    pose_info.setflags(write=False)
+    sequences_by_set[set_name] = pose_info 
 
 # Initialize with test set, first sequence
 current_set = 'Test'
 current_sequences = sequences_by_set[current_set]
 current_seq_idx = 0
 
-rand_pts, default_aas = current_sequences[0]  # Start with first sequence
-rand_pts.setflags(write=False)
-default_aas.setflags(write=False)
-
-last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
-orig_dynamic_pt = rand_pts[DYNAMIC_PT_IND]
-
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
+all_statics = np.concatenate(list(sequences_by_set.values()), axis=0)
+
+all_last_fixed = all_statics[:, 0, LAST_FIXED_PT_IND]
+all_orig_dynamic = all_statics[:, 0, DYNAMIC_PT_IND]
+radii = np.linalg.norm(all_orig_dynamic - all_last_fixed, axis=-1)
+
+max_mag = min(DISP_RADIUS, np.max(radii) * 1.1)
+max_mag = 0.1
+
+
+def updateHC(hc: HypotheticalInputsForNN, pts_and_aas: NDArray):
+    pts, aas = pts_and_aas.copy()
+    hc.updatePrecalcs(
+        pts[:DYNAMIC_PT_IND], pm.matsFromScaledAxisAngleArray(aas[:GT_PT_IND])
+    )
+
+init_pts, init_aas = current_sequences[0].copy()
+
 hc = HypotheticalInputsForNN(
-    rand_pts[:DYNAMIC_PT_IND].copy(),
-    pm.matsFromScaledAxisAngleArray(default_aas[:GT_PT_IND].copy()),
+    init_pts[:DYNAMIC_PT_IND],
+    pm.matsFromScaledAxisAngleArray(init_aas[:GT_PT_IND]),
     1, scaler.column_keys
 )
 
-max_mag = min(
-    DISP_RADIUS, np.linalg.norm(orig_dynamic_pt - last_fixed_pt) * 1.1
-)
 
 inferBCOT = functools.partial(
     getHypotheticalOutputsNN, model_loads[model_prefixes[0]], scaler
 )
-
-hyp_dyn_pts_list = hc.getInputGridOfVec3s(GRAPH_RES, max_mag, orig_dynamic_pt)
-
-nn_out_list = inferBCOT(hc, hyp_dyn_pts_list)
 
 #%%
 import plotly.graph_objects as go
 import ipywidgets as widgets
 from IPython.display import display
 
-fig = go.FigureWidget()
 
 def getColourMags(input_pts: NDArray, ref_pt: NDArray):
     mags = np.linalg.norm(input_pts - ref_pt, axis=-1).flatten()
@@ -105,12 +110,23 @@ def getScatterMarkers(input_color_vals: typing.Optional[NDArray] = None,
     return marker_spec
 
 def getLines(name: str, pts: NDArray, min_label_ind: int = 0, color="black",
-             size=5):
-    labels = [f"x{i}" for i in range(min_label_ind, min_label_ind + len(pts))]
+             size=1, use_labels: bool = True):
+    labels = None
+    mode = "lines+markers"
+    if use_labels:
+        if np.any(np.isnan(pts)):
+            raise NotImplementedError(
+                "Labels for disjoint lines not supported!"
+            )
+        labels = [
+            f"x{i}" for i in range(min_label_ind, min_label_ind + len(pts))
+        ]
+        mode += "+text"
+    
     return go.Scatter3d(
-        x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], mode="lines+markers+text",
-        name=name, text=labels, textposition="top center",
-        line=dict(color=color), marker=dict(size=size, symbol="x"),
+        x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], mode=mode, name=name,
+        text=labels, textposition="top center", line=dict(color=color),
+        marker=dict(size=size, symbol="x"),
     )
 
 def getScatter(name: str, pts: NDArray,
@@ -123,31 +139,7 @@ def getScatter(name: str, pts: NDArray,
         marker=marker_spec
     )
 
-disp_cols = getColourMags(hyp_dyn_pts_list, last_fixed_pt)
-fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
-
-fig.add_trace(
-    getScatter("const_acc", hc.getConstAccPreds(hyp_dyn_pts_list), disp_cols)
-) 
-
-# Add polyline and markers
-fig.add_trace(getLines("fixed_pts", rand_pts[:DYNAMIC_PT_IND]))
-fig.add_trace(
-    getLines("gt_pts", rand_pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green")
-)
-sel_out_vec3 = inferBCOT(hc, orig_dynamic_pt)[0]
-nn_single_vis_pts = np.stack([rand_pts[DYNAMIC_PT_IND], sel_out_vec3], axis=0)
-fig.add_trace(
-    getLines("nn_single_pts", nn_single_vis_pts, DYNAMIC_PT_IND, "red")
-)
-
-fig.update_layout(
-    scene=dict(
-        xaxis_title="x", yaxis_title="y", zaxis_title="z", aspectmode="data"
-    )
-)
-
-#%% Interactive controls setup
+# Interactive controls setup
 # Add set selector and sequence selector before the existing controls
 set_selector = widgets.RadioButtons(
     options=['Train', 'Validation', 'Test'],
@@ -172,19 +164,48 @@ sliders = [
     for axis in "XYZ"
 ]
 
-rand_pts_copy = rand_pts.copy()
-
 model_selector = widgets.ToggleButtons(
     options=model_prefixes,
     description="Model:",
     style={"description_width": "initial"}
 )
+#%%
+fig = go.FigureWidget()
+fig.update_layout(
+    scene=dict(
+        xaxis_title="x", yaxis_title="y", zaxis_title="z", aspectmode="data"
+    )
+)
+
 
 current_model_name = model_prefixes[0]
 
+def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN, form_markers: bool):
+    global max_mag, GRAPH_RES
+    main_hyp_pt = np.array([s.value for s in sliders])
+
+    # with fig.batch_update():
+    new_hyp_dyn_pts = hc.getInputGridOfVec3s(GRAPH_RES, max_mag, main_hyp_pt)
+    col_mags = getColourMags(new_hyp_dyn_pts, main_hyp_pt)
+    if form_markers:
+        col_mags = getScatterMarkers(col_mags)
+
+    # NN output from currently selected model
+    new_nn_outs = inferBCOT(hc, new_hyp_dyn_pts)
+    new_ca_outs = hc.getConstAccPreds(new_hyp_dyn_pts)
+
+    return (new_nn_outs, new_ca_outs, col_mags)
+
+def get_pred_orig_dyn(hc: HypotheticalInputsForNN, pts: NDArray):
+    
+    d_pt = pts[DYNAMIC_PT_IND]
+    sel_out_vec3 = inferBCOT(hc, d_pt)[0]
+    nn_single_vis_pts = np.stack([d_pt, sel_out_vec3], axis=0)
+    return nn_single_vis_pts
+
 def update_sequence_selector(change):
     """Update available sequences when dataset changes"""
-    global current_set, current_sequences, rand_pts, default_aas, last_fixed_pt
+    global current_set, current_sequences, hc
     current_set = change['new']
 
     current_sequences = sequences_by_set[current_set]
@@ -197,55 +218,69 @@ def update_sequence_selector(change):
     fig.data = []  # Clear all traces
     
     # Add background traces for all sequences in gray
-    for pts, _ in current_sequences:
-        fig.add_trace(getLines("fixed_pts_bg", pts[:DYNAMIC_PT_IND], color="lightgray"))
-        fig.add_trace(getLines("gt_pts_bg", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "lightgray"))
+    bg_fixed_pts = joinArrays([c[0][:DYNAMIC_PT_IND] for c in current_sequences])
+    bg_gt_pts = joinArrays([c[0][DYNAMIC_PT_IND:] for c in current_sequences])
+    
+    fig.add_trace(getLines(
+        "fixed_pts_bg", bg_fixed_pts, color="lightgray", size=1,
+        use_labels=False
+    ))
+    fig.add_trace(getLines(
+        "gt_pts_bg", bg_gt_pts, DYNAMIC_PT_IND,
+        color="gray", size=1, use_labels=False
+    ))
     
     # Add main visualization traces
-    rand_pts, default_aas = current_sequences[0]
-    last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
-    
+    pts = current_sequences[0][0]
+    updateHC(hc, current_sequences[0])
+
+    nn_out_list, ca, disp_cols = get_nn_ca_marker_outputs(hc, False)
     # Add scatter plots for nn_out and const_acc
-    disp_cols = getColourMags(hyp_dyn_pts_list, last_fixed_pt)
     fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
-    fig.add_trace(getScatter("const_acc", hc.getConstAccPreds(hyp_dyn_pts_list), disp_cols))
+    fig.add_trace(getScatter("const_acc",ca, disp_cols))
     
     # Add highlighted sequence traces
-    fig.add_trace(getLines("fixed_pts", rand_pts[:DYNAMIC_PT_IND], color="black"))
-    fig.add_trace(getLines("gt_pts", rand_pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green"))
+    fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], color="black"))
+    fig.add_trace(getLines("gt_pts", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green"))
     
     # Add single point visualization
-    sel_out_vec3 = inferBCOT(hc, rand_pts[DYNAMIC_PT_IND])[0]
-    nn_single_vis_pts = np.stack([rand_pts[DYNAMIC_PT_IND], sel_out_vec3], axis=0)
-    fig.add_trace(getLines("nn_single_pts", nn_single_vis_pts, DYNAMIC_PT_IND, "red"))
+    nn_for_orig_dyn = get_pred_orig_dyn(hc, pts)
+    fig.add_trace(getLines(
+        "nn_single_pts", nn_for_orig_dyn, DYNAMIC_PT_IND, "red"
+    ))
     
     # Reset sliders to match new sequence
-    update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
+    update_sliders_from_point(pts[DYNAMIC_PT_IND])
 
 def update_selected_sequence(change):
     """Update visualization when sequence index changes"""
-    global rand_pts, default_aas, last_fixed_pt
+    global hc
     idx = change['new']
-    rand_pts, default_aas = current_sequences[idx]
-    last_fixed_pt = rand_pts[LAST_FIXED_PT_IND]
+    pts, _ = current_sequences[idx]
     
     # Update highlighted sequence traces only
     fig.update_traces(
-        x=rand_pts[:DYNAMIC_PT_IND, 0],
-        y=rand_pts[:DYNAMIC_PT_IND, 1],
-        z=rand_pts[:DYNAMIC_PT_IND, 2],
+        x=pts[:DYNAMIC_PT_IND, 0],
+        y=pts[:DYNAMIC_PT_IND, 1],
+        z=pts[:DYNAMIC_PT_IND, 2],
         selector={"name": "fixed_pts"}
     )
     fig.update_traces(
-        x=rand_pts[DYNAMIC_PT_IND:, 0],
-        y=rand_pts[DYNAMIC_PT_IND:, 1],
-        z=rand_pts[DYNAMIC_PT_IND:, 2],
+        x=pts[DYNAMIC_PT_IND:, 0],
+        y=pts[DYNAMIC_PT_IND:, 1],
+        z=pts[DYNAMIC_PT_IND:, 2],
         selector={"name": "gt_pts"}
     )
-    
+    nnps = get_pred_orig_dyn(hc, pts)
+    fig.update_traces(
+        x=nnps[:, 0], y=nnps[:, 1], z=nnps[:, 2],
+        selector={"name": "nn_single_pts"}
+    )
+
     # Update sliders to match new sequence
-    update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
+    # update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
     # This will trigger update_plot which will update nn_out and const_acc
+    update_plot(None)
 
 def update_sliders_from_point(point):
     """Update slider values without triggering callbacks"""
@@ -261,27 +296,16 @@ def set_model(change):
     )
     update_plot(None)
 
-
 def update_plot(value):
     """When sliders move, update selected point + recompute x6 with selected model."""
-    idx = DYNAMIC_PT_IND
-    rand_pts_copy[idx] = np.array([s.value for s in sliders])
-    main_hyp_pt = rand_pts_copy[idx]
-
-    # with fig.batch_update():
-    new_hyp_dyn_pts = hc.getInputGridOfVec3s(GRAPH_RES, max_mag, main_hyp_pt)
-    col_mags = getColourMags(new_hyp_dyn_pts, main_hyp_pt)
-    markers = getScatterMarkers(col_mags)
-
-    # NN output from currently selected model
-    new_nn_outs = inferBCOT(hc, new_hyp_dyn_pts)
+    global hc
+    new_nn_outs, new_ca_outs, markers = get_nn_ca_marker_outputs(hc, True)
     fig.update_traces(
         x=new_nn_outs[:, 0], y=new_nn_outs[:, 1], z=new_nn_outs[:, 2],
         marker=markers, selector=({"name": "nn_out"})
     )
 
     # constant-acc comparison
-    new_ca_outs = hc.getConstAccPreds(new_hyp_dyn_pts)
     fig.update_traces(
         x=new_ca_outs[:, 0], y=new_ca_outs[:, 1], z=new_ca_outs[:, 2],
         marker=markers, selector=({"name": "const_acc"})
@@ -295,6 +319,7 @@ for s in sliders:
     s.observe(update_plot, names="value")
 
 # Initialize sliders with point 0
+update_sequence_selector({"new": current_set})
 update_plot(None)
 
 

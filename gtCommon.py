@@ -328,7 +328,7 @@ class PoseLoader(ABC):
                 potentially realigned if realign=True
         '''
         loaders = [cls(*i) for i in vid_ids]
-        rets = []
+        rets: typing.List[typing.Tuple[NDArray, NDArray]] = []
         num_found = 0
         for tl in loaders:
             num_non_gt_frames = GT_PT_IND

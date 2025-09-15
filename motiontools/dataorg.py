@@ -500,4 +500,14 @@ class DataOrganizer:
             self.subset_skip_inds[DataSubsetKind.TEST]
         )
 
-
+def joinArrays(pts_lists: typing.List[NDArray]):
+    join_list = []
+    dim = pts_lists[0].shape[-1]
+    na_val = np.full((1, dim), np.nan)
+    for idx, pts in enumerate(pts_lists):
+        join_list.append(pts)
+        
+        # Add a separator if not the last sequence
+        if idx < len(pts_lists) - 1:
+            join_list.append(na_val)
+    return np.concatenate(join_list, axis=0)
