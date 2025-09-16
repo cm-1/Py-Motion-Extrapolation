@@ -17,7 +17,7 @@ import posemath as pm
 GRAPH_RES = 50
 DISP_RADIUS = 32.0
 
-NUM_BCOT_SAMPLES = 32
+NUM_BCOT_SAMPLES = 64
 
 #%% Load things from disk.
 
@@ -39,9 +39,7 @@ train_bcot_ids, val_bcot_ids, test_bcot_ids = PoseLoaderBCOT.trainValidationTest
 
 # Dictionary to store sequences from each set
 sequence_sets = {
-    'Train': [v[:2] for v in train_bcot_ids],
-    'Validation': [v[:2] for v in val_bcot_ids],
-    'Test': [v[:2] for v in test_bcot_ids]
+    'Train': train_bcot_ids, 'Validation': val_bcot_ids, 'Test': test_bcot_ids
 }
 
 # Get sequences for each set
@@ -57,7 +55,6 @@ for set_name, vid_ids in sequence_sets.items():
 # Initialize with test set, first sequence
 current_set = 'Test'
 current_sequences = sequences_by_set[current_set]
-current_seq_idx = 0
 
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
@@ -139,6 +136,7 @@ def getScatter(name: str, pts: NDArray,
         marker=marker_spec
     )
 
+#%%
 # Interactive controls setup
 # Add set selector and sequence selector before the existing controls
 set_selector = widgets.RadioButtons(
@@ -169,9 +167,11 @@ model_selector = widgets.ToggleButtons(
     description="Model:",
     style={"description_width": "initial"}
 )
-#%%
+
 fig = go.FigureWidget()
 fig.update_layout(
+    # autosize=False,
+    width=700, height=700,
     scene=dict(
         xaxis_title="x", yaxis_title="y", zaxis_title="z", aspectmode="data"
     )
@@ -218,7 +218,7 @@ def update_sequence_selector(change):
     fig.data = []  # Clear all traces
     
     # Add background traces for all sequences in gray
-    bg_fixed_pts = joinArrays([c[0][:DYNAMIC_PT_IND] for c in current_sequences])
+    bg_fixed_pts = joinArrays([c[0][:DYNAMIC_PT_IND + 1] for c in current_sequences])
     bg_gt_pts = joinArrays([c[0][DYNAMIC_PT_IND:] for c in current_sequences])
     
     fig.add_trace(getLines(
@@ -237,7 +237,7 @@ def update_sequence_selector(change):
     nn_out_list, ca, disp_cols = get_nn_ca_marker_outputs(hc, False)
     # Add scatter plots for nn_out and const_acc
     fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
-    fig.add_trace(getScatter("const_acc",ca, disp_cols))
+    fig.add_trace(getScatter("const_acc",ca, disp_cols, "Oranges"))
     
     # Add highlighted sequence traces
     fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], color="black"))
@@ -278,9 +278,9 @@ def update_selected_sequence(change):
     )
 
     # Update sliders to match new sequence
-    # update_sliders_from_point(rand_pts[DYNAMIC_PT_IND])
+    update_sliders_from_point(pts[DYNAMIC_PT_IND])
     # This will trigger update_plot which will update nn_out and const_acc
-    update_plot(None)
+    # update_plot(None)
 
 def update_sliders_from_point(point):
     """Update slider values without triggering callbacks"""
@@ -305,13 +305,14 @@ def update_plot(value):
         marker=markers, selector=({"name": "nn_out"})
     )
 
+    markers["colorscale"] = "Oranges"
     # constant-acc comparison
     fig.update_traces(
         x=new_ca_outs[:, 0], y=new_ca_outs[:, 1], z=new_ca_outs[:, 2],
         marker=markers, selector=({"name": "const_acc"})
     )
 
-# Connect callbacks    
+# Connect callbacks   
 set_selector.observe(update_sequence_selector, names='value')
 seq_selector.observe(update_selected_sequence, names='value')
 model_selector.observe(set_model, names="value")
