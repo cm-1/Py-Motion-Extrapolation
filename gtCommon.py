@@ -8,6 +8,7 @@ import typing
 import numpy as np
 from numpy.typing import NDArray
 from motiontools.shared_constants import *
+from datatools.data_splitting import DataSubsetKind
 
 import posemath as pm
 
@@ -365,7 +366,65 @@ class PoseLoader(ABC):
             find_str = str(num_to_find) if num_to_find > 0 else "all"
             print("Found {}/{} static sequences.".format(num_found, find_str))
         return rets
+    
+    @classmethod
+    def prepIDsForConstructor(cls, ids):
+        return ids
 
+    @classmethod
+    def getGroupedStaticStartSamples(cls, train_ids, val_ids, test_ids,
+                                     realign: bool, num_to_find: int = -1,
+                                     verbose: bool = False, thresh = 4.0):
+        '''
+        Get a set of sample points (enough needed to calculate crackle) from
+        a set of specified videos where the object is barely moving for the 
+        first few frames.
+
+        Parameters:
+            train_ids (list): List of video identifier tuples from training set
+                to search through for a suitable static start sequence.
+            val_ids (list): Same as above, but for the validation set.
+            test_ids (list): Same as above, but for the test set.
+            realign (bool): Whether to realign the coordinate frame based on
+                the motion direction between the last fixed point and the
+                dynamic point
+            num_to_find (int): How many such sequences to find (if possible).
+                Defaults to -1, meaning to find all possible ones.
+            verbose (bool, optional): Whether to print out information on
+                successfulness. Defaults to False.
+            thresh (float, optional): Maximum allowable sum of speeds for the
+                early fixed points to consider the sequence "static". Defaults
+                to 4.0.
+
+        Returns:
+            dict: A dict where the keys of lists of 2-tuples of arrays (pts_subset, aas_subset)
+                where:
+                    - pts_subset (ndarray): Array of point positions, potentially
+                      realigned and translated if realign=True
+                    - aas_subset (ndarray): Array of rotations (as axis-angles),
+                      potentially realigned if realign=True
+                
+        '''
+        # Dictionary to store sequences from each set
+        sequence_sets = {
+            DataSubsetKind.TRAIN: train_ids, DataSubsetKind.VALIDATION: val_ids,
+            DataSubsetKind.TEST: test_ids
+        }
+
+        sequence_sets = {
+            k: cls.prepIDsForConstructor(v) for k, v in sequence_sets.items()
+        }
+
+        # Get sequences for each set
+        sequences_by_set = dict()
+        for set_name, vid_ids in sequence_sets.items():
+            tup_list = cls.getStaticStartSample(
+                vid_ids, realign, num_to_find, verbose, thresh
+            )
+            pose_info = np.stack(tup_list, axis=0)
+            pose_info.setflags(write=False)
+            sequences_by_set[set_name] = pose_info
+        return sequences_by_set
 
 class SyntheticPoseLoader(PoseLoader):
     def __init__(self, num_frames: int, const_rot_accel: bool, helix: bool,
@@ -711,6 +770,10 @@ class PoseLoaderBCOT(PoseLoader):
         
         posePathGT = PoseLoaderBCOT._DATASET_DIR / seq / bod
         return posePathGT.is_dir()
+    
+    @classmethod
+    def prepIDsForConstructor(cls, ids):
+        return [i[:2] for i in ids]
 
 class PoseLoaderBOP(PoseLoader, ABC):
     def __init__(self, are_timestamps_const: bool):

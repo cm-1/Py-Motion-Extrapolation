@@ -40,9 +40,10 @@ from nn_utilities.nn_losses import (
 )
 
 from motiontools.dataorg import (
-    DataOrganizer, concatForComboSubset, UnitAwareScaler, DataSubsetKind,
-    SkipSubsetKind
+    DataOrganizer, concatForComboSubset, UnitAwareScaler, SkipSubsetKind
 )
+
+from datatools.data_splitting import DataSubsetKind
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary

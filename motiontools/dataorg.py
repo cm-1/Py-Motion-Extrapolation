@@ -1,5 +1,5 @@
 import typing
-from enum import Enum, IntEnum
+from enum import IntEnum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -8,6 +8,7 @@ from motiontools.posefeatures import (
     MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION
 )
 from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
+from datatools.data_splitting import DataSubsetKind
 
 # We frequently work with data sequences that have the following type: 
 #     List[Dict[Combo, (Dict|NDArray)]]
@@ -241,18 +242,6 @@ class UnitAwareScaler:
 
     def inverse_transform(self, X):
         return (X * self.scale_) + self.mean_
-
-class DataSubsetKind(Enum):
-    TRAIN = 1
-    TEST = 2
-    VALIDATION = 3
-    WHOLE = 4
-
-    @staticmethod
-    def nonWholeValues():
-        return (
-            DataSubsetKind.TRAIN, DataSubsetKind.TEST, DataSubsetKind.VALIDATION
-        )
     
 class SkipSubsetKind(IntEnum):
     skip0 = 0
@@ -511,3 +500,9 @@ def joinArrays(pts_lists: typing.List[NDArray]):
         if idx < len(pts_lists) - 1:
             join_list.append(na_val)
     return np.concatenate(join_list, axis=0)
+
+def getDisjointSegs(source_pts: NDArray, dest_pts: NDArray):
+    source_rs = source_pts.reshape(-1, 3)
+    dest_rs = dest_pts.reshape(-1, 3)
+    nans = np.full_like(dest_rs, np.nan)
+    return np.stack((source_rs, dest_rs, nans), axis=1).reshape(-1, 3)
