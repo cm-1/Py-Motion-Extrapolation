@@ -183,9 +183,7 @@ def update_sequence_selector(change):
     nn_out_list, ca, disp_cols = get_nn_ca_marker_outputs(hc, False)
     # Add scatter plots for nn_out and const_acc
     fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
-    fig.add_trace(getScatter("const_acc",ca, disp_cols, "Oranges"))
-    # fig.add_trace(getLines("nn_out", nn_out_list, color="cyan", size=0, use_labels=False))
-    # fig.add_trace(getLines("const_acc", ca, color="orange", size=0, use_labels=False))
+    fig.add_trace(getScatter("const_acc", ca, disp_cols, "Oranges"))
     
     # Add highlighted sequence traces
     fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], color="black"))
@@ -200,19 +198,12 @@ def update_sequence_selector(change):
     # Reset sliders to match new sequence
     update_sliders_from_point(pts[DYNAMIC_PT_IND])
 
-def update_trace_args(vec3s: NDArray, name: str):
-    return dict(
-        x=vec3s[:, 0], y=vec3s[:, 1], z=vec3s[:, 2], selector={"name": name}
+def update_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
+    fig.update_traces(
+        x=vec3s[:, 0], y=vec3s[:, 1], z=vec3s[:, 2], selector={"name": name},
+        **kwargs
     )
-
-def update_trace_pts(fig, vec3s: NDArray, name: str):
-    fig.update_traces(**update_trace_args(vec3s, name))
-
-def update_trace_pts_markers(fig, vec3s: NDArray, name: str, markers):
-    d = update_trace_args(vec3s, name)
-    d.update(marker=markers)
-    fig.update_traces(**d)
-
+    
 def update_selected_sequence(change):
     """Update visualization when sequence index changes"""
     global hc
@@ -254,11 +245,11 @@ def update_plot(value):
     global hc
     new_nn_outs, new_ca_outs, markers = get_nn_ca_marker_outputs(hc, True)
     # with fig.batch_update():
-    update_trace_pts_markers(fig, new_nn_outs, "nn_out", markers)
+    update_trace_pts(fig, new_nn_outs, "nn_out", marker=markers)
 
     markers["colorscale"] = "Oranges"
     # constant-acc comparison
-    update_trace_pts_markers(fig, new_ca_outs, "const_acc", markers)
+    update_trace_pts(fig, new_ca_outs, "const_acc", marker=markers)
 
 
 # Connect callbacks   
