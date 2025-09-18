@@ -236,7 +236,9 @@ def update_selected_sequence(change):
 def update_sliders_from_point(point):
     """Update slider values without triggering callbacks"""
     for i in range(3):
+        sliders[i].unobserve(update_plot, names="value")
         sliders[i].value = point[i]
+        sliders[i].observe(update_plot, names="value")
     update_plot(None)
 
 def set_model(change):
@@ -268,8 +270,6 @@ for s in sliders:
 
 # Initialize sliders with point 0
 update_sequence_selector({"new": current_set})
-update_plot(None)
-
 
 # Display the interactive visualization
 ui = widgets.VBox([
