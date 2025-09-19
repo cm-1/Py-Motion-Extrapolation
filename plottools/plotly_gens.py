@@ -19,11 +19,11 @@ def getScatterMarkers(input_color_vals: typing.Optional[NDArray] = None,
         )
     return marker_spec
 
-def getLines(name: str, pts: NDArray, min_label_ind: int = 0, color="black",
-             size=1, use_labels: bool = True):
+def getLines(name: str, pts: NDArray, min_label_ind: int = -1, color="black",
+             size=1):
     labels = None
     mode = "lines+markers"
-    if use_labels:
+    if min_label_ind >= 0:
         if np.any(np.isnan(pts)):
             raise NotImplementedError(
                 "Labels for disjoint lines not supported!"

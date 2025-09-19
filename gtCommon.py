@@ -397,8 +397,9 @@ class PoseLoader(ABC):
                 to 4.0.
 
         Returns:
-            dict: A dict where the keys of lists of 2-tuples of arrays (pts_subset, aas_subset)
-                where:
+            dict: A dict where the keys are DataSubsetKind values and the items
+                are NDArrays structured like lists of 2-tuples of arrays
+                (pts_subset, aas_subset) where:
                     - pts_subset (ndarray): Array of point positions, potentially
                       realigned and translated if realign=True
                     - aas_subset (ndarray): Array of rotations (as axis-angles),
@@ -416,7 +417,7 @@ class PoseLoader(ABC):
         }
 
         # Get sequences for each set
-        sequences_by_set = dict()
+        sequences_by_set: typing.Dict[DataSubsetKind, NDArray] = dict()
         for set_name, vid_ids in sequence_sets.items():
             tup_list = cls.getStaticStartSample(
                 vid_ids, realign, num_to_find, verbose, thresh

@@ -25,29 +25,27 @@ NUM_BCOT_SAMPLES = 64
 
 #%% Load things from disk.
 
-# Load the unit scaler that's been saved to disk.
 scaler: UnitAwareScaler
 with open("./results/models/scaler.pickle", "rb") as f:
     scaler = pickle.load(f)
 
 # Load the NNs that have been saved to disk; save them in a dict.
 model_prefixes = ("JAV_MULTIPLIER", "HOT3D_JM")
-model_loads = loadLatestModels(model_prefixes)
+models = loadLatestModels(model_prefixes)
 
 
 #%% Choose transforms for the first frames.
 
-# Get the video IDs for each set
 bcot_id_split = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
 
-sequences_by_set = PoseLoaderBCOT.getGroupedStaticStartSamples(
+sequences_by_subset = PoseLoaderBCOT.getGroupedStaticStartSamples(
     *bcot_id_split, True, NUM_BCOT_SAMPLES, True
 ) 
 
 
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
-all_statics = np.concatenate(list(sequences_by_set.values()), axis=0)
+all_statics = np.concatenate(list(sequences_by_subset.values()), axis=0)
 
 all_last_fixed = all_statics[:, 0, LAST_FIXED_PT_IND]
 all_orig_dynamic = all_statics[:, 0, DYNAMIC_PT_IND]
@@ -57,10 +55,37 @@ max_mag = min(DISP_RADIUS, np.max(radii) * 1.1)
 # max_mag = 0.1
 
 
-# Initialize with test set, first sequence
-current_set = DataSubsetKind.TEST
-current_sequences = sequences_by_set[current_set]
-init_pts, init_aas = current_sequences[0].copy()
+class PlottingState:
+    def __init__(self,
+                 sequences_by_subset: typing.Dict[DataSubsetKind, NDArray],
+                 models: typing.Dict[str, typing.Any], scaler: UnitAwareScaler):
+        # Default initialization values
+        self.subset = DataSubsetKind.TEST
+        self.model_prefix: str = next(iter(models.keys()))
+        
+        self._sequences_by_subset = sequences_by_subset
+        self.current_sequences = sequences_by_subset[self.subset]
+        self._models = models
+        self._scaler = scaler
+
+        self.infer = functools.partial(
+            getHypotheticalOutputsNN,
+            models[self.model_prefix], scaler
+        )
+
+    def change_set(self, new_set: DataSubsetKind):
+        self.subset = new_set
+        self.current_sequences = self._sequences_by_subset[new_set]
+    
+    def change_model(self, model_prefix: str):
+        self.model_prefix = model_prefix
+        ps.infer = functools.partial(
+            getHypotheticalOutputsNN, self._models[model_prefix], self._scaler
+        )
+
+
+ps = PlottingState(sequences_by_subset, models, scaler)
+init_pts, init_aas = ps.current_sequences[0].copy()
 
 hc = HypotheticalInputsForNN(
     init_pts[:DYNAMIC_PT_IND],
@@ -69,9 +94,6 @@ hc = HypotheticalInputsForNN(
 )
 
 
-inferBCOT = functools.partial(
-    getHypotheticalOutputsNN, model_loads[model_prefixes[0]], scaler
-)
 
 #%%
 import plotly.graph_objects as go
@@ -84,21 +106,17 @@ from plottools.plotly_gens import (
 
 #%%
 # Interactive controls setup
-# Add set selector and sequence selector before the existing controls
-set_selector = widgets.RadioButtons(
+# Add subset selector and sequence selector
+subset_selector = widgets.RadioButtons(
     options=[(k.name, k) for k in DataSubsetKind.nonWholeValues()],
-    value=current_set,
-    description='Dataset:',
+    value=ps.subset, description='Dataset:',
     style={'description_width': 'initial'}
 )
 
-# Create sequence selector - will update its max value based on set selection
+# Create sequence selector - will update its max value based on subset selection
 seq_selector = widgets.IntSlider(
-    value=0,
-    min=0,
-    max=len(sequences_by_set[current_set]) - 1,  # Initial max for test set
-    step=1,
-    description='Sequence:',
+    value=0, step=1, description='Sequence:',
+    min=0, max=len(sequences_by_subset[ps.subset]) - 1, # Max for initial subset
     style={'description_width': 'initial'}
 )
 
@@ -109,12 +127,9 @@ sliders = [
 ]
 
 model_selector = widgets.ToggleButtons(
-    options=model_prefixes,
-    description="Model:",
+    options=model_prefixes, value=model_prefixes[0], description="Model:",
     style={"description_width": "initial"}
 )
-
-current_model_name = model_prefixes[0]
 
 fig = go.FigureWidget()
 fig.update_layout(
@@ -126,7 +141,6 @@ fig.update_layout(
 )
 
 def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN, form_markers: bool):
-    global max_mag, GRAPH_RES
     main_hyp_pt = np.array([s.value for s in sliders])
 
     new_hyp_dyn_pts = hc.getInputGridOfVec3s(GRAPH_RES, max_mag, main_hyp_pt)
@@ -135,7 +149,8 @@ def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN, form_markers: bool):
         col_mags = getScatterMarkers(col_mags)
 
     # NN output from currently selected model
-    new_nn_outs = inferBCOT(hc, new_hyp_dyn_pts)
+    new_nn_outs = ps.infer(hc, new_hyp_dyn_pts)
+
     new_ca_outs = hc.getConstAccPreds(new_hyp_dyn_pts)
 
     return (new_nn_outs, new_ca_outs, col_mags)
@@ -143,60 +158,50 @@ def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN, form_markers: bool):
 def get_pred_orig_dyn(hc: HypotheticalInputsForNN, pts: NDArray):
     
     d_pt = pts[DYNAMIC_PT_IND]
-    sel_out_vec3 = inferBCOT(hc, d_pt)[0]
-    nn_single_vis_pts = np.stack([d_pt, sel_out_vec3], axis=0)
-    return nn_single_vis_pts
+    sel_out_vec3 = ps.infer(hc, d_pt)[0]
+    return np.stack([d_pt, sel_out_vec3], axis=0)
 
-def update_sequence_selector(change):
-    """Update available sequences when dataset changes"""
-    global current_set, current_sequences, hc
-    current_set = change['new']
-
-    current_sequences = sequences_by_set[current_set]
+def subset_callback(change):
+    """Called when dataset subset changes"""
+    ps.change_set(change['new'])
     
     # Update sequence selector range
-    seq_selector.max = len(current_sequences) - 1
+    seq_selector.max = len(ps.current_sequences) - 1
     seq_selector.value = 0
     
-    # Clear and redraw all sequence traces
     fig.data = []  # Clear all traces
     
     # Add background traces for all sequences in gray
-    bg_fixed_pts = joinArrays([c[0][:DYNAMIC_PT_IND + 1] for c in current_sequences])
-    bg_gt_pts = joinArrays([c[0][DYNAMIC_PT_IND:] for c in current_sequences])
+    bg_fixed = joinArrays([c[0][:DYNAMIC_PT_IND + 1] for c in ps.current_sequences])
+    bg_gt = joinArrays([c[0][DYNAMIC_PT_IND:] for c in ps.current_sequences])
     
-    fig.add_trace(getLines(
-        "fixed_pts_bg", bg_fixed_pts, color="lightgray", size=1,
-        use_labels=False
-    ))
-    fig.add_trace(getLines(
-        "gt_pts_bg", bg_gt_pts, DYNAMIC_PT_IND,
-        color="gray", size=1, use_labels=False
-    ))
+    fig.add_trace(getLines("fixed_pts_bg", bg_fixed, color="lightgray"))
+    fig.add_trace(getLines("gt_pts_bg", bg_gt, color="gray"))
     
     # Add main visualization traces
-    pts, aas = current_sequences[0]
+    pts, aas = ps.current_sequences[0]
     hc.updatePrecalcs(
         pts[:DYNAMIC_PT_IND], pm.matsFromScaledAxisAngleArray(aas[:GT_PT_IND])
     )
 
-    nn_out_list, ca, disp_cols = get_nn_ca_marker_outputs(hc, False)
+    nn_outs, ca_outs, disp_cols = get_nn_ca_marker_outputs(hc, False)
     # Add scatter plots for nn_out and const_acc
-    fig.add_trace(getScatter("nn_out", nn_out_list, disp_cols))
-    fig.add_trace(getScatter("const_acc", ca, disp_cols, "Oranges"))
+    fig.add_trace(getScatter("nn_out", nn_outs, disp_cols))
+    fig.add_trace(getScatter("const_acc", ca_outs, disp_cols, "Oranges"))
     
     # Add highlighted sequence traces
-    fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], color="black"))
-    fig.add_trace(getLines("gt_pts", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green"))
+    fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], 0, "black"))
+    fig.add_trace(
+        getLines("gt_pts", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green")
+    )
     
     # Add single point visualization
-    nn_for_orig_dyn = get_pred_orig_dyn(hc, pts)
     fig.add_trace(getLines(
-        "nn_single_pts", nn_for_orig_dyn, DYNAMIC_PT_IND, "red"
+        "nn_single_pts", get_pred_orig_dyn(hc, pts), DYNAMIC_PT_IND, "red"
     ))
     
     # Reset sliders to match new sequence
-    update_sliders_from_point(pts[DYNAMIC_PT_IND])
+    set_xyz_sliders(pts[DYNAMIC_PT_IND])
 
 def update_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
     fig.update_traces(
@@ -204,11 +209,10 @@ def update_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
         **kwargs
     )
     
-def update_selected_sequence(change):
-    """Update visualization when sequence index changes"""
-    global hc
+def seq_callback(change):
+    """Called when sequence index changes"""
     idx = change['new']
-    pts, _ = current_sequences[idx]
+    pts, _ = ps.current_sequences[idx]
     
     # with fig.batch_update():
 
@@ -220,29 +224,23 @@ def update_selected_sequence(change):
     update_trace_pts(fig, nnps, "nn_single_pts")
 
     # Update sliders to match new sequence
-    update_sliders_from_point(pts[DYNAMIC_PT_IND])
-    # This will trigger update_plot which will update nn_out and const_acc
-    # update_plot(None)
-
-def update_sliders_from_point(point):
-    """Update slider values without triggering callbacks"""
-    for i in range(3):
-        sliders[i].unobserve(update_plot, names="value")
-        sliders[i].value = point[i]
-        sliders[i].observe(update_plot, names="value")
+    set_xyz_sliders(pts[DYNAMIC_PT_IND])
+    
+def set_xyz_sliders(point):
+    
+    for i, s in enumerate(sliders):
+    # Update slider values without triggering callbacks.
+        s.unobserve(update_plot, names="value")
+        s.value = point[i]
+        s.observe(update_plot, names="value")
     update_plot(None)
 
-def set_model(change):
-    global inferBCOT, current_model_name
-    current_model_name = change["new"]
-    inferBCOT = functools.partial(
-        getHypotheticalOutputsNN, model_loads[current_model_name], scaler
-    )
+def model_callback(change):
+    ps.change_model(change["new"])
     update_plot(None)
 
 def update_plot(value):
-    """When sliders move, update selected point + recompute x6 with selected model."""
-    global hc
+    """Update grids of points, e.g. when 3D slider changes."""
     new_nn_outs, new_ca_outs, markers = get_nn_ca_marker_outputs(hc, True)
     # with fig.batch_update():
     update_trace_pts(fig, new_nn_outs, "nn_out", marker=markers)
@@ -253,18 +251,18 @@ def update_plot(value):
 
 
 # Connect callbacks   
-set_selector.observe(update_sequence_selector, names='value')
-seq_selector.observe(update_selected_sequence, names='value')
-model_selector.observe(set_model, names="value")
+subset_selector.observe(subset_callback, names='value')
+seq_selector.observe(seq_callback, names='value')
+model_selector.observe(model_callback, names="value")
 for s in sliders:
     s.observe(update_plot, names="value")
 
-# Initialize sliders with point 0
-update_sequence_selector({"new": current_set})
+# Initialize plot for default selections.
+subset_callback({"new": ps.subset})
 
 # Display the interactive visualization
 ui = widgets.VBox([
-    widgets.HBox([set_selector, seq_selector]),
+    widgets.HBox([subset_selector, seq_selector]),
     model_selector,
     fig
 ] + sliders)
