@@ -1,7 +1,6 @@
 #%% Imports and const definitions.
 import typing
 import pickle
-import functools
 
 import numpy as np
 from numpy.typing import NDArray
@@ -42,8 +41,6 @@ sequences_by_subset = PoseLoaderBCOT.getGroupedStaticStartSamples(
     *bcot_id_split, True, NUM_BCOT_SAMPLES, True
 ) 
 
-
-
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
 all_statics = np.concatenate(list(sequences_by_subset.values()), axis=0)
 
@@ -68,21 +65,14 @@ class PlottingState:
         self._models = models
         self._scaler = scaler
 
-        self.infer = functools.partial(
-            getHypotheticalOutputsNN,
-            models[self.model_prefix], scaler
-        )
-
     def change_set(self, new_set: DataSubsetKind):
         self.subset = new_set
         self.current_sequences = self._sequences_by_subset[new_set]
     
-    def change_model(self, model_prefix: str):
-        self.model_prefix = model_prefix
-        ps.infer = functools.partial(
-            getHypotheticalOutputsNN, self._models[model_prefix], self._scaler
+    def infer(self, hc, pts):
+        return getHypotheticalOutputsNN(
+            self._models[self.model_prefix], self._scaler, hc, pts
         )
-
 
 ps = PlottingState(sequences_by_subset, models, scaler)
 init_pts, init_aas = ps.current_sequences[0].copy()
@@ -93,15 +83,13 @@ hc = HypotheticalInputsForNN(
     1, scaler.column_keys
 )
 
-
-
 #%%
 import plotly.graph_objects as go
 import ipywidgets as widgets
 from IPython.display import display
 
 from plottools.plotly_gens import (
-    getLines, getScatter, getColourMags, getScatterMarkers
+    getLines, getScatter, getColourMags, getScatterMarkers, update_trace_pts
 )
 
 #%%
@@ -203,11 +191,6 @@ def subset_callback(change):
     # Reset sliders to match new sequence
     set_xyz_sliders(pts[DYNAMIC_PT_IND])
 
-def update_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
-    fig.update_traces(
-        x=vec3s[:, 0], y=vec3s[:, 1], z=vec3s[:, 2], selector={"name": name},
-        **kwargs
-    )
     
 def seq_callback(change):
     """Called when sequence index changes"""
@@ -236,7 +219,7 @@ def set_xyz_sliders(point):
     update_plot(None)
 
 def model_callback(change):
-    ps.change_model(change["new"])
+    ps.model_prefix = (change["new"])
     update_plot(None)
 
 def update_plot(value):

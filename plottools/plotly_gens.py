@@ -48,3 +48,9 @@ def getScatter(name: str, pts: NDArray,
         name=name, x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], mode='markers',
         marker=marker_spec
     )
+
+def update_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
+    fig.update_traces(
+        x=vec3s[:, 0], y=vec3s[:, 1], z=vec3s[:, 2], selector={"name": name},
+        **kwargs
+    )
