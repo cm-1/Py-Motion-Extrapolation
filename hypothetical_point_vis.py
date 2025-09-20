@@ -195,7 +195,11 @@ def subset_callback(change):
 def seq_callback(change):
     """Called when sequence index changes"""
     idx = change['new']
-    pts, _ = ps.current_sequences[idx]
+    pts, aas = ps.current_sequences[idx]
+
+    hc.updatePrecalcs(
+        pts[:DYNAMIC_PT_IND], pm.matsFromScaledAxisAngleArray(aas[:GT_PT_IND])
+    )
     
     # with fig.batch_update():
 
