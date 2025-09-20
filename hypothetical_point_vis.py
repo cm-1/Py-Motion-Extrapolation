@@ -88,9 +88,7 @@ import plotly.graph_objects as go
 import ipywidgets as widgets
 from IPython.display import display
 
-from plottools.plotly_gens import (
-    getLines, getScatter, getColourMags, getScatterMarkers, update_trace_pts
-)
+from plottools.plotly_gens import getColourMags, TraceManager
 
 #%%
 # Interactive controls setup
@@ -128,13 +126,14 @@ fig.update_layout(
     )
 )
 
-def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN, form_markers: bool):
+tm = TraceManager(fig)
+
+def get_nn_ca_marker_outputs(hc: HypotheticalInputsForNN):
     main_hyp_pt = np.array([s.value for s in sliders])
 
     new_hyp_dyn_pts = hc.getInputGridOfVec3s(GRAPH_RES, max_mag, main_hyp_pt)
+
     col_mags = getColourMags(new_hyp_dyn_pts, main_hyp_pt)
-    if form_markers:
-        col_mags = getScatterMarkers(col_mags)
 
     # NN output from currently selected model
     new_nn_outs = ps.infer(hc, new_hyp_dyn_pts)
@@ -157,45 +156,17 @@ def subset_callback(change):
     seq_selector.max = len(ps.current_sequences) - 1
     seq_selector.value = 0
     
-    fig.data = []  # Clear all traces
-    
+    tm.clear()
+
     # Add background traces for all sequences in gray
     bg_fixed = joinArrays([c[0][:DYNAMIC_PT_IND + 1] for c in ps.current_sequences])
     bg_gt = joinArrays([c[0][DYNAMIC_PT_IND:] for c in ps.current_sequences])
     
-    fig.add_trace(getLines("fixed_pts_bg", bg_fixed, color="lightgray"))
-    fig.add_trace(getLines("gt_pts_bg", bg_gt, color="gray"))
+    tm.set_line_trace("fixed_pts_bg", bg_fixed, color="lightgray")
+    tm.set_line_trace("gt_pts_bg", bg_gt, color="gray")
     
     # Add main visualization traces
-    pts, aas = ps.current_sequences[0]
-    hc.updatePrecalcs(
-        pts[:DYNAMIC_PT_IND], pm.matsFromScaledAxisAngleArray(aas[:GT_PT_IND])
-    )
-
-    nn_outs, ca_outs, disp_cols = get_nn_ca_marker_outputs(hc, False)
-    # Add scatter plots for nn_out and const_acc
-    fig.add_trace(getScatter("nn_out", nn_outs, disp_cols))
-    fig.add_trace(getScatter("const_acc", ca_outs, disp_cols, "Oranges"))
-    
-    # Add highlighted sequence traces
-    fig.add_trace(getLines("fixed_pts", pts[:DYNAMIC_PT_IND], 0, "black"))
-    fig.add_trace(
-        getLines("gt_pts", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green")
-    )
-    
-    # Add single point visualization
-    fig.add_trace(getLines(
-        "nn_single_pts", get_pred_orig_dyn(hc, pts), DYNAMIC_PT_IND, "red"
-    ))
-    
-    lfp = pts[LAST_FIXED_PT_IND]
-    acc_line = np.stack((lfp, lfp + hc.prev_acc), axis=0)
-    jerk_line = np.stack((lfp, lfp + hc.prev_jerk), axis=0)
-    fig.add_trace(getLines("prev_acc", acc_line, color="aqua"))
-    fig.add_trace(getLines("prev_jerk", jerk_line, color="magenta"))
-    # Reset sliders to match new sequence
-    set_xyz_sliders(pts[DYNAMIC_PT_IND])
-
+    seq_callback({"new": 0}) # Sequence slider index has been set to 0.
     
 def seq_callback(change):
     """Called when sequence index changes"""
@@ -209,16 +180,18 @@ def seq_callback(change):
     # with fig.batch_update():
 
     # Update highlighted sequence traces only
-    update_trace_pts(fig, pts[:DYNAMIC_PT_IND], "fixed_pts")
-    update_trace_pts(fig, pts[DYNAMIC_PT_IND:], "gt_pts")
+    tm.set_line_trace("fixed_pts", pts[:DYNAMIC_PT_IND], 0, "black")
+    tm.set_line_trace("gt_pts", pts[DYNAMIC_PT_IND:], DYNAMIC_PT_IND, "green")
 
-    nnps = get_pred_orig_dyn(hc, pts)
-    update_trace_pts(fig, nnps, "nn_single_pts")
+    tm.set_line_trace(
+        "nn_single_pts", get_pred_orig_dyn(hc, pts), DYNAMIC_PT_IND, "red"
+    )
+
     lfp = pts[LAST_FIXED_PT_IND]
     acc_line = np.stack((lfp, lfp + hc.prev_acc), axis=0)
     jerk_line = np.stack((lfp, lfp + hc.prev_jerk), axis=0)
-    update_trace_pts(fig, acc_line, "prev_acc")
-    update_trace_pts(fig, jerk_line, "prev_jerk")
+    tm.set_line_trace("prev_acc", acc_line, color="aqua")
+    tm.set_line_trace("prev_jerk", jerk_line, color="magenta")
 
     # Update sliders to match new sequence
     set_xyz_sliders(pts[DYNAMIC_PT_IND])
@@ -238,13 +211,13 @@ def model_callback(change):
 
 def update_plot(value):
     """Update grids of points, e.g. when 3D slider changes."""
-    new_nn_outs, new_ca_outs, markers = get_nn_ca_marker_outputs(hc, True)
+    new_nn_outs, new_ca_outs, disp_mags = get_nn_ca_marker_outputs(hc)
     # with fig.batch_update():
-    update_trace_pts(fig, new_nn_outs, "nn_out", marker=markers)
+    markers = tm.set_scatter_trace("nn_out", new_nn_outs, disp_mags)
 
     markers["colorscale"] = "Oranges"
     # constant-acc comparison
-    update_trace_pts(fig, new_ca_outs, "const_acc", marker=markers)
+    tm.set_scatter_trace("const_acc", new_ca_outs, marker=markers)
 
 
 # Connect callbacks   
