@@ -188,6 +188,11 @@ def subset_callback(change):
         "nn_single_pts", get_pred_orig_dyn(hc, pts), DYNAMIC_PT_IND, "red"
     ))
     
+    lfp = pts[LAST_FIXED_PT_IND]
+    acc_line = np.stack((lfp, lfp + hc.prev_acc), axis=0)
+    jerk_line = np.stack((lfp, lfp + hc.prev_jerk), axis=0)
+    fig.add_trace(getLines("prev_acc", acc_line, color="aqua"))
+    fig.add_trace(getLines("prev_jerk", jerk_line, color="magenta"))
     # Reset sliders to match new sequence
     set_xyz_sliders(pts[DYNAMIC_PT_IND])
 
@@ -209,6 +214,11 @@ def seq_callback(change):
 
     nnps = get_pred_orig_dyn(hc, pts)
     update_trace_pts(fig, nnps, "nn_single_pts")
+    lfp = pts[LAST_FIXED_PT_IND]
+    acc_line = np.stack((lfp, lfp + hc.prev_acc), axis=0)
+    jerk_line = np.stack((lfp, lfp + hc.prev_jerk), axis=0)
+    update_trace_pts(fig, acc_line, "prev_acc")
+    update_trace_pts(fig, jerk_line, "prev_jerk")
 
     # Update sliders to match new sequence
     set_xyz_sliders(pts[DYNAMIC_PT_IND])
