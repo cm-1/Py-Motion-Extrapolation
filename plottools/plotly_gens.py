@@ -34,9 +34,14 @@ def getLines(name: str, pts: NDArray, min_label_ind: int = -1, color="black",
             f"x{i}" for i in range(min_label_ind, min_label_ind + len(pts))
         ]
         mode += "+text"
+
+    # Plotly's batch_update somtimes requires Python lists instead of numpy's.
+    components = [nd.tolist() for nd in pts.transpose()]
+    # Stuff like Colab requires None instead of non-numpy NaNs.
+    x, y, z = [[None if np.isnan(n) else n for n in ns] for ns in components]
     
     return go.Scatter3d(
-        x=pts[:, 0].tolist(), y=pts[:, 1].tolist(), z=pts[:, 2].tolist(),
+        x=x, y=y, z=z,
         mode=mode, name=name, text=labels, textposition="top center",
         line=dict(color=color), marker=dict(size=size, symbol="x"), **kwargs
     )
