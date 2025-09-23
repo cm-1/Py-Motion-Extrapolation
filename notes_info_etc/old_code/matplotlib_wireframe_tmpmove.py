@@ -1,4 +1,3 @@
-# fig.update_traces(showlegend=True)#, showscale=False)
 
 
 #%% Matplotlib surface plotter.

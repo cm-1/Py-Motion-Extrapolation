@@ -49,7 +49,7 @@ all_orig_dynamic = all_statics[:, 0, DYNAMIC_PT_IND]
 radii = np.linalg.norm(all_orig_dynamic - all_last_fixed, axis=-1)
 
 max_mag = min(DISP_RADIUS, np.max(radii) * 1.1)
-# max_mag = 0.1
+max_mag = 0.1
 
 
 class PlottingState:
@@ -212,12 +212,12 @@ def model_callback(change):
 def update_plot(value):
     """Update grids of points, e.g. when 3D slider changes."""
     new_nn_outs, new_ca_outs, disp_mags = get_nn_ca_marker_outputs(hc)
-    # with fig.batch_update():
-    markers = tm.set_scatter_trace("nn_out", new_nn_outs, disp_mags)
+    with fig.batch_update():
+        markers = tm.set_scatter_trace("nn_out", new_nn_outs, disp_mags)
 
-    markers["colorscale"] = "Oranges"
-    # constant-acc comparison
-    tm.set_scatter_trace("const_acc", new_ca_outs, marker=markers)
+        markers["colorscale"] = "Oranges"
+        # constant-acc comparison
+        tm.set_scatter_trace("const_acc", new_ca_outs, marker=markers)
 
 
 # Connect callbacks   

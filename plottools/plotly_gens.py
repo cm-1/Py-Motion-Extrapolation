@@ -36,9 +36,9 @@ def getLines(name: str, pts: NDArray, min_label_ind: int = -1, color="black",
         mode += "+text"
     
     return go.Scatter3d(
-        x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], mode=mode, name=name,
-        text=labels, textposition="top center", line=dict(color=color),
-        marker=dict(size=size, symbol="x"), **kwargs
+        x=pts[:, 0].tolist(), y=pts[:, 1].tolist(), z=pts[:, 2].tolist(),
+        mode=mode, name=name, text=labels, textposition="top center",
+        line=dict(color=color), marker=dict(size=size, symbol="x"), **kwargs
     )
 
 def getScatterAndMarkers(name: str, pts: NDArray,
@@ -49,20 +49,21 @@ def getScatterAndMarkers(name: str, pts: NDArray,
         input_color_vals, colorscale, opacity, size, **kwargs
     )
     sc = go.Scatter3d(
-        name=name, x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], mode='markers',
-        marker=marker_spec
+        x=pts[:, 0].tolist(), y=pts[:, 1].tolist(), z=pts[:, 2].tolist(),
+        mode='markers', marker=marker_spec, name=name
     )
     return sc, marker_spec
 
 def update_fig_trace_pts(fig, vec3s: NDArray, name: str, **kwargs):
     fig.update_traces(
-        x=vec3s[:, 0], y=vec3s[:, 1], z=vec3s[:, 2], selector={"name": name},
-        **kwargs
+        x=vec3s[:, 0].tolist(), y=vec3s[:, 1].tolist(), z=vec3s[:, 2].tolist(),
+        selector={"name": name}, **kwargs
     )
 
 def update_trace_pts(trace, pts: NDArray, **kwargs):
     trace.update(
-        x=pts[:, 0], y=pts[:, 1], z=pts[:, 2], **kwargs
+        x=pts[:, 0].tolist(), y=pts[:, 1].tolist(), z=pts[:, 2].tolist(),
+        **kwargs
     )
 
 # Add this class above your main callbacks and below your imports
