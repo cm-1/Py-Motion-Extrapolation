@@ -36,14 +36,17 @@ from motiontools.posefeatures import (
 )
     
 from nn_utilities.nn_losses import (
-    poseLossJAV, poseLossResidualJAV, poseLossVec3
+    poseLossJAV, poseLossVec3
 )
+from nn_utilities.nn_loading import loadLatestModels
 
 from motiontools.dataorg import (
     DataOrganizer, concatForComboSubset, UnitAwareScaler, SkipSubsetKind
 )
 
 from datatools.data_splitting import DataSubsetKind
+
+TRAIN_NEW_MODEL = False
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -1050,30 +1053,51 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 
 
 #%% Train the network.
-val_param = None
-if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
-    val_param = (bcotjav.in_validation, bcotjav.gt_validation)
-bcs_hist = bcs_model.fit(
-    bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
-    validation_data=val_param,
-    # batch_size = 1024
-)
-
+if TRAIN_NEW_MODEL:
+    val_param = None
+    if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
+        val_param = (bcotjav.in_validation, bcotjav.gt_validation)
+    bcs_hist = bcs_model.fit(
+        bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
+        validation_data=val_param,
+        # batch_size = 1024
+    )
+else:
+    bcs_model = loadLatestModels((chosen_mode.name, ))[chosen_mode.name]
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
 bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
 
 #%% Saving model to disk.
-model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
-    chosen_mode.name, datetime.datetime.now()
-)
-bcs_model.save(model_name)
+if TRAIN_NEW_MODEL:
+    model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
+        chosen_mode.name, datetime.datetime.now()
+    )
+    bcs_model.save(model_name)
 
 #%% Print scores on test data.
 bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
 
+#%%
+bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
+med_test_scores = np.empty((3, len(bcot_test_ids)))
+for skip_amt in range(3):
+    skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][skip_amt:(skip_amt + 2)]
+    skip_subset = bcs_test_errs[skip_bounds[0]:skip_bounds[1]]
+    boundaries = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
+    for i in range(len(bcot_test_ids)):
+        row_idxs = boundaries[i:(i+2)]
+        errs_for_id = skip_subset[row_idxs[0]:row_idxs[1]]
+        med_test_scores[skip_amt, i] = np.median(errs_for_id)
 
+#%%
+def bcot_name(bcot_id):
+    return (gtc.BCOT_SEQ_NAMES[bcot_id[1]], gtc.BCOT_BODY_NAMES[bcot_id[0]])
+med_test_sort_idxs = np.argsort(med_test_scores, axis=1)
+med_test_sort_ids = [
+    [bcot_name(bcot_test_ids[i]) for i in mtsi] for mtsi in med_test_sort_idxs
+] 
 
 # print(bcs_test_scores)
 #%%
