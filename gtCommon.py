@@ -300,26 +300,30 @@ class PoseLoader(ABC):
         return PoseLoader._randHelper(1, upper, lower)[0]
     
     @classmethod
-    def getStaticStartSample(cls, vid_ids, realign: bool, num_to_find: int = -1,
-                             verbose: bool = False, thresh = 4.0):
+    def prepIDsForConstructor(cls, ids):
+        return ids
+    
+    @classmethod
+    def getSamplesByCriteria(cls, vid_ids, realign: bool, allow_overlap: bool,
+                             criteria: str, num_to_find: int = -1,
+                             static_thresh = 4.0, planar_thresh: float = 1e-2,
+                             verbose: bool = False):
         '''
-        Get a set of sample points (enough needed to calculate crackle) from
-        a set of specified videos where the object is barely moving for the 
-        first few frames.
+        Get a set of sample sequences (enough needed to calculate crackle) from
+        a set of specified videos, using one of several criteria
+        ("static", "planar", or "none").
 
         Parameters:
-            vid_ids (list): List of video identifier tuples to search through
-                for a suitable static start sequence
-            realign (bool): Whether to realign the coordinate frame based on
-                the motion direction between the last fixed point and the
-                dynamic point
+            vid_ids (list): List of video identifier tuples to search through.
+            realign (bool): Whether to realign the coordinate frame so the last
+                two points are on the x axis and the last three in the XY plane.
+            allow_overlap (bool): Whether returned sequences can share points.
             num_to_find (int): How many such sequences to find (if possible).
                 Defaults to -1, meaning to find all possible ones.
-            verbose (bool, optional): Whether to print out information on
-                successfulness. Defaults to False.
-            thresh (float, optional): Maximum allowable sum of speeds for the
-                early fixed points to consider the sequence "static". Defaults
-                to 4.0.
+            criteria (str): Which selection: 'static', 'planar', or 'none'.
+            static_thresh (float, optional): Threshold for "static" criterion.
+            planar_thresh (float, optional): Tolerance for planarity.
+            verbose (bool, optional): Print successfulness. Defaults to False.
 
         Returns:
             list: A list of 2-tuples of arrays (pts_subset, aas_subset) where:
@@ -328,25 +332,55 @@ class PoseLoader(ABC):
                 - aas_subset (ndarray): Array of rotations (as axis-angles),
                 potentially realigned if realign=True
         '''
-        loaders = [cls(*i) for i in vid_ids]
-        rets: typing.List[typing.Tuple[NDArray, NDArray]] = []
+        # Create a loader instance from each ID.
+        loaders = [cls(*i) for i in cls.prepIDsForConstructor(vid_ids)]
+        rets: typing.List[typing.Tuple[NDArray, NDArray]] = [] # Returned list.
         num_found = 0
+        find_all = num_to_find < 0
         for tl in loaders:
-            num_non_gt_frames = GT_PT_IND
-            tl_diffs = np.diff(tl.getTranslationsGTNP(), 1, axis=0)
-            tl_diff_subset = tl_diffs[:num_non_gt_frames]
+            all_pts = tl.getTranslationsGTNP()
+            tl_diffs = np.diff(all_pts, 1, axis=0)
+            
             i = 0
-            i_lim = (len(tl_diffs) - num_non_gt_frames + 1)
-            while i < i_lim and (num_found < num_to_find or num_to_find < 0):
-                tl_diff_subset = tl_diffs[i:(i + num_non_gt_frames)]
-                early_speeds = np.linalg.norm(
-                    tl_diff_subset[:LAST_FIXED_PT_IND], axis=-1
-                )
-                if np.sum(early_speeds) < thresh:
-                    end_found = i + num_non_gt_frames + 1
-                    aas_subset = tl.getRotationsGTNP()[i:end_found]
-                    pts_subset = tl.getTranslationsGTNP()[i:end_found]
+            seq_len = (GT_PT_IND + 1)
+            i_lim = len(all_pts) - seq_len
+            # Continue until we run out of frames or found enough examples.
+            while i < i_lim and (num_found < num_to_find or find_all):
+                accept = False
+                end_ind = i + seq_len
+                end_diff_ind = end_ind - 1
+                if criteria == "static":
+                    # See if first few points are mostly static.
+                    tl_diff_subset = tl_diffs[i:end_diff_ind]
+                    early_speeds = np.linalg.norm(
+                        tl_diff_subset[:LAST_FIXED_PT_IND], axis=-1
+                    )
+                    if np.sum(early_speeds) < static_thresh:
+                        accept = True
+                elif criteria == "planar":
+                    # Fit a plane to pts_subset (using SVD)
+                    pts_subset = all_pts[i:end_ind]
+                    mean = np.mean(pts_subset, axis=0)
+                    U_S_Vt = np.linalg.svd(pts_subset - mean)
+                    # Smallest singular values ratio = distance from planarity
+                    if U_S_Vt[1][-1]/U_S_Vt[1][-2] < planar_thresh:
+                        accept = True
+                elif criteria == "none":
+                    accept = True
+                else:
+                    raise ValueError(f"Unknown criteria: {criteria}")
+
+                if accept:
+                    # If so, we collect the poses of them and the next frames.
+                    aas_subset = tl.getRotationsGTNP()[i:end_ind]
+                    pts_subset = all_pts[i:end_ind]
+                    # May move points so that the one before LAST_FIXED_PT_IND
+                    # is at origin, the point at LAST_FIXED_PT_IND is on x-axis,
+                    # and the one two prior is in XY plane.
                     if realign:
+                        tl_diff_subset = tl_diffs[i:end_diff_ind]
+                        # Get rotation matrix to move the mentioned points into
+                        # XY plane, with velocity along x-axis.
                         diff_mat = pm.getOrthonormalFrames(
                             False,
                             tl_diff_subset[LAST_FIXED_PT_IND - 1:LAST_FIXED_PT_IND],
@@ -354,47 +388,33 @@ class PoseLoader(ABC):
                         )[1][0]
                         aas_subset = aas_subset @ diff_mat
                         new_frame_pts = pts_subset @ diff_mat
+                        # Move points closer to origin.
                         pts_subset = new_frame_pts - new_frame_pts[LAST_FIXED_PT_IND - 1]
                     rets.append((pts_subset, aas_subset))
                     num_found += 1
-                    i = end_found
+                    i = ((i + 1) if allow_overlap else end_ind)
                 else:
                     i += 1
-            if (num_found >= num_to_find and num_to_find > 0):
+            if (num_found >= num_to_find and not find_all):
                 break
         if verbose:
             find_str = str(num_to_find) if num_to_find > 0 else "all"
-            print("Found {}/{} static sequences.".format(num_found, find_str))
+            print(f"Found {num_found}/{find_str} {criteria} sequences.")
         return rets
-    
-    @classmethod
-    def prepIDsForConstructor(cls, ids):
-        return ids
 
     @classmethod
-    def getGroupedStaticStartSamples(cls, train_ids, val_ids, test_ids,
-                                     realign: bool, num_to_find: int = -1,
-                                     verbose: bool = False, thresh = 4.0):
+    def getGroupedSamplesByCriteria(cls, train_ids, val_ids, test_ids,
+                                     realign: bool, allow_overlap: bool,
+                                     criteria: str, num_to_find: int = -1,
+                                     static_thresh = 4.0,
+                                     planar_thresh: float = 1e-2,
+                                     verbose: bool = False):
         '''
-        Get a set of sample points (enough needed to calculate crackle) from
-        a set of specified videos where the object is barely moving for the 
-        first few frames.
+        Same as getSamplesByCriteria, but grouped by train/val/test.
 
         Parameters:
-            train_ids (list): List of video identifier tuples from training set
-                to search through for a suitable static start sequence.
-            val_ids (list): Same as above, but for the validation set.
-            test_ids (list): Same as above, but for the test set.
-            realign (bool): Whether to realign the coordinate frame based on
-                the motion direction between the last fixed point and the
-                dynamic point
-            num_to_find (int): How many such sequences to find (if possible).
-                Defaults to -1, meaning to find all possible ones.
-            verbose (bool, optional): Whether to print out information on
-                successfulness. Defaults to False.
-            thresh (float, optional): Maximum allowable sum of speeds for the
-                early fixed points to consider the sequence "static". Defaults
-                to 4.0.
+            train_ids, val_ids, test_ids: Lists of video identifier tuples.
+            Remaining parameters: See getSamplesByCriteria.
 
         Returns:
             dict: A dict where the keys are DataSubsetKind values and the items
@@ -408,21 +428,19 @@ class PoseLoader(ABC):
         '''
         # Dictionary to store sequences from each set
         sequence_sets = {
-            DataSubsetKind.TRAIN: train_ids, DataSubsetKind.VALIDATION: val_ids,
+            DataSubsetKind.TRAIN: train_ids,
+            DataSubsetKind.VALIDATION: val_ids,
             DataSubsetKind.TEST: test_ids
         }
-
-        sequence_sets = {
-            k: cls.prepIDsForConstructor(v) for k, v in sequence_sets.items()
-        }
-
         # Get sequences for each set
         sequences_by_set: typing.Dict[DataSubsetKind, NDArray] = dict()
         for set_name, vid_ids in sequence_sets.items():
-            tup_list = cls.getStaticStartSample(
-                vid_ids, realign, num_to_find, verbose, thresh
+            tup_list = cls.getSamplesByCriteria(
+                vid_ids, realign, allow_overlap, criteria, num_to_find,
+                static_thresh, planar_thresh, verbose
             )
-            pose_info = np.stack(tup_list, axis=0)
+            e = (0, 2, GT_PT_IND + 1, 3)
+            pose_info = np.stack(tup_list, axis=0) if tup_list else np.empty(e)
             pose_info.setflags(write=False)
             sequences_by_set[set_name] = pose_info
         return sequences_by_set

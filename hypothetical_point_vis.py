@@ -37,9 +37,11 @@ models = loadLatestModels(model_prefixes)
 
 bcot_id_split = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
 
-sequences_by_subset = PoseLoaderBCOT.getGroupedStaticStartSamples(
-    *bcot_id_split, True, NUM_BCOT_SAMPLES, True
-) 
+overlap = False
+crit = "static"
+sequences_by_subset = PoseLoaderBCOT.getGroupedSamplesByCriteria(
+    *bcot_id_split, True, overlap, crit, NUM_BCOT_SAMPLES, verbose=True
+)
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
 all_statics = np.concatenate(list(sequences_by_subset.values()), axis=0)
