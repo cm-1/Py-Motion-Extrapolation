@@ -1082,14 +1082,18 @@ bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
 #%%
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
 med_test_scores = np.empty((3, len(bcot_test_ids)))
+all_grouped_test_scores = []
 for skip_amt in range(3):
     skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][skip_amt:(skip_amt + 2)]
     skip_subset = bcs_test_errs[skip_bounds[0]:skip_bounds[1]]
     boundaries = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
+    grouped_test_scores = []
     for i in range(len(bcot_test_ids)):
         row_idxs = boundaries[i:(i+2)]
         errs_for_id = skip_subset[row_idxs[0]:row_idxs[1]]
         med_test_scores[skip_amt, i] = np.median(errs_for_id)
+        grouped_test_scores.append(errs_for_id)
+    all_grouped_test_scores.append(grouped_test_scores)
 
 #%%
 def bcot_name(bcot_id):
