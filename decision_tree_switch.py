@@ -1078,6 +1078,8 @@ if TRAIN_NEW_MODEL:
 
 #%% Print scores on test data.
 bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
+static_test_errs: NDArray = sel_loss(bcotjav.gt_test, np.zeros((1, 12))).numpy()
+err_ratios = bcs_test_errs / static_test_errs
 
 #%%
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
@@ -1085,7 +1087,7 @@ med_test_scores = np.empty((3, len(bcot_test_ids)))
 all_grouped_test_scores = []
 for skip_amt in range(3):
     skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][skip_amt:(skip_amt + 2)]
-    skip_subset = bcs_test_errs[skip_bounds[0]:skip_bounds[1]]
+    skip_subset = err_ratios[skip_bounds[0]:skip_bounds[1]]
     boundaries = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
     grouped_test_scores = []
     for i in range(len(bcot_test_ids)):
