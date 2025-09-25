@@ -321,7 +321,7 @@ class DerivativeCollection:
 MOTION_DATA_KEY_TYPE = typing.Union[
     MOTION_DATA, SpecifiedMotionData, OneHotMotionData
 ]
-PoseLoaderList = typing.List[gtc.PoseLoader]
+PoseLoaderList = typing.Sequence[gtc.PoseLoader]
 
 # Finds closest points on hyperplanes with the given normals and offsets.
 # The below function is the result of me feeding my original getClosestPoint()

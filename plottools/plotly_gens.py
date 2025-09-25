@@ -14,11 +14,12 @@ def getScatterMarkers(input_color_vals: typing.Optional[NDArray] = None,
                       colorscale = 'Viridis', opacity=0.8, size=1, **kwargs):
     if "marker" in kwargs:
         return kwargs["marker"]
-    marker_spec = dict(size=size, opacity=opacity, **kwargs)
+    marker_spec: typing.Dict[str, typing.Any] = dict(
+        size=size, opacity=opacity, **kwargs
+    )
     if input_color_vals is not None:
-        marker_spec.update(
-            {"color": input_color_vals.flatten(), "colorscale": colorscale}
-        )
+        marker_spec["color"] = input_color_vals.flatten()
+        marker_spec["colorscale"] =  colorscale
     return marker_spec
 
 def getLines(name: str, pts: NDArray, min_label_ind: int = -1, color="black",
@@ -108,7 +109,7 @@ class TraceManager:
         If the figure's data was cleared, resets the trace mapping.
         """
         
-        markers = None
+        markers = dict()
         if name in self.scatter_traces:
             idx = self.scatter_traces[name]
             # Update the trace in place for performance

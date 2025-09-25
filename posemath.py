@@ -2,6 +2,7 @@ import typing
 from collections import namedtuple
 
 import numpy as np
+from numpy.typing import NDArray, ArrayLike
 
 HALF_PI_NP = np.pi/2.0
 DEFAULT_ZERO_ANG_THRESH = 0.0001
@@ -65,8 +66,9 @@ def _defaultReplacementVec(length):
     ret[0] = 1.0
     return ret
 
-def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
-                         vec_for_zero_norms: np.ndarray = None,
+def safelyNormalizeArray(array: np.ndarray,
+                         norms: typing.Optional[NDArray] = None,
+                         vec_for_zero_norms: typing.Optional[NDArray] = None,
                          propagate_last_nonzero_vec: bool = True,
                          propagate_back_if_first_vecs_zero: bool = False,
                          zero_norm_inds = None):
@@ -88,7 +90,9 @@ def safelyNormalizeArray(array: np.ndarray, norms: np.ndarray = None,
     '''
     
     if norms is None:
-        norms = np.linalg.norm(array, axis=-1, keepdims=True)
+        norms = typing.cast(
+            NDArray, np.linalg.norm(array, axis=-1, keepdims=True)
+        )
 
     if zero_norm_inds is None:
         zero_norm_inds = (norms == 0)
@@ -497,13 +501,13 @@ def integrateAngularVelocityRK(angular_velocities, starting_poses, order=1):
     # Return only the final poses
     return current_poses
 
-def _safeDivideHelper(numerator, denominator: np.ndarray, out_arr_creator,
-                      denom_nz: typing.Optional[np.ndarray] = None):
+def _safeDivideHelper(numerator: ArrayLike, denominator: NDArray,
+                      out_arr_creator, denom_nz: typing.Optional[np.ndarray] = None):
     if denom_nz is None:
-        denom_nz = (denominator != 0.0)
+        denom_nz = np.asarray(denominator != 0.0)
     if np.all(denom_nz):
         return numerator / denominator, True, denom_nz
-    out_arr: np.ndarray = out_arr_creator(denominator.shape)
+    out_arr: NDArray = out_arr_creator(denominator.shape)
     np.divide(numerator, denominator, out=out_arr, where=denom_nz)
     return out_arr, False, denom_nz
 
@@ -600,7 +604,8 @@ def anglesBetweenQuats(quats0, quats1):
     half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
     return half_angle + half_angle
 
-def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
+def quatSlerp(quats0, quats1, t: typing.Union[int, float, NDArray],
+              zeroAngleThresh: float = 0.0001):
     t_is_const = (isinstance(t, float) or isinstance(t, int))
     if t_is_const:
         # For certain values of t, like t=2, optimizations are possible.
@@ -636,7 +641,9 @@ def quatSlerp(quats0, quats1, t, zeroAngleThresh: float = 0.0001):
     pos_angles = angles[pos_angle_inds, np.newaxis]
     t_reshape = t
     if not t_is_const:
-        t_reshape = t[pos_angle_inds].reshape(pos_angles.shape)
+        t_reshape = typing.cast(NDArray, t)[pos_angle_inds].reshape(
+            pos_angles.shape
+        )
 
     retVal[zero_angle_inds] = quats0[zero_angle_inds]
     
@@ -912,7 +919,7 @@ def matsFromQuaternions(quats: np.ndarray):
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
-def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH):
+def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH) -> NDArray:
     # Reusability-TODO: I think the only parts of the code below that do not yet support
     # more than 3 dimensions are the handling of axes for angles of zero.
     # There may not yet be a *benefit* to full support, but noting just in case.

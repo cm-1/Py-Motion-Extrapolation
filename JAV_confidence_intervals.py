@@ -200,13 +200,13 @@ print(vel_deg2_stats_struct[skip_key][pred_key][motion_key])
 # plt.show()
 
 class StatsJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, es.ErrStats):
+    def default(self, o):
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        elif isinstance(o, es.ErrStats):
             ...
             # Reusability-TODO: handle namedtuple
-        return super().default(obj)
+        return super().default(o)
     
 # print(json.dumps(local_stats_struct, cls=StatsJSONEncoder, indent=2))
     

@@ -243,10 +243,10 @@ class ConsolidatedResults:
 
         # self.body_seq_to_row = dict() # (bodyID: int , seqID: int) -> int
 
-        self._translations_gt = None
-        self._axisangles_gt = None
-        self._angvels_gt = None
-        self._quaternions_gt = None
+        self._translations_gt = np.empty((0, 3))
+        self._axisangles_gt = np.empty((0, 3))
+        self._angvels_gt = np.empty((0, 3))
+        self._quaternions_gt = np.empty((0, 4))
 
         self._currentKey = None # Current (body, sequence) key.
         self._allBodSeqKeys = set()
@@ -254,23 +254,27 @@ class ConsolidatedResults:
     # Predictions that require multiple prior points may lack a prediction for
     # the 2nd point, 3rd point, etc. In this case, the CV version of the code
     # would use a different prediction method (including assuming no motion).
-    def prependMissingPredictions(backup_predictions, predictions):
+    @staticmethod
+    def prependMissingPredictions(backup_predictions: NDArray, predictions):
         numMissing = (len(backup_predictions) - 1) - len(predictions)
         return np.vstack((backup_predictions[0:numMissing], predictions))
 
     # Note: returns errors in radians!
-    def getQuatError(values, predictions):
+    @staticmethod
+    def getQuatError(values: NDArray, predictions: NDArray):
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
         )
         return pm.anglesBetweenQuats(values[1:], full_predictions)
 
     # Note: returns errors in radians!
+    @staticmethod
     def getAxisAngleError(values, predictions): 
         v_qs = pm.quatsFromAxisAngleVec3s(values)
         p_qs = pm.quatsFromAxisAngleVec3s(predictions)
         return ConsolidatedResults.getQuatError(v_qs, p_qs)
 
+    @staticmethod
     def getTranslationError(values, predictions):
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
@@ -278,7 +282,8 @@ class ConsolidatedResults:
 
         return values[1:] - full_predictions
     
-    def updateGroundTruth(self, translations, axisangles, quats, angvels, bod_ID, seq_ID):
+    def updateGroundTruth(self, translations, axisangles, quats, angvels,
+                          bod_ID: int, seq_ID: int):
         self._currentKey = (bod_ID, seq_ID)
         self._allBodSeqKeys.add(self._currentKey)
         self._translations_gt = translations
@@ -362,6 +367,7 @@ class ConsolidatedResults:
             names, agg_name, ROTATION_THRESH_RAD, True, use_shift
         )
 
+    @staticmethod
     def applyThreshold(errs, thresh):
         score = None
         if thresh is None:
@@ -370,6 +376,7 @@ class ConsolidatedResults:
             score = (errs <= thresh).mean()
         return score
 
+    @staticmethod
     def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
         bodSeqKeys = results_dict[names[0]].errors.keys()
         errs = dict()
@@ -407,11 +414,14 @@ class ConsolidatedResults:
         if name in all_results_dict.keys():
             all_results_dict[name].addResult(self._currentKey, score, errs)
         else:
+            if self._currentKey is None:
+                raise Exception("No current video key!")
             errs_dict = {self._currentKey: errs}
             score_dict = {self._currentKey: score}
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
-
+    
+    @staticmethod
     def printLatexTable(table_info: TableInfo, num_to_highlight = 0,
                         max_is_better = True, dec_round = 2, data_func = None):
         print_str = "\\begin{table}[h]\n\\centering\n\\caption{...}\n"
@@ -477,12 +487,13 @@ class ConsolidatedResults:
         print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table}"
         print(print_str)
 
-
+    @staticmethod
     def printTable(results_for_names, col_names, row_names = None, annotations = None):
         name_lens = []
         row_name_col_width = 0
-        no_row_names_given = (row_names is None) or (len(row_names) == 0)
-        if no_row_names_given:
+        no_row_names_given = False
+        if (row_names is None) or (len(row_names) == 0):
+            no_row_names_given = True
             row_names = [""]
         else:
             row_name_col_width = np.max([len(rn) for rn in row_names]) + 1
@@ -534,7 +545,7 @@ class ConsolidatedResults:
                             weight_scores_by_len: bool,
                             pose_component: POSE_COMPONENT,
                             thresh_name: str = "", 
-                            cols_to_exclude: typing.List[str] = None):
+                            cols_to_exclude: typing.Optional[typing.Sequence[str]] = None):
         mean_ax = None
         row_names = []
         # If we split up by rows, we need a different axis for the mean calc
@@ -657,7 +668,7 @@ class ConsolidatedResults:
     def printResults(self, group_mode: DisplayGrouping,
                      weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
                      thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None):
+                     cols_to_exclude: typing.Optional[typing.Sequence[str]] = None):
         
         ti = self.prepareDataForPrint(
             group_mode, weight_scores_by_len, pose_component, thresh_name,
@@ -716,7 +727,7 @@ class ConsolidatedResults:
     def latexResults(self, group_mode: DisplayGrouping,
                      weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
                      thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None,
+                     cols_to_exclude: typing.Optional[typing.Sequence[str]] = None,
                      num_to_highlight = 0, max_is_better = True, dec_round = 2,
                      data_func = None):
         ti = self.prepareDataForPrint(
@@ -1458,7 +1469,7 @@ best_fit_plot, = ax2.plot(*best_fit_coords)
 p2_p1_bcs_lims = np.stack([
     np.min(p2_p1_bcs_stack, axis=0), np.max(p2_p1_bcs_stack, axis=0)
 ], axis=-1)
-ax2.axis([-0.5, 2, -0.5, 2])
+ax2.axis((-0.5, 2, -0.5, 2))
 
 ax.set_xlim(*p2_p1_bcs_lims[0])
 ax.set_ylim(*p2_p1_bcs_lims[1])
@@ -1488,7 +1499,7 @@ def move_plane(val):
     best_fit_plot.set_data(*best_fit_coordvals)
     fig.canvas.draw_idle()
 
-slider_ax = plt.axes([0.6, 0.15, 0.35, 0.03])#, facecolor='lightgoldenrodyellow')
+slider_ax = plt.axes((0.6, 0.15, 0.35, 0.03))#, facecolor='lightgoldenrodyellow')
 slider = Slider(slider_ax, "prev2", 0.0, half_pi, valinit=0.0)
 slider.on_changed(move_plane)
 
@@ -1515,7 +1526,7 @@ acc_err_y[negate_mask] *= -1
 # Create line segments from (0, 0) to each (x, y).
 points = np.column_stack((acc_err_x, acc_err_y))
 origin = np.array([0, 0])
-segments = np.array([[origin, point] for point in points])
+segments = [np.array([origin, point]) for point in points]
 
 # Create the LineCollection with a colormap that encodes the frame numbers.
 colors = (skipAmount + 1) * np.arange(len(acc_err_x))

@@ -72,15 +72,15 @@ class _LoadedPoses:
             raise ValueError("Must supply either AA or matrix rotations!")
         
         self.translations = translations
-        self.mat_rotations = mat_rotations
-        self.aa_rotations = aa_rotations
         if mat_rotations is None:
-            self.mat_rotations = pm.matsFromScaledAxisAngleArray(aa_rotations)
+            mat_rotations = pm.matsFromScaledAxisAngleArray(aa_rotations)
         if aa_rotations is None:
-            self.aa_rotations = pm.axisAngleFromMatArray(mat_rotations)
+            aa_rotations = pm.axisAngleFromMatArray(mat_rotations)
+        self.mat_rotations: NDArray = mat_rotations
+        self.aa_rotations: NDArray = aa_rotations
 
 class _LoadedData(typing.NamedTuple):
-    gt_data: typing.Optional[_LoadedPoses]
+    gt_data: _LoadedPoses
     cv_data: typing.Optional[_LoadedPoses] 
     
 class PoseLoader(ABC):
@@ -175,7 +175,7 @@ class PoseLoader(ABC):
 
     @abstractmethod
     def getVidID(self):
-        pass
+        return tuple([])
 
     # The error-handling here was added by ChatGPT, but all remaining code is
     # human-written.
@@ -251,6 +251,7 @@ class PoseLoader(ABC):
 
     # Returns (rotation mat data, translation data) tuple, where each element is
     # a numpy array, the former with shape (n,3,3), the latter with shape (n,3).
+    @staticmethod
     def posesFromMatsTXT(filepath):
         data = np.loadtxt(filepath)
     
@@ -659,9 +660,9 @@ class PoseLoaderBCOT(PoseLoader):
         "static_suspension", "static_trans"
     ]
 
-    _DATASET_DIR = None
-    _CV_POSE_EXPORT_DIR = None
-    _dir_paths_initialized = False
+    _DATASET_DIR: pathlib.Path
+    _CV_POSE_EXPORT_DIR: pathlib.Path
+    _dir_paths_initialized: bool = False
 
     def __init__(self, bodyIndex: int, seqIndex: int, cvFrameSkipForLoad = -1):
         '''If cvFrameSkipForLoad < 0, we do not load poses calculated with computer vision.'''
@@ -739,10 +740,13 @@ class PoseLoaderBCOT(PoseLoader):
             all_bodies, validation_ratio, test_ratio, random_seed
         )
 
-        return tuple(PoseLoaderBCOT.combosByBodyIDs(b_ids) for b_ids in body_split)
+        return typing.cast(
+            typing.Tuple[typing.List, typing.List, typing.List],
+            tuple(PoseLoaderBCOT.combosByBodyIDs(b_ids) for b_ids in body_split)
+        )
 
     @classmethod
-    def trainTestByBody(cls, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
+    def trainTestByBody(cls, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List]:
         '''See the documentation for trainValidationTestByBody().'''
         train_valid_test = cls.trainValidationTestByBody(
             0.0, test_ratio, random_seed
@@ -770,7 +774,7 @@ class PoseLoaderBCOT(PoseLoader):
         #patternRot = re.compile(r"^\s*" + (patternNum + r"\s+") * 9)
 
         gtMatData = PoseLoader.posesFromMatsTXT(self.posePathGT)
-        calcMatData: typing.Optional[typing.Tuple[NDArray, NDArray]] = None
+        calcMatData = None
         if self._cvFrameSkipForLoad >= 0 and self.posePathCalc.is_file():
             calcMatData = PoseLoader.posesFromMatsTXT(self.posePathCalc)
 
@@ -1010,9 +1014,9 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         CAM_TYPE.QUEST: "hot3d_quest_times.npz"
     }
 
-    _DATASET_DIR = None
+    _DATASET_DIR: pathlib.Path
     # _CV_POSE_EXPORT_DIR = None
-    _dir_paths_initialized = False
+    _dir_paths_initialized: bool = False
 
     _ALL_CLIP_OBJS: typing.Dict[CAM_TYPE, NDArray] = dict()
     _ALL_CLIP_BASE_INDS: typing.Dict[CAM_TYPE, NDArray] = dict()
