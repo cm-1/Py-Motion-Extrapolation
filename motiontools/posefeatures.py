@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from math import floor
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import NDArray, ArrayLike
 
 from joblib import Parallel, delayed
 import joblib
@@ -266,66 +266,50 @@ class OneHotMotionData(typing.NamedTuple):
 
 class DerivativeCollection:
     def __init__(self, displacements: NDArray, max_derivative_order: int,
-                 timestamps: typing.Optional[NDArray] = None):
+                 time_info: typing.Optional[ArrayLike] = 1):
         
         assert max_derivative_order >= 1, "max_derivative_order >= 1 required!"
         
         self.velocities = displacements.copy()
-        
-        unflat_timestamps = self._getUnflatTimestamps(
-            len(displacements), timestamps
-        )
 
-        if timestamps is not None:
-            time_deltas = np.diff(unflat_timestamps, 1, axis=0)
+        if time_info is None:
+            time_info = 1
+        self.dt_not_const: bool = not isinstance(time_info, (int, float))
+        self.div_by_time: bool = self.dt_not_const or (time_info != 1)
+        
+        self.unflat_time_info = time_info
+        if self.dt_not_const:
+            # Reshape for broadcasting.
+            coeff_shape = self.velocities.shape[:-1] + (1, )
+            self.unflat_time_info = time_info.reshape(coeff_shape)
+
+        if self.div_by_time:
+            time_deltas = time_info
+            if self.dt_not_const:
+                time_deltas = np.diff(self.unflat_time_info, 1, axis=0)
             self.velocities = displacements / time_deltas
 
         if max_derivative_order >= 2:
-            self.accelerations = self._recursiveDeriv(
-                self.velocities, 2, unflat_timestamps
-            )
+            self.accelerations = self._recursiveDeriv(self.velocities, 2)
         if max_derivative_order >= 3:
-            self.jerks = self._recursiveDeriv(
-                self.accelerations, 3, unflat_timestamps
-            )
+            self.jerks = self._recursiveDeriv(self.accelerations, 3)
         if max_derivative_order >= 4:
-            self.snaps = self._recursiveDeriv(
-                self.jerks, 4, unflat_timestamps
-            )
+            self.snaps = self._recursiveDeriv(self.jerks, 4)
         if max_derivative_order >= 5:
-            self.crackles = self._recursiveDeriv(
-                self.snaps, 5, unflat_timestamps
-            )
+            self.crackles = self._recursiveDeriv(self.snaps, 5)
         if max_derivative_order >= 6:
             raise NotImplementedError("Derivative orders >= 6 not supported!")
 
-    def _getUnflatTimestamps(self, num_displacements: int,
-                             timestamps: typing.Optional[NDArray]):
-        unflat_timestamps: typing.Optional[NDArray] = None
-        if timestamps is not None:
-            num_pts = num_displacements + 1
-            if len(timestamps) != (num_pts):
-                raise ValueError(
-                    "Must have n+1 timestamps for n displacements!"
-                )
-            ret_shape = self.velocities.shape
-            ret_shape[0] = num_pts
-            ret_shape[-1] = 1
-            unflat_timestamps = timestamps.reshape(ret_shape)
-        return unflat_timestamps
-
-    @staticmethod
-    def _recursiveDeriv(prev_vals: NDArray, deriv_power: int,
-                        full_timestamps: typing.Optional[NDArray]):
-        '''E.g., prev_vals are the last accelerations, deriv_power is 3 
-        (for jerk), and full_timestamps are the timestamps for all positions
-        (minus perhaps the last one for which no prediction follows) reshaped
-        to (n, 1).'''
+    def _recursiveDeriv(self, prev_vals: NDArray, deriv_power: int):
+        """Compute higher-order derivatives recursively.
+        E.g., prev_vals are the last accelerations, deriv_power is 3 
+        (for jerk)."""
         ret_val = np.diff(prev_vals, 1, axis=0)
-        if full_timestamps is not None and len(ret_val) > 0:
-            time_deltas = \
-                full_timestamps[deriv_power:] - full_timestamps[:-deriv_power]
-            scalars = deriv_power / time_deltas
+        if self.div_by_time:
+            time_div = self.unflat_time_info
+            if self.dt_not_const:
+                time_div = self.unflat_time_info[deriv_power:] - self.unflat_time_info[:-deriv_power]
+            scalars = deriv_power / time_div
             ret_val = scalars * ret_val
         return ret_val
 
@@ -1778,7 +1762,7 @@ class HypotheticalInputsForNN:
         self.x0_through_4 = x0_through_4
 
         self.prev_pds = DerivativeCollection(
-            np.diff(x0_through_4, 1, axis=0), 5, None
+            np.diff(x0_through_4, 1, axis=0), 5, self.step
         )
         
         rev_mats = np.swapaxes(rmats0_through_5[:-1], -2, -1)
@@ -1787,7 +1771,7 @@ class HypotheticalInputsForNN:
         angvel_aas_am = pm.axisAngleFromMatArray(angvel_mats_am)
         angvel_aas = np.swapaxes(angvel_aas_am, 0, -2)
 
-        self.all_rds = DerivativeCollection(angvel_aas, 3, None)
+        self.all_rds = DerivativeCollection(angvel_aas, 3, self.step)
 
         all_vels = self.prev_pds.velocities
         prev_vel = all_vels[-1]
@@ -1831,9 +1815,7 @@ class HypotheticalInputsForNN:
             _, j_orth = pm.parallelAndOrthoParts(
                 prev_jerk[a0_is_0], prev_ortho_dirs[0][a0_is_0], True
             )
-            prev_ortho_dirs[..., 2, :][a0_is_0] = pm.normalizeAll(
-                j_orth[a0_is_0]
-            )
+            prev_ortho_dirs[..., 2, :][a0_is_0] = pm.normalizeAll(j_orth[a0_is_0])
 
         # print("hyp pre:", prev_ortho_dirs)
 
@@ -1850,26 +1832,29 @@ class HypotheticalInputsForNN:
         num_scale_types = len(self.rel_ax_order) - 2
 
         inner_prev_vecs_shape = self.prev_relative_vecs.shape[1:-1]
-        prev_scale_shape = (num_scale_types, ) + inner_prev_vecs_shape
+        prev_scale_shape = (num_scale_types, ) + inner_prev_vecs_shape #+ (1, )
 
         self.prev_relative_scales = np.empty(prev_scale_shape)
-        self.prev_relative_scales[0] = np.asarray(vel_mags[-1])
+        self.prev_relative_scales[0] = np.asarray(vel_mags[-1])#[..., np.newaxis]
         self.prev_relative_scales[1] = np.sqrt(
             prev_ortho_mags[1]**2 + prev_ortho_mags[2]**2
-        )
+        )#[..., np.newaxis]
         self.prev_relative_scales[2:] = np.linalg.norm(
-            self.prev_relative_vecs[2:-2], axis=-1
+            self.prev_relative_vecs[2:-2], axis=-1#, keepdims=True
         )
         if self.prev_relative_scales.ndim == 1:
             self.prev_relative_scales = self.prev_relative_scales[..., np.newaxis]
         self.prev_relative_scales_nonzero = (self.prev_relative_scales != 0.0)
+
+    def _stepDiv(self, vecs: NDArray):
+        return vecs if self.step == 1 else (vecs / self.step)
 
     def getHypotheticalCalcs(self, all_x5_choices: NDArray):
         assert all_x5_choices.ndim == 2 and all_x5_choices.shape[1] == 3, \
         "The input of x5 choices must have shape (n, 3)!"
 
 
-        vels: NDArray = all_x5_choices - self.x0_through_4[-1]
+        vels: NDArray = self._stepDiv(all_x5_choices - self.x0_through_4[-1])
         vel_mags: NDArray = np.linalg.norm(vels, axis=-1, keepdims=True)
         vel_mag_is_0 = np.where((vel_mags == 0.0).flatten())[0]
         
@@ -1881,10 +1866,10 @@ class HypotheticalInputsForNN:
             last_nz_uvels = last_nz_uvels[vel_mag_is_0]
         unit_vels[vel_mag_is_0] = last_nz_uvels
         
-        accs = vels - self.prev_vel
-        jerks = accs - self.prev_acc
-        snaps = jerks - self.prev_jerk
-        crackles = snaps - self.prev_snap
+        accs = self._stepDiv(vels - self.prev_vel)
+        jerks = self._stepDiv(accs - self.prev_acc)
+        snaps = self._stepDiv(jerks - self.prev_jerk)
+        crackles = self._stepDiv(snaps - self.prev_snap)
 
         full_shape = vels.shape
         all_curr_vecs = np.stack(
