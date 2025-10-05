@@ -12,13 +12,14 @@ from motiontools.posefeatures import HypotheticalInputsForNN
 from motiontools.dataorg import UnitAwareScaler, joinArrays
 from motiontools.shared_constants import *
 from nn_utilities.nn_loading import loadLatestModels
-from nn_utilities.nn_inference import getHypotheticalOutputsNN
+from nn_utilities.nn_inference import getOutputsNN
 import posemath as pm
 
 from gtCommon import PoseLoaderBCOT
 
 GRAPH_RES = 50
 DISP_RADIUS = 32.0
+STEP = 1
 
 NUM_BCOT_SAMPLES = 64
 
@@ -67,12 +68,38 @@ class PlottingState:
         self._models = models
         self._scaler = scaler
 
+        self.all_seq_nn_outs: typing.Dict[
+            str, typing.Dict[DataSubsetKind, NDArray]
+        ] = dict()
+        temp_hc = None
+        for model_prefix, model in self._models.items():
+            sub_dict: typing.Dict[DataSubsetKind, NDArray] = dict()
+            for dsk, data in self._sequences_by_subset.items():
+                # Our "data" is shaped like a list of (pts, rotation) 2-tuples.
+                pts = np.swapaxes(data[:, 0], 0, 1)
+                prev_pts = pts[:DYNAMIC_PT_IND]
+                last_pts = pts[DYNAMIC_PT_IND]
+                aas = np.swapaxes(data[:, 1], 0, 1)[:GT_PT_IND]
+                rmats = pm.matsFromScaledAxisAngleArray(aas)
+                if temp_hc is None:
+                    temp_hc = HypotheticalInputsForNN(
+                        prev_pts, rmats, STEP, self._scaler.column_keys
+                    )
+                    prev_pts = None
+                    rmats = None
+                outs_nn = getOutputsNN(
+                    model, self._scaler, temp_hc, last_pts, prev_pts, rmats
+                )
+                out_segs = np.stack((outs_nn, last_pts), axis=-2)
+                sub_dict[dsk] = out_segs
+            self.all_seq_nn_outs[model_prefix] = sub_dict
+
     def change_set(self, new_set: DataSubsetKind):
         self.subset = new_set
         self.current_sequences = self._sequences_by_subset[new_set]
     
     def infer(self, hc, pts):
-        return getHypotheticalOutputsNN(
+        return getOutputsNN(
             self._models[self.model_prefix], self._scaler, hc, pts
         )
 
@@ -82,7 +109,7 @@ init_pts, init_aas = ps.current_sequences[0].copy()
 hc = HypotheticalInputsForNN(
     init_pts[:DYNAMIC_PT_IND],
     pm.matsFromScaledAxisAngleArray(init_aas[:GT_PT_IND]),
-    1, scaler.column_keys
+    STEP, scaler.column_keys
 )
 
 #%%
@@ -167,6 +194,8 @@ def subset_callback(change):
     tm.set_line_trace("fixed_pts_bg", bg_fixed, color="lightgray")
     tm.set_line_trace("gt_pts_bg", bg_gt, color="gray")
     
+    model_callback({"new": ps.model_prefix}, update_after=False)
+
     # Add main visualization traces
     seq_callback({"new": 0}) # Sequence slider index has been set to 0.
     
@@ -207,9 +236,12 @@ def set_xyz_sliders(point):
         s.observe(update_plot, names="value")
     update_plot(None)
 
-def model_callback(change):
+def model_callback(change, update_after: bool = True):
     ps.model_prefix = (change["new"])
-    update_plot(None)
+    nn_fixed = joinArrays(ps.all_seq_nn_outs[ps.model_prefix][ps.subset])
+    tm.set_line_trace("nn_fixed", nn_fixed, color="purple")
+    if update_after:
+        update_plot(None)
 
 def update_plot(value):
     """Update grids of points, e.g. when 3D slider changes."""

@@ -25,9 +25,7 @@ def replaceAtEnd(to_replace: np.ndarray, replace_with: np.ndarray, len_diff_chec
 
 def normalizeAll(vecs: np.ndarray):
     ret_val = vecs / np.linalg.norm(vecs, axis = -1, keepdims=True)
-    # if (np.isnan(ret_val).any()):
-    #     raise Exception("NaN when normalizing vectors!")
-    return ret_val
+    return typing.cast(NDArray, ret_val)
 
 
 def conjugateQuats(quats: np.ndarray):
@@ -118,6 +116,8 @@ def safelyNormalizeArray(array: np.ndarray,
                             normed[0] = normed[search_ind]
                             break
                         search_ind += 1
+                    if search_ind >= len(zero_norm_inds):
+                        raise Exception("All vecs 0; propagation impossible!")
                 else:
                     replacement_vec = _defaultReplacementVec(array.shape[-1])
                     normed[0] = replacement_vec
@@ -878,23 +878,25 @@ def matFromAxisAngle(scaledAxis):
     return np.identity(3) + np.sin(angle) * skewed + (1.0 - np.cos(angle)) * (skewed @ skewed)
 
 def matsFromAxisAngleArrays(angles, unitAxes):
+    flat_angs = angles.flatten()
     xs, ys, zs = unitAxes.reshape(-1, 3).transpose()
-    _0s = np.zeros(len(angles))
+    _0s = np.zeros_like(xs)
     
     skeweds = np.moveaxis(np.array([
         [_0s, -zs, ys],
         [zs, _0s, -xs],
         [-ys, xs, _0s]
     ]), -1, 0)
-    idens = np.repeat([np.eye(3)], len(angles), axis=0)
-    sin_part = scalarsMatsMul(np.sin(angles), skeweds)
+    idens = np.repeat([np.eye(3)], len(flat_angs), axis=0)
+    sin_part = scalarsMatsMul(np.sin(flat_angs), skeweds)
     skeweds2 = einsumMatMatMul(skeweds, skeweds)
-    cos_part = scalarsMatsMul(1.0 - np.cos(angles), skeweds2)
-    return idens + sin_part + cos_part
+    cos_part = scalarsMatsMul(1.0 - np.cos(flat_angs), skeweds2)
+    mats_list = idens + sin_part + cos_part
+    return mats_list.reshape(angles.shape + (3, 3))
 
-def matsFromScaledAxisAngleArray(scaledAxisAngles):
-    angles = np.linalg.norm(scaledAxisAngles, axis = -1)
-    axes = np.zeros((len(angles), 3))
+def matsFromScaledAxisAngleArray(scaledAxisAngles: NDArray):
+    angles = np.linalg.norm(scaledAxisAngles, axis=-1)
+    axes = np.zeros_like(scaledAxisAngles)
     posInds = (angles != 0)
     axes[posInds] = scaledAxisAngles[posInds] / angles[posInds][..., np.newaxis]
     return matsFromAxisAngleArrays(angles, axes)
@@ -917,18 +919,34 @@ def matsFromQuaternions(quats: np.ndarray):
         [_2xz - _2sy,      _2yz + _2sx,      1 - _2x2 - _2y2]
     ]), -1, 0)
 
+def handleCondsAtStart(cond_bools: NDArray, ref_arr: NDArray, func_to_app,
+                       **kwargs):
+    n = cond_bools.shape[-1] # Length per sequence
+    flatter_conds = cond_bools.reshape(-1, n)
+    
+    reshape_start = (cond_bools.ndim - flatter_conds.ndim) + 1
+
+    flatter_ref_shape = (-1, ) + ref_arr.shape[reshape_start:]
+    flatter_ref_arr = ref_arr.reshape(flatter_ref_shape)
+    is_np_d = {k: isinstance(v, np.ndarray) for k, v in kwargs.items()}
+    for k, v in kwargs.items():
+        if is_np_d[k]:
+            flatter_v_shape = (-1, ) + v.shape[reshape_start:]
+            kwargs[k] = v.reshape(flatter_v_shape)
+
+    seq_inds_starting_with_cond = np.where(flatter_conds[:, 0])[0]
+    seqs_starting_with_cond = flatter_conds[seq_inds_starting_with_cond]
+    for i, c_row in zip(seq_inds_starting_with_cond, seqs_starting_with_cond):
+        # We know there's at least one because we already pre-filtered.
+        conds_at_front = 1 
+        while conds_at_front < n and c_row[conds_at_front]:
+            conds_at_front += 1
+        kwargs_i = {k: v if not is_np_d[k] else v[i] for k, v in kwargs.items()}
+        func_to_app(flatter_ref_arr[i], conds_at_front, **kwargs_i)
+
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
 def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH) -> NDArray:
-    # Reusability-TODO: I think the only parts of the code below that do not yet support
-    # more than 3 dimensions are the handling of axes for angles of zero.
-    # There may not yet be a *benefit* to full support, but noting just in case.
-    if matrixArray.ndim > 3:
-        raise Exception("Input array of matrices must have (n,3,3) shape!")
-
-    # Speed-TODO: Replace instances of np.stack(...), np.concat(...), and
-    # similar with np.empty(...) followed by assigning to slices. I'm guessing
-    # it'd be more efficient? Less allocating/freeing of memory, right?
     # Reusability-TODO: Last I checked (2024-10-19), it's fine, but if changed
     # since, see if supporting arrays with more dims than (n,3,3) leads to any 
     # inefficiency; if so, remove, or use an "if" to switch to better "flat"
@@ -977,64 +995,67 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH
     # I think indices are oft faster than bool indexing. But needs confirming.
     useTrace = np.nonzero(useTraceBool)
     useDiag = np.nonzero(useDiagBool)
+
+    anyUseTrace = np.sum([len(ut) for ut in useTrace]) > 0
+    anyUseDiag = np.sum([len(ud) for ud in useDiag]) > 0
     
 
     # --------------------------------------------------------------------------
     # Shepperd's Algorithm: Case Where Trace Was Greater.
     # --------------------------------------------------------------------------
 
-    # The angle of rotation about the above axis direction.
-    # Outputs of acos are constrained to [0, pi], which will impact later code.
-    # Input needs to be clamped to [-1, 1] in case fp precision causes it to
-    # exit that interval and, thus, the domain for acos.
-    acosInput = np.clip((matrixTraceVals[useTrace] - 1.0)/2.0, -1.0, 1.0)
-    angles[useTrace] = np.arccos(acosInput)
+    if anyUseTrace:
+        # The angle of rotation about the above axis direction.
+        # Outputs of acos are constrained to [0, pi], which impacts later code.
+        # Input needs to be clamped to [-1, 1] in case fp precision causes it to
+        # exit that interval and, thus, the domain for acos.
+        acosInput = np.clip((matrixTraceVals[useTrace] - 1.0)/2.0, -1.0, 1.0)
+        angles[useTrace] = np.arccos(acosInput)
 
-    matrixOffDiags = matrixArray[useTrace]
+        matrixOffDiags = matrixArray[useTrace]
 
-
-    # Vec3 representing the direction of our rotation axis. Not yet unit length.
-    nonUnitAxes[useTrace] = np.stack([
-        matrixOffDiags[...,2,1] - matrixOffDiags[...,1,2],
-        matrixOffDiags[...,0,2] - matrixOffDiags[...,2,0],
-        matrixOffDiags[...,1,0] - matrixOffDiags[...,0,1]
-    ], axis=-1) # Axis specification needed for input being a list of matrices.
+        nonUnitAxes[useTrace] = np.stack([
+            matrixOffDiags[...,2,1] - matrixOffDiags[...,1,2],
+            matrixOffDiags[...,0,2] - matrixOffDiags[...,2,0],
+            matrixOffDiags[...,1,0] - matrixOffDiags[...,0,1]
+        ], axis=-1) # Axis needs specifying for if input is a list of matrices.
 
 
     # --------------------------------------------------------------------------
     # Shepperd's Algorithm: Case Where a Diagonal Entry Was Greater.
     # --------------------------------------------------------------------------
 
-    i_s = whereMaxDiag[useDiag][:, 0]
-    j_s = (i_s + 1) % 3
-    k_s = (j_s + 1) % 3
+    if anyUseDiag:
+        i_s = whereMaxDiag[useDiag][..., 0]
+        j_s = (i_s + 1) % 3
+        k_s = (j_s + 1) % 3
 
-    matsWhereDiagUsed = matrixArray[useDiag]
-    # The only way I know of to slice with variable last-axis-indices is to
-    # pass in an arange for the first axis; simply using `[:, i_s, j_s]` FAILS!
-    # Maybe there's a better way I'm unaware of, though.
-    arangeUseDiag = np.arange(len(i_s))
-    Aij = matsWhereDiagUsed[arangeUseDiag, i_s, j_s]
-    Aji = matsWhereDiagUsed[arangeUseDiag, j_s, i_s]
-    Aik = matsWhereDiagUsed[arangeUseDiag, i_s, k_s]
-    Aki = matsWhereDiagUsed[arangeUseDiag, k_s, i_s]
-    Ajk = matsWhereDiagUsed[arangeUseDiag, j_s, k_s]
-    Akj = matsWhereDiagUsed[arangeUseDiag, k_s, j_s]
+        matsWhereDiagUsed = matrixArray[useDiag]
+        # The only way I know to slice with variable last-axis-indices is to
+        # pass an arange for the first axis; simply using `[:, i_s, j_s]` FAILS!
+        # Maybe there's a better way I'm unaware of, though.
+        arangeUseDiag = np.arange(len(i_s))
+        Aij = matsWhereDiagUsed[arangeUseDiag, i_s, j_s]
+        Aji = matsWhereDiagUsed[arangeUseDiag, j_s, i_s]
+        Aik = matsWhereDiagUsed[arangeUseDiag, i_s, k_s]
+        Aki = matsWhereDiagUsed[arangeUseDiag, k_s, i_s]
+        Ajk = matsWhereDiagUsed[arangeUseDiag, j_s, k_s]
+        Akj = matsWhereDiagUsed[arangeUseDiag, k_s, j_s]
 
-    diagMaxSubset = diagMaxes[useDiag]
-    
-    # The below is `2sin(angle/2) * axis`
-    sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
-    # Because max-diag-element >= trace, the sqrt input >= 1; no fp concerns.
-    ax_i = np.sqrt(sqrtInput)
-    nonUnitAxes[useDiag, i_s] = ax_i
-    nonUnitAxes[useDiag, j_s] = (Aij + Aji)/ax_i
-    nonUnitAxes[useDiag, k_s] = (Aik + Aki)/ax_i
+        diagMaxSubset = diagMaxes[useDiag]
+        
+        # The below is `2sin(angle/2) * axis`
+        sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
+        # Because max-diag-element >= trace, sqrt(input) >= 1; no fp concerns.
+        ax_i = np.sqrt(sqrtInput)
+        nonUnitAxes[useDiag, i_s] = ax_i
+        nonUnitAxes[useDiag, j_s] = (Aij + Aji)/ax_i
+        nonUnitAxes[useDiag, k_s] = (Aik + Aki)/ax_i
 
-    # Again, we need to clamp/clip in case of fp precision causing problems.
-    acosInput = np.clip((Akj - Ajk)/(ax_i + ax_i), -1.0, 1.0)
-    halfAngles = np.arccos(acosInput)
-    angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
+        # Again, we need to clamp/clip in case of fp precision causing problems.
+        acosInput = np.clip((Akj - Ajk)/(ax_i + ax_i), -1.0, 1.0)
+        halfAngles = np.arccos(acosInput)
+        angles[useDiag] = halfAngles + halfAngles # Will be between 0 and 2pi.
 
     # if np.any(angles < 0):
     #     raise Exception("I was wrong about all pos angles at this step!")
@@ -1066,13 +1087,17 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH
     #      * `where[-1] = accumulated_inds[angles < zeroThresh]`
     #      * `axes[angles < zeroThresh] = axes[tuple(where)]`
     #  * Or could flatten earlier and accept weirdness if first angles are 0.
-    angleInds = np.arange(len(angles))
+    n_per_seq = angles.shape[-1]
+    seq_parent_shape = angles.shape[:-1]
+    angleInds = np.tile(np.arange(n_per_seq), seq_parent_shape + (1, ))
     # At this step, all angles SHOULD be positive.
-    zeroAngleInds = np.nonzero(angles < zeroAngleThresh)
+    zero_angle_mask = angles < zeroAngleThresh
+    zeroAngleInds = np.nonzero(zero_angle_mask)
     angleInds[zeroAngleInds] = 0
     angleInds = np.maximum.accumulate(angleInds, axis = -1)
-    angPropInds = angleInds[zeroAngleInds]
-    nonUnitAxes[zeroAngleInds] = nonUnitAxes[angPropInds]
+    za_where = np.argwhere(zero_angle_mask).transpose()
+    za_where[-1] = angleInds[zeroAngleInds]
+    nonUnitAxes[zeroAngleInds] = nonUnitAxes[tuple(za_where)]
 
     # TL;DR: Angles for the 1st case of Shepperd's algorithm, as output of acos,
     # start out in interval [0, pi]. Thus, the similar rotations
@@ -1153,16 +1178,12 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH
     sinVals = np.sin(angles[useDiag]/2.0)
     unitAxes[useDiag] = nonUnitAxes[useDiag] / (sinVals + sinVals)[..., np.newaxis]
     # Then zero-angle:
-    unitAxes[zeroAngleInds] = unitAxes[angPropInds]
-    # If the first rotations are zero-angle, then they have no previous axis to
-    # copy. So they'll still be NaNs or whatever, so we should fix those.
-    numIssueAxesAtFront = 0
-    while numIssueAxesAtFront < len(angles):
-        if angles[numIssueAxesAtFront] >= zeroAngleThresh:
-            break
-        numIssueAxesAtFront += 1
-    unitAxes[:numIssueAxesAtFront] = 0.0
+    unitAxes[zeroAngleInds] = unitAxes[tuple(za_where)]
 
+    def _make_firsts_0(arr: NDArray, n: int): arr[:n] = 0.0
+
+    handleCondsAtStart(zero_angle_mask, unitAxes, _make_firsts_0)
+    
     # Now we add 2pi multiples to make angles within pi of each other.
     # We want the following difference-to-correction mapping:
     # ..., (-3pi, -pi) -> tau, (-pi, pi) -> 0, (pi, 3pi) -> -tau,
