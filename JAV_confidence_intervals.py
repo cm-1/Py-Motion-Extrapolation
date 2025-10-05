@@ -2,6 +2,7 @@ import typing
 import json
 
 import numpy as np
+from numpy.typing import NDArray
 
 import errorstats as es
 from gtCommon import PoseLoaderBCOT
@@ -14,7 +15,7 @@ motion_kinds = [
 ]
 
 
-combos = []
+combos: typing.List[typing.Tuple[int, int, str]] = []
 for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
     k = ""
     for k_opt in motion_kinds:
@@ -25,17 +26,19 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
         if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b, s, k))
 
-
-all_rotations_T: typing.Dict[typing.Tuple[int, int, int], np.ndarray] = dict()
-all_translations: typing.Dict[typing.Tuple[int, int, int], np.ndarray] = dict()
+NDArrayForVid = typing.Dict[typing.Tuple[int, int, int], NDArray[np.floating]]
+all_rotations_T: NDArrayForVid = dict()
+all_translations: NDArrayForVid = dict()
 
 for skip_amt in range(3):
     step = skip_amt + 1
     for combo in combos:
         calculator = PoseLoaderBCOT(combo[0], combo[1])
+        # Rotations will be an array of rotation matrices of shape (n, 3, 3).
         rotations = calculator.getRotationMatsGTNP()[::step]
         ck = (skip_amt, ) + combo[:2]
         all_rotations_T[ck] = np.swapaxes(rotations, -1, -2) # transposes
+        # all_translations[ck] is an array of shape (n, 3)
         all_translations[ck] = calculator.getTranslationsGTNP()[::step]
 
 #%%
@@ -43,11 +46,19 @@ for skip_amt in range(3):
 
 
 prediction_kinds = ["static", "vel-deg1", "vel-deg2", "acc-deg2"]
+ErrListsByMotionPredictionStep = typing.List[
+    typing.Dict[str, typing.Dict[str, typing.List[NDArray[np.floating]]]]
+]
+ErrsByMotionPredictionStep = typing.List[
+    typing.Dict[str, typing.Dict[str, NDArray[np.floating]]]
+]
 def get_start_data_struct():
-    return [
+    ret_val: ErrListsByMotionPredictionStep = [
         {pk: {mk: [] for mk in motion_kinds} for pk in prediction_kinds}
         for _ in range(3)
     ]
+    return ret_val
+
 
 world_err_lists = get_start_data_struct()
 local_err_lists = get_start_data_struct()
@@ -78,17 +89,20 @@ for skip_amt in range(3):
         # if not pm.areAxisArraysOrthonormal(colList(deg2_vel_frames), loud=True):
         #     raise Exception("deg2 orthonormal issue!")
 
-        temp_preds = dict()
+        temp_preds: typing.Dict[str, NDArray[np.floating]] = dict()
         temp_preds["static"] = prev_translations
         temp_preds["vel-deg1"] = translations[1:-1] + deg1_vels
         temp_preds["vel-deg2"] = translations[2:-1] + deg2_vels
         temp_preds["acc-deg2"] = temp_preds["vel-deg2"] + half_deg2_acc
 
+        # Returned dict maps prediction kind str to LocalizedErrsCollection, a
+        # struct of NDArrays of the errors moved to different reference frames.
         reframed_errs = es.localizeErrsInFrames(
             temp_preds, translations, rt_mats, default_acc_dir=default_acc_dir,
             deg1_vels=deg1_vels, deg2_vels=deg2_vels, deg2_acc=deg2_acc, 
         )
         
+        # Put each err_coll ref frame NDArrays into local nested collection.
         for pk, err_coll in reframed_errs.items():
             world_err_lists[skip_amt][pk][combo[-1]].append(err_coll.wrt_world)
             local_err_lists[skip_amt][pk][combo[-1]].append(err_coll.wrt_local)
@@ -99,10 +113,11 @@ for skip_amt in range(3):
                 err_coll.wrt_vel_deg2
             )
             
-def concatErrs(err_list_data_struct):
-    ret_val = []
+def concatErrs(err_list_data_struct: ErrListsByMotionPredictionStep):
+    ret_val: ErrsByMotionPredictionStep = []
     for els_for_skip in err_list_data_struct:
-        ret_subdict = dict()
+        ret_subdict: typing.Dict[str, typing.Dict[str, NDArray[np.floating]]] \
+                = dict()
         for pk, els in els_for_skip.items():
             ret_subdict[pk] = {mk: np.concatenate(es) for mk, es in els.items()}
             rs_vals = ret_subdict[pk].values()
@@ -118,11 +133,14 @@ vel_deg2_errs = concatErrs(vel_deg2_err_lists)
 
 #%%
 
-def getStats(errs, skip_amt: int, motion_kind: str, pred_kind: str):
+def getStats(errs: ErrsByMotionPredictionStep, skip_amt: int, motion_kind: str,
+             pred_kind: str):
     errs_subset = errs[skip_amt][pred_kind][motion_kind]
     return es.getStats(errs_subset)
 
 motion_kinds_plus = motion_kinds + ["all"]
+# Replace each NDArray in the nested lists/dicts with an ErrStats object, whose
+# attribs hold the mean, standard deviation, etc. for the NDArray data.
 def getStatsStruct(errs):
     return [
         {
