@@ -1053,6 +1053,7 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 
 
 #%% Train the network.
+model_loads = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
 if TRAIN_NEW_MODEL:
     val_param = None
     if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
@@ -1063,7 +1064,7 @@ if TRAIN_NEW_MODEL:
         # batch_size = 1024
     )
 else:
-    bcs_model = loadLatestModels((chosen_mode.name, ))[chosen_mode.name]
+    bcs_model = model_loads[chosen_mode.name]
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
@@ -1077,6 +1078,9 @@ if TRAIN_NEW_MODEL:
     bcs_model.save(model_name)
 
 #%% Print scores on test data.
+vid_sort_model_prefix = "HOT3D_JM"
+vid_sort_model = model_loads[vid_sort_model_prefix]
+vid_sort_preds = vid_sort_model.predict(bcotjav.in_test, batch_size = 1024)
 bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
 static_test_errs: NDArray = sel_loss(bcotjav.gt_test, np.zeros((1, 12))).numpy()
 err_ratios = bcs_test_errs / static_test_errs
@@ -1103,7 +1107,16 @@ def bcot_name(bcot_id):
 med_test_sort_idxs = np.argsort(med_test_scores, axis=1)
 med_test_sort_ids = [
     [bcot_name(bcot_test_ids[i]) for i in mtsi] for mtsi in med_test_sort_idxs
-] 
+]
+med_test_sort_numeric_ids = np.asarray([
+    [bcot_test_ids[i] for i in mtsi] for mtsi in med_test_sort_idxs
+])
+
+#%%
+np.save(
+    "./results/models/bcot_testvids_sortedby_" + vid_sort_model_prefix + "_score.npy",
+    med_test_sort_numeric_ids
+)
 
 # print(bcs_test_scores)
 #%%
