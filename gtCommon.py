@@ -306,7 +306,7 @@ class PoseLoader(ABC):
     
     @classmethod
     def getSamplesByCriteria(cls, vid_ids, realign: bool, allow_overlap: bool,
-                             criteria: str, num_to_find: int = -1,
+                             criteria: str, step: int, num_to_find: int = -1,
                              static_thresh = 4.0, planar_thresh: float = 1e-2,
                              verbose: bool = False):
         '''
@@ -319,6 +319,7 @@ class PoseLoader(ABC):
             realign (bool): Whether to realign the coordinate frame so the last
                 two points are on the x axis and the last three in the XY plane.
             allow_overlap (bool): Whether returned sequences can share points.
+            step (int): The step between sampled frames to use.
             num_to_find (int): How many such sequences to find (if possible).
                 Defaults to -1, meaning to find all possible ones.
             criteria (str): Which selection: 'static', 'planar', or 'none'.
@@ -339,7 +340,7 @@ class PoseLoader(ABC):
         num_found = 0
         find_all = num_to_find < 0
         for tl in loaders:
-            all_pts = tl.getTranslationsGTNP()
+            all_pts = tl.getTranslationsGTNP()[::step]
             tl_diffs = np.diff(all_pts, 1, axis=0)
             
             i = 0
@@ -373,7 +374,7 @@ class PoseLoader(ABC):
 
                 if accept:
                     # If so, we collect the poses of them and the next frames.
-                    aas_subset = tl.getRotationsGTNP()[i:end_ind]
+                    aas_subset = tl.getRotationsGTNP()[::step][i:end_ind]
                     pts_subset = all_pts[i:end_ind]
                     # May move points so that the one before LAST_FIXED_PT_IND
                     # is at origin, the point at LAST_FIXED_PT_IND is on x-axis,
@@ -405,11 +406,11 @@ class PoseLoader(ABC):
 
     @classmethod
     def getGroupedSamplesByCriteria(cls, train_ids, val_ids, test_ids,
-                                     realign: bool, allow_overlap: bool,
-                                     criteria: str, num_to_find: int = -1,
-                                     static_thresh = 4.0,
-                                     planar_thresh: float = 1e-2,
-                                     verbose: bool = False):
+                                    realign: bool, allow_overlap: bool,
+                                    criteria: str, step: int,
+                                    num_to_find: int = -1, static_thresh = 4.0,
+                                    planar_thresh: float = 1e-2,
+                                    verbose: bool = False):
         '''
         Same as getSamplesByCriteria, but grouped by train/val/test.
 
@@ -437,7 +438,7 @@ class PoseLoader(ABC):
         sequences_by_set: typing.Dict[DataSubsetKind, NDArray] = dict()
         for set_name, vid_ids in sequence_sets.items():
             tup_list = cls.getSamplesByCriteria(
-                vid_ids, realign, allow_overlap, criteria, num_to_find,
+                vid_ids, realign, allow_overlap, criteria, step, num_to_find,
                 static_thresh, planar_thresh, verbose
             )
             e = (0, 2, GT_PT_IND + 1, 3)
