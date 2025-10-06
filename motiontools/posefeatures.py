@@ -306,11 +306,16 @@ class DerivativeCollection:
         (for jerk)."""
         ret_val = np.diff(prev_vals, 1, axis=0)
         if self.div_by_time:
-            time_div = self.unflat_time_info
             if self.dt_not_const:
                 time_div = self.unflat_time_info[deriv_power:] - self.unflat_time_info[:-deriv_power]
-            scalars = deriv_power / time_div
-            ret_val = scalars * ret_val
+                # Do scalar math first for efficiency, as otherwise you perform
+                # a division on vec3s and then a mul on vec3s, instead of doing
+                # the division on "vec1s". Could use parentheses, but this is
+                # more explicit.
+                scalars = deriv_power / time_div
+                ret_val = scalars * ret_val
+            else:
+                ret_val = ret_val / self.unflat_time_info
         return ret_val
 
 
@@ -1115,7 +1120,7 @@ class CalcsForVideo:
 
 
             acc_vel_deg1_mag = pm.einsumDot(deg2_accs, unit_vels_deg1[1:])
-            avd1m = acc_vel_deg1_mag * deg1_speeds_full_flat[1:]
+            avd1m = acc_vel_deg1_mag * timescaled_speeds_deg1_full[1:]
             acc_vel_deg1_parallel = pm.scalarsVecsMul(acc_vel_deg1_mag, unit_vels_deg1[1:])
             
             acc_ortho_deg1_vecs = deg2_accs - acc_vel_deg1_parallel
@@ -1140,7 +1145,7 @@ class CalcsForVideo:
             jerk_vel_deg1_mags = pm.einsumDot(
                 scaled_jerks[1:], unit_vels_deg1[2:]
             )
-            jvd1m = jerk_vel_deg1_mags * deg1_speeds
+            jvd1m = jerk_vel_deg1_mags * timescaled_speeds_deg1
             
             jerk_acc_ortho_mags = pm.einsumDot(
                 scaled_jerks[1:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
@@ -1667,8 +1672,6 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
 class HypotheticalInputsForNN:
     def __init__(self, x0_through_4:NDArray, rmats0_through_5: NDArray,
                  step: int, ref_keys: typing.List[MOTION_DATA_KEY_TYPE]):
-        if step != 1:
-            raise NotImplementedError("Step > 1 not supported yet!")
         # Attributes we set now.
         self.step = step
         self.x0_through_4 = x0_through_4

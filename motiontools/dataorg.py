@@ -160,7 +160,8 @@ class UnitAwareScaler:
         MOTION_DATA.JERK_ERR_VEC3, MOTION_DATA.CRACKLE_VEC3
     )
     _rot_vec3_keys = (
-        MOTION_DATA.ROTATION_VEC3, MOTION_DATA.ROT_ACC_VEC3
+        MOTION_DATA.ROTATION_VEC3, MOTION_DATA.ROT_ACC_VEC3,
+        MOTION_DATA.ROT_JERK_VEC3
     )
     
     def __init__(self, data_column_keys, scale_rots: bool = True):

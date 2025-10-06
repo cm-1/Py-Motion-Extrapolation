@@ -41,7 +41,7 @@ bcot_id_split = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
 overlap = False
 crit = "static"
 sequences_by_subset = PoseLoaderBCOT.getGroupedSamplesByCriteria(
-    *bcot_id_split, True, overlap, crit, NUM_BCOT_SAMPLES, verbose=True
+    *bcot_id_split, True, overlap, crit, STEP, NUM_BCOT_SAMPLES, verbose=True
 )
 
 #%% Construct object for quickly calculating outputs for hypothetical inputs.
