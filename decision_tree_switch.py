@@ -1053,7 +1053,7 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 
 
 #%% Train the network.
-model_loads = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
+latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
 if TRAIN_NEW_MODEL:
     val_param = None
     if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
@@ -1061,10 +1061,11 @@ if TRAIN_NEW_MODEL:
     bcs_hist = bcs_model.fit(
         bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
         validation_data=val_param,
-        # batch_size = 1024
+        batch_size = 1024
     )
+    latest_models[chosen_mode.name] = bcs_model
 else:
-    bcs_model = model_loads[chosen_mode.name]
+    bcs_model = latest_models[chosen_mode.name]
 #%% Evaluate network on test data.
 
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
@@ -1077,45 +1078,48 @@ if TRAIN_NEW_MODEL:
     )
     bcs_model.save(model_name)
 
-#%% Print scores on test data.
-vid_sort_model_prefix = "HOT3D_JM"
-vid_sort_model = model_loads[vid_sort_model_prefix]
-vid_sort_preds = vid_sort_model.predict(bcotjav.in_test, batch_size = 1024)
-bcs_test_errs: NDArray = sel_loss(bcotjav.gt_test, bcs_pred).numpy()
-static_test_errs: NDArray = sel_loss(bcotjav.gt_test, np.zeros((1, 12))).numpy()
-err_ratios = bcs_test_errs / static_test_errs
-
-#%%
+#%% Granular per-model scores on test data.
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
-med_test_scores = np.empty((3, len(bcot_test_ids)))
-all_grouped_test_scores = []
-for skip_amt in range(3):
-    skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][skip_amt:(skip_amt + 2)]
-    skip_subset = err_ratios[skip_bounds[0]:skip_bounds[1]]
-    boundaries = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
-    grouped_test_scores = []
-    for i in range(len(bcot_test_ids)):
-        row_idxs = boundaries[i:(i+2)]
-        errs_for_id = skip_subset[row_idxs[0]:row_idxs[1]]
-        med_test_scores[skip_amt, i] = np.median(errs_for_id)
-        grouped_test_scores.append(errs_for_id)
-    all_grouped_test_scores.append(grouped_test_scores)
+median_store_shape = (3, len(bcot_test_ids))
+med_static_str = "median_static"
+model_medians = {med_static_str: np.empty(median_store_shape)}
+
+# Get static prediction errors.
+static_test_errs: NDArray = sel_loss(
+    bcotjav.gt_test, np.zeros((1, 12))
+).numpy()
+for m, (score_model_prefix, score_model) in enumerate(latest_models.items()):
+    med_prefix = "median_"+ score_model_prefix
+    # Get neural net errors.
+    nn_preds = score_model.predict(bcotjav.in_test, batch_size=1024)
+    nn_errs: NDArray = sel_loss(bcotjav.gt_test, nn_preds).numpy()
+
+    model_medians[med_prefix] = np.empty(median_store_shape)
+
+    for skip_amt in range(3):
+        per_skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][
+            skip_amt:(skip_amt + 2)
+        ]
+        skip_subset = nn_errs[per_skip_bounds[0]:per_skip_bounds[1]]
+        static_subset = static_test_errs[per_skip_bounds[0]:per_skip_bounds[1]]
+
+        bounds_in_skip = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
+        
+        for i in range(len(bcot_test_ids)):
+            row_idxs = bounds_in_skip[i:(i+2)]
+            errs_for_id = skip_subset[row_idxs[0]:row_idxs[1]] # Errs for this video.
+
+            model_medians[med_prefix][skip_amt, i] = np.median(errs_for_id)
+
+            if m == 0:
+                model_medians[med_static_str][skip_amt, i] = np.median(
+                    static_subset[row_idxs[0]:row_idxs[1]]
+                )
 
 #%%
-def bcot_name(bcot_id):
-    return (gtc.BCOT_SEQ_NAMES[bcot_id[1]], gtc.BCOT_BODY_NAMES[bcot_id[0]])
-med_test_sort_idxs = np.argsort(med_test_scores, axis=1)
-med_test_sort_ids = [
-    [bcot_name(bcot_test_ids[i]) for i in mtsi] for mtsi in med_test_sort_idxs
-]
-med_test_sort_numeric_ids = np.asarray([
-    [bcot_test_ids[i] for i in mtsi] for mtsi in med_test_sort_idxs
-])
-
-#%%
-np.save(
-    "./results/models/bcot_testvids_sortedby_" + vid_sort_model_prefix + "_score.npy",
-    med_test_sort_numeric_ids
+np.savez_compressed(
+    "./results/models/scores_on_bcot.npz", id_order=bcot_test_ids,
+    **model_medians
 )
 
 # print(bcs_test_scores)

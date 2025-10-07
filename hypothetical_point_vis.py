@@ -20,7 +20,7 @@ from gtCommon import PoseLoaderBCOT
 
 GRAPH_RES = 50
 DISP_RADIUS = 32.0
-STEP = 1
+STEP = 3
 
 NUM_BCOT_SAMPLES = 64
 
@@ -45,9 +45,21 @@ bcot_id_split = list(PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0))
 
 overlap = True
 crit = "none"
-hot_id_sort = np.load("./results/models/bcot_testvids_sortedby_HOT3D_JM_score.npy")
+bcot_scores_npz = np.load("./results/models/scores_on_bcot.npz")
+load_id_order = bcot_scores_npz["id_order"]
+med_static_scores = bcot_scores_npz["median_static"]
+med_bcot_nn_scores = bcot_scores_npz["median_JAV_MULTIPLIERS"]
+med_hot3d_nn_scores = bcot_scores_npz["median_HOT3D_JM"]
+
+relative_scores = (med_bcot_nn_scores - med_hot3d_nn_scores) / med_static_scores
+sorted_score_inds = np.argsort(relative_scores, axis=1)
+
+
 for i in range(3):
-    bcot_id_split[i] = [tuple(int(i) for i in t) for t in hot_id_sort[STEP-1, -1:]]
+    bcot_id_split[i] = [
+        tuple(int(i) for i in load_id_order[t])
+        for t in sorted_score_inds[STEP-1, :2]
+    ]
 sequences_by_subset = PoseLoaderBCOT.getGroupedSamplesByCriteria(
     *bcot_id_split, True, overlap, crit, STEP, NUM_BCOT_SAMPLES, verbose=True
 )
