@@ -36,10 +36,13 @@ models = loadLatestModels(model_prefixes)
 
 #%% Choose transforms for the first frames.
 
-bcot_id_split = PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0)
+bcot_id_split = list(PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0))
 
-overlap = False
-crit = "static"
+overlap = True
+crit = "none"
+hot_id_sort = np.load("./results/models/bcot_testvids_sortedby_HOT3D_JM_score.npy")
+for i in range(3):
+    bcot_id_split[i] = [tuple(int(i) for i in t) for t in hot_id_sort[STEP-1, -1:]]
 sequences_by_subset = PoseLoaderBCOT.getGroupedSamplesByCriteria(
     *bcot_id_split, True, overlap, crit, STEP, NUM_BCOT_SAMPLES, verbose=True
 )
@@ -67,13 +70,13 @@ class PlottingState:
         self.current_sequences = sequences_by_subset[self.subset]
         self._models = models
         self._scaler = scaler
-
-        self.all_seq_nn_outs: typing.Dict[
-            str, typing.Dict[DataSubsetKind, NDArray]
-        ] = dict()
+        
+        ArraysByDSK: typing.TypeAlias = typing.Dict[DataSubsetKind, NDArray]
+        self.all_seq_nn_outs: typing.Dict[str, ArraysByDSK] = dict()
+        self.scaled_input_storage: ArraysByDSK = dict()
         temp_hc = None
-        for model_prefix, model in self._models.items():
-            sub_dict: typing.Dict[DataSubsetKind, NDArray] = dict()
+        for model_num, (model_prefix, model) in enumerate(self._models.items()):
+            sub_dict: ArraysByDSK = dict()
             for dsk, data in self._sequences_by_subset.items():
                 # Our "data" is shaped like a list of (pts, rotation) 2-tuples.
                 pts = np.swapaxes(data[:, 0], 0, 1)
@@ -87,9 +90,16 @@ class PlottingState:
                     )
                     prev_pts = None
                     rmats = None
-                outs_nn = getOutputsNN(
-                    model, self._scaler, temp_hc, last_pts, prev_pts, rmats
+                # Efficiency-TODO: The below uses redundant temp_hc
+                # calculations each time. Should just calculate the scaled
+                # inputs in outer loop (iterate by DataSubsetKind before model)
+                # and then just call the model's predict(...) method here!
+                outs_nn, scaled_inputs = getOutputsNN(
+                    model, self._scaler, temp_hc, last_pts, prev_pts, rmats,
+                    "scaled"
                 )
+                if model_num == 0:
+                    self.scaled_input_storage[dsk] = scaled_inputs
                 out_segs = np.stack((outs_nn, last_pts), axis=-2)
                 sub_dict[dsk] = out_segs
             self.all_seq_nn_outs[model_prefix] = sub_dict
