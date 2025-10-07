@@ -13,6 +13,7 @@ from motiontools.dataorg import UnitAwareScaler, joinArrays
 from motiontools.shared_constants import *
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.nn_inference import getOutputsNN
+import nn_utilities.physics_JAV_models as pjm
 import posemath as pm
 
 from gtCommon import PoseLoaderBCOT
@@ -30,8 +31,12 @@ with open("./results/models/scaler.pickle", "rb") as f:
     scaler = pickle.load(f)
 
 # Load the NNs that have been saved to disk; save them in a dict.
-model_prefixes = ("JAV_MULTIPLIER", "HOT3D_JM")
-models = loadLatestModels(model_prefixes)
+load_model_prefixes = ("JAV_MULTIPLIER", "HOT3D_JM")
+models = loadLatestModels(load_model_prefixes)
+
+models["ConstAcc"] = pjm.ConstAccMultipliersModel()
+
+model_prefixes = tuple(models.keys())
 
 
 #%% Choose transforms for the first frames.
