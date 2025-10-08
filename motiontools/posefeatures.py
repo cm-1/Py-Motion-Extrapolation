@@ -1677,6 +1677,20 @@ class HypotheticalInputsForNN:
         self.x0_through_4 = x0_through_4
         self.ref_keys = ref_keys
 
+        # Some calculations we'll reuse that we can precalculate here.
+        # ---
+        # We *sorta* have "4" sets of "xyz" multipliers.
+        self._jav_muls = np.empty((4, 3))
+        # Jerk through crackle each have 3 components we must multiply by a
+        # respective power of the step assuming it's also the next "delta T".
+        self._jav_muls[1:] = self.step ** np.arange(3, 6).reshape(3, 1)
+        # Then velocity and acceleration are special because they only have 1
+        # and 2 multipliers, respectively.
+        self._jav_muls = self._jav_muls.flatten()
+        self._jav_muls[0] = 1
+        self._jav_muls[1:3] = self.step ** 2
+
+
         # Attributes we'll set in the following function calls.
         self.prev_pds: DerivativeCollection
         self.all_rds: DerivativeCollection
@@ -1987,6 +2001,20 @@ class HypotheticalInputsForNN:
             *zeros_3d
         )
         jav_stack = typing.cast(NDArray, np.stack(jav_tup, axis=-1))
+
+        # TODO: The way I handle non-1 timesteps in my other JAV calculations
+        # right now is kinda messy. I basically pre-multiply the acceleration,
+        # velocity, etc. by delta T, (delta T)^2, etc. so that the loss function
+        # calculation is (slightly) faster. But of course, this doesn't quite
+        # work when the timesteps are not constant, so those have to be handled
+        # a bit differently. Anyway, this discrepancy makes things ripe for bugs
+        # (solving one such is what motivated this comment) so I need to find a
+        # better way of handling this so that whoever is using these functions
+        # does not make understandable, but wrong, assumptions.
+        # ---
+        # Because of the above, here I need to do said JAV multiplications.
+        if self.step != 1:
+            jav_stack[..., :12] *= self._jav_muls
 
         tri_inds = np.tril_indices(n_other_vec_kinds)
         ret = np.concatenate(

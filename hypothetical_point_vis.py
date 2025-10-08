@@ -22,7 +22,8 @@ GRAPH_RES = 50
 DISP_RADIUS = 32.0
 STEP = 3
 
-NUM_BCOT_SAMPLES = 64
+NUM_BCOT_SAMPLES = 32
+NUM_IDS_IF_APPLICABLE = 1
 
 #%% Load things from disk.
 
@@ -31,7 +32,7 @@ with open("./results/models/scaler.pickle", "rb") as f:
     scaler = pickle.load(f)
 
 # Load the NNs that have been saved to disk; save them in a dict.
-load_model_prefixes = ("JAV_MULTIPLIER", "HOT3D_JM")
+load_model_prefixes = ("JAV_MULTIPLIERS", "HOT3D_JM")
 models = loadLatestModels(load_model_prefixes)
 
 models["ConstAcc"] = pjm.ConstAccMultipliersModel()
@@ -58,7 +59,7 @@ sorted_score_inds = np.argsort(relative_scores, axis=1)
 for i in range(3):
     bcot_id_split[i] = [
         tuple(int(i) for i in load_id_order[t])
-        for t in sorted_score_inds[STEP-1, :2]
+        for t in sorted_score_inds[STEP-1, :NUM_IDS_IF_APPLICABLE]
     ]
 sequences_by_subset = PoseLoaderBCOT.getGroupedSamplesByCriteria(
     *bcot_id_split, True, overlap, crit, STEP, NUM_BCOT_SAMPLES, verbose=True
@@ -71,8 +72,12 @@ all_last_fixed = all_statics[:, 0, LAST_FIXED_PT_IND]
 all_orig_dynamic = all_statics[:, 0, DYNAMIC_PT_IND]
 radii = np.linalg.norm(all_orig_dynamic - all_last_fixed, axis=-1)
 
-max_mag = min(DISP_RADIUS, np.max(radii) * 1.1)
-max_mag = 0.1
+max_radius = np.max(radii)
+rad_margin = max_radius * 0.1
+dynamic_mins = np.min(all_orig_dynamic, axis=0) - rad_margin
+dynamic_maxs = np.max(all_orig_dynamic, axis=0) + rad_margin
+
+max_mag = min(DISP_RADIUS, max_radius * 1.1)
 
 
 class PlottingState:
@@ -90,10 +95,13 @@ class PlottingState:
         
         ArraysByDSK: typing.TypeAlias = typing.Dict[DataSubsetKind, NDArray]
         self.all_seq_nn_outs: typing.Dict[str, ArraysByDSK] = dict()
+
+        self.all_seq_errors: typing.Dict[str, ArraysByDSK] = dict()
         self.scaled_input_storage: ArraysByDSK = dict()
         temp_hc = None
         for model_num, (model_prefix, model) in enumerate(self._models.items()):
             sub_dict: ArraysByDSK = dict()
+            errs_sub_dict: ArraysByDSK = dict()
             for dsk, data in self._sequences_by_subset.items():
                 # Our "data" is shaped like a list of (pts, rotation) 2-tuples.
                 pts = np.swapaxes(data[:, 0], 0, 1)
@@ -119,7 +127,12 @@ class PlottingState:
                     self.scaled_input_storage[dsk] = scaled_inputs
                 out_segs = np.stack((outs_nn, last_pts), axis=-2)
                 sub_dict[dsk] = out_segs
+                errs_sub_dict[dsk] = np.linalg.norm(
+                    outs_nn - pts[GT_PT_IND], axis=-1
+                )
+
             self.all_seq_nn_outs[model_prefix] = sub_dict
+            self.all_seq_errors[model_prefix] = errs_sub_dict
 
     def change_set(self, new_set: DataSubsetKind):
         self.subset = new_set
@@ -163,9 +176,10 @@ seq_selector = widgets.IntSlider(
 )
 
 print("TODO: Update slider min and max based on currently selected sequences!")
+dstep = np.round(np.clip(max_mag/32, 0.1, 1.0), 1)
 sliders = [
-    widgets.FloatSlider(value=0, min=-5, max=5, step=0.1, description=axis)
-    for axis in "XYZ"
+    widgets.FloatSlider(value=0, min=low, max=high, step=dstep, description=xyz)
+    for low, high, xyz in zip(dynamic_mins, dynamic_maxs, "XYZ")
 ]
 
 model_selector = widgets.ToggleButtons(
