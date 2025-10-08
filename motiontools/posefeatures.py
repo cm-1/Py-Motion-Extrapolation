@@ -1687,7 +1687,7 @@ class HypotheticalInputsForNN:
         # Then velocity and acceleration are special because they only have 1
         # and 2 multipliers, respectively.
         self._jav_muls = self._jav_muls.flatten()
-        self._jav_muls[0] = 1
+        self._jav_muls[0] = self.step
         self._jav_muls[1:3] = self.step ** 2
 
 
