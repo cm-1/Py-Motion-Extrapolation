@@ -33,18 +33,30 @@ class LocalizedErrsCollection(typing.NamedTuple):
 
 # Math Functions:
 
+# Reusability-TODO: Right now, for rotations, world_to_local_rotation_mats is
+# just expected to be a swapaxes result for all_values, making having both
+# as mandatory params maybe slightly redundant?
 def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
-                         translations: NDArray,
-                         world_to_local_rotation_mats: NDArray, *,
+                         all_values: NDArray,
+                         world_to_local_rotation_mats: NDArray,
+                         values_are_rotations: bool = False, *,
                          deg1_vels: typing.Optional[NDArray] = None,
                          deg2_vels: typing.Optional[NDArray] = None,
                          deg2_acc: typing.Optional[NDArray] = None,
                          default_acc_dir: NDArray = None):
+    assert len(all_values) == len (world_to_local_rotation_mats), \
+    "Must have as many all_values as world-to-local rotation matrices!"
 
     if deg1_vels is None:
-        deg1_vels = np.diff(translations[:-1], 1, axis=0)
+        if values_are_rotations:
+            vel_mats = pm.einsumMatMatMul(
+                all_values[1:], world_to_local_rotation_mats[:-1]
+            )
+            deg1_vels = pm.axisAngleFromMatArray(vel_mats)
+        else:
+            deg1_vels = np.diff(all_values[:-1], 1, axis=0)
     else:
-        assert len(deg1_vels) == len(translations) - 2, (
+        assert len(deg1_vels) == len(all_values) - 2, (
             "Must have a degree-1 velocity for every \"previous\" translation "
             "pair but no others!"
         )
@@ -52,14 +64,14 @@ def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
     if deg2_acc is None:
         deg2_acc = np.diff(deg1_vels, 1, axis=0)
     else:
-        assert len(deg2_acc) == len(translations) - 3, \
-        "Must have 3 fewer accelerations than translations!"
+        assert len(deg2_acc) == len(all_values) - 3, \
+        "Must have 3 fewer accelerations than all_values!"
 
-    if deg2_vels is None:
+    if deg2_vels is None and not values_are_rotations:
         deg2_vels = deg1_vels[1:] + (deg2_acc / 2.0)
-    else:
-        assert len(deg2_vels) == len(translations) - 3, \
-        "Must have 3 fewer degree-2 velocities than translations!"
+    elif not values_are_rotations:
+        assert len(deg2_vels) == len(all_values) - 3, \
+        "Must have 3 fewer degree-2 velocities than all_values!"
 
 
     if default_acc_dir is None:
@@ -71,16 +83,25 @@ def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
 
 
     _, deg1_vel_frames = pm.getOrthonormalFrames(True, deg1_vels, deg2_acc_lpad)
-    _, deg2_vel_frames = pm.getOrthonormalFrames(True, deg2_vels, deg2_acc)
+    deg2_vel_frames = np.empty((0, 3, 3))
+    if deg2_vels is not None:
+        _, deg2_vel_frames = pm.getOrthonormalFrames(True, deg2_vels, deg2_acc)
 
     next_deg1_vel_frames = deg1_vel_frames[1:]
     # unit_deg2_vels = pm.normalizeAll(deg2_vels)
-    n_next_translations = len(translations) - 1
+    n_next_all_values = len(all_values) - 1
 
     res_dict: typing.Dict[typing.Any, LocalizedErrsCollection] = dict()
     for pk, preds in global_preds_dict.items():
-        len_diff = n_next_translations - len(preds)
-        errs = translations[(len_diff + 1):] - preds
+        len_diff = n_next_all_values - len(preds)
+        errs: NDArray
+        if values_are_rotations:
+            err_mats_T = pm.einsumMatMatMul(
+                preds, world_to_local_rotation_mats[(len_diff + 1):]
+            )
+            errs = -pm.axisAngleFromMatArray(err_mats_T)
+        else:
+            errs = all_values[(len_diff + 1):] - preds
 
         local_errs = pm.einsumMatVecMul(
             world_to_local_rotation_mats[len_diff:-1], errs
@@ -95,7 +116,9 @@ def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
             deg1_vel_frame_subset, errs[deg1_len_diff:]
         )
 
-        vel_deg2_errs = pm.einsumMatVecMul(deg2_vel_frames, errs[2 - len_diff:])
+        vel_deg2_errs = np.empty((0, 3))
+        if len(deg2_vel_frames) > 0:
+            pm.einsumMatVecMul(deg2_vel_frames, errs[2 - len_diff:])
 
         res_dict[pk] = LocalizedErrsCollection(
             errs, local_errs, vel_deg1_errs, vel_deg2_errs

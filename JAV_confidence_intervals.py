@@ -8,6 +8,11 @@ import errorstats as es
 from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
+import posemath as pm
+
+
+mode = "rotation" # Can be either "rotation" or "translation"
+
 
 motion_kinds = [
     "movable_handheld", "movable_suspension", "static_handheld",
@@ -28,6 +33,7 @@ for s, s_val in enumerate(gtc.BCOT_SEQ_NAMES):
 
 NDArrayForVid = typing.Dict[typing.Tuple[int, int, int], NDArray[np.floating]]
 all_rotations_T: NDArrayForVid = dict()
+all_rotations: NDArrayForVid = dict()
 all_translations: NDArrayForVid = dict()
 
 for skip_amt in range(3):
@@ -37,6 +43,7 @@ for skip_amt in range(3):
         # Rotations will be an array of rotation matrices of shape (n, 3, 3).
         rotations = calculator.getRotationMatsGTNP()[::step]
         ck = (skip_amt, ) + combo[:2]
+        all_rotations[ck] = rotations
         all_rotations_T[ck] = np.swapaxes(rotations, -1, -2) # transposes
         # all_translations[ck] is an array of shape (n, 3)
         all_translations[ck] = calculator.getTranslationsGTNP()[::step]
@@ -46,6 +53,9 @@ for skip_amt in range(3):
 
 
 prediction_kinds = ["static", "vel-deg1", "vel-deg2", "acc-deg2"]
+mode_is_rotation = (mode == "rotation")
+if mode_is_rotation:
+    prediction_kinds = ["static", 'vel-deg1']
 ErrListsByMotionPredictionStep = typing.List[
     typing.Dict[str, typing.Dict[str, typing.List[NDArray[np.floating]]]]
 ]
@@ -71,34 +81,55 @@ for skip_amt in range(3):
         ck = (skip_amt, ) + combo[:2]
 
         rt_mats = all_rotations_T[ck]
+        r_mats = all_rotations[ck]
         translations = all_translations[ck]
 
-        prev_translations = translations[:-1]
-        deg1_vels = np.diff(prev_translations, 1, axis=0)
-        deg2_acc = np.diff(deg1_vels, 1, axis=0)
-        half_deg2_acc = deg2_acc / 2
-        
-        deg2_vels = deg1_vels[1:] + half_deg2_acc
-
-
-        # def colList(mats):
-        #     return (mats[..., 0], mats[..., 1], mats[..., 2])
-
-        # if not pm.areAxisArraysOrthonormal(colList(deg1_vel_frames), loud=True):
-        #     raise Exception("deg1 orthonormal issue!")
-        # if not pm.areAxisArraysOrthonormal(colList(deg2_vel_frames), loud=True):
-        #     raise Exception("deg2 orthonormal issue!")
-
         temp_preds: typing.Dict[str, NDArray[np.floating]] = dict()
-        temp_preds["static"] = prev_translations
-        temp_preds["vel-deg1"] = translations[1:-1] + deg1_vels
-        temp_preds["vel-deg2"] = translations[2:-1] + deg2_vels
-        temp_preds["acc-deg2"] = temp_preds["vel-deg2"] + half_deg2_acc
+        all_values = translations
+
+        deg1_vels: NDArray
+        deg2_acc: NDArray
+        deg2_vels: typing.Optional[NDArray] = None
+
+        # --- Translation analysis ---
+        if not mode_is_rotation:
+            prev_translations = translations[:-1]
+            deg1_vels = np.diff(prev_translations, 1, axis=0)
+            deg2_acc = np.diff(deg1_vels, 1, axis=0)
+            half_deg2_acc = deg2_acc / 2
+
+            deg2_vels = deg1_vels[1:] + half_deg2_acc
+
+            temp_preds["static"] = prev_translations
+            temp_preds["vel-deg1"] = translations[1:-1] + deg1_vels
+            temp_preds["vel-deg2"] = translations[2:-1] + deg2_vels
+            temp_preds["acc-deg2"] = temp_preds["vel-deg2"] + half_deg2_acc
+
+        # --- Rotation analysis ---
+        else:
+            # Axis-angle arrays
+            ang_vel_mats = pm.einsumMatMatMul(r_mats[1:], rt_mats[:-1])
+            # Angular velocity: difference of axis-angles
+            all_ang_vels = pm.axisAngleFromMatArray(ang_vel_mats)
+            deg1_vels = all_ang_vels[:-1]
+            const_ang_vel_mats = pm.einsumMatMatMul(ang_vel_mats[:-1], r_mats[1:-1])
+            # Angular acceleration: difference of angular velocities
+            deg2_acc = np.diff(deg1_vels, 1, axis=0)  # (n-3, 3)
+
+            temp_preds: typing.Dict[str, NDArray[np.floating]] = dict()
+            # "static": assume next rotation = previous axis angle
+            temp_preds["static"] = r_mats[:-1]
+            # "vel-deg1": extrapolate by angular velocity
+            temp_preds["vel-deg1"] = const_ang_vel_mats
+            # "vel-deg2" and "acc-deg2" not defined for rotation
+
+            all_values = r_mats
 
         # Returned dict maps prediction kind str to LocalizedErrsCollection, a
         # struct of NDArrays of the errors moved to different reference frames.
         reframed_errs = es.localizeErrsInFrames(
-            temp_preds, translations, rt_mats, default_acc_dir=default_acc_dir,
+            temp_preds, all_values, rt_mats, mode_is_rotation,
+            default_acc_dir=default_acc_dir,
             deg1_vels=deg1_vels, deg2_vels=deg2_vels, deg2_acc=deg2_acc, 
         )
         
@@ -153,7 +184,9 @@ def getStatsStruct(errs):
 world_stats_struct = getStatsStruct(world_errs)
 local_stats_struct = getStatsStruct(local_errs)
 vel_deg1_stats_struct = getStatsStruct(vel_deg1_errs)
-vel_deg2_stats_struct = getStatsStruct(vel_deg2_errs)
+vel_deg2_stats_struct = None
+if not mode_is_rotation:
+    vel_deg2_stats_struct = getStatsStruct(vel_deg2_errs)
 
 #%%
 
@@ -168,7 +201,9 @@ for skip_amt in range(3):
     # that the statement it's always positive for static predictions and always
     # negative for others is valid. For now, I only care about reference frames
     # aligned with motion.
-    ref_frame_names = ("world", "local", "v1", "v2")
+    ref_frame_names = ("world", "local", "v1")
+    if not mode_is_rotation:
+        ref_frame_names += ("v2", )
     min_static_mclbs = {rfn: 1000.0 for rfn in ref_frame_names[-2:]}
     max_nonstatic_mcubs = {rfn: -1000.0 for rfn in ref_frame_names[-2:]}
     for pk in prediction_kinds:
@@ -178,10 +213,13 @@ for skip_amt in range(3):
             print("    {} (score {:0.4f}):".format(mk, world_stats.mean_mag))
             local_stats = local_stats_struct[skip_amt][pk][mk]
             vel_deg1_stats = vel_deg1_stats_struct[skip_amt][pk][mk]
-            vel_deg2_stats = vel_deg2_stats_struct[skip_amt][pk][mk]
             all_stats = (
-                world_stats, local_stats, vel_deg1_stats, vel_deg2_stats
+                world_stats, local_stats, vel_deg1_stats
             )
+            # If analyzing rotation, vel_deg2_stats_struct will be None
+            if not mode_is_rotation:
+                vel_deg2_stats = vel_deg2_stats_struct[skip_amt][pk][mk]
+                all_stats += (vel_deg2_stats, )
             for name, stat in zip(ref_frame_names, all_stats):
                 if "v" in name:
                     if "static" in pk:
@@ -207,7 +245,8 @@ pred_key = "vel-deg1"
 motion_key = "all"
 print(local_stats_struct[skip_key][pred_key][motion_key])
 print(vel_deg1_stats_struct[skip_key][pred_key][motion_key])
-print(vel_deg2_stats_struct[skip_key][pred_key][motion_key])
+if not mode_is_rotation:
+    print(vel_deg2_stats_struct[skip_key][pred_key][motion_key])
 
 #%%
 # Commenting this out because I already viewed the plot and it showed that
