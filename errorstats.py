@@ -118,7 +118,9 @@ def localizeErrsInFrames(global_preds_dict: typing.Dict[typing.Any, NDArray],
 
         vel_deg2_errs = np.empty((0, 3))
         if len(deg2_vel_frames) > 0:
-            pm.einsumMatVecMul(deg2_vel_frames, errs[2 - len_diff:])
+            vel_deg2_errs = pm.einsumMatVecMul(
+                deg2_vel_frames, errs[2 - len_diff:]
+            )
 
         res_dict[pk] = LocalizedErrsCollection(
             errs, local_errs, vel_deg1_errs, vel_deg2_errs

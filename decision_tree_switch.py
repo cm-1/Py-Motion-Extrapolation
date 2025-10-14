@@ -1164,13 +1164,16 @@ for skip in range(3):
             bcotjav.w2ls_JAV[skip][c2]
         )
         curr_translations = bcotjav.translations_JAV[skip][c2]
+        curr_d1_vels = np.diff(curr_translations[1:-1], 1, axis=0)
+        curr_accs = np.diff(curr_d1_vels, 1, axis=0)
+        curr_d2_vels = curr_d1_vels[1:] + (curr_accs / 2.0) 
         in_translations = curr_translations[-(len(world_disp) + 1):-1]
         jav_pred = in_translations + world_disp
 
         curr_rotation_mats = all_rotation_mats_T[c2][::(skip+1)]
         curr_jav_errs = es.localizeErrsInFrames(
-            {"JAV": jav_pred}, curr_translations[1:], 
-            curr_rotation_mats[1:]
+            {"JAV": jav_pred},  curr_translations[1:], curr_rotation_mats[1:],
+            deg1_vels=curr_d1_vels, deg2_vels=curr_d2_vels, deg2_acc=curr_accs
         )["JAV"]
 
         # class_lim_start_ind = -(len(curr_min_norm_vecs) + 1)
@@ -1178,8 +1181,9 @@ for skip in range(3):
             + curr_translations[-len(world_disp):]
         
         curr_class_lim_errs = es.localizeErrsInFrames(
-            {"Class Lim":  curr_min_norm_vecs},
-            curr_translations[1:], curr_rotation_mats[1:]
+            {"Class Lim":  curr_min_norm_vecs},  curr_translations[1:],
+            curr_rotation_mats[1:], deg1_vels=curr_d1_vels,
+            deg2_vels=curr_d2_vels, deg2_acc=curr_accs
         )["Class Lim"]
 
         reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
