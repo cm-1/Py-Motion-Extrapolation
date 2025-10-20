@@ -3,30 +3,88 @@
 Some code for motion extrapolation investigation.
 
 # Dependencies
+They are: `tensorflow, keras, scipy, scikit-learn, matplotlib, numpy`.
 
-Essentially all files require numpy, and many files require matplotlib.
+More "optional" dependencies include plotly, shap, a Bayesian optimization library, etc.
 
-Decision tree training requires sklearn, and to use the custom impurity criterion,
-cython and setuptools are needed. Some of the code lower down in the file
-requires tensorflow, but you could just run the cells above that.
+More info can be found in the DependencyInfo.md file.
 
-Min jerk predictions require scipy.
+I believe these are all dependencies of tensorflow, but I'm not 100% sure.
 
-Code that requires sympy or that is meant to be used with Blender is currently
-separated into their own folders.
+I also use things from Python's standard library that only exist in Python
+version 3.7 and later.
 
-## Older Dependency Versions
+# Running the Code
 
-There are a few places where I try to accomodate older versions of numpy or
-older versions of joblib (a dependency of sklearn).
+There are three main neural networks:
 
-For numpy, the inline comments explain it; it has to do with numpy switching
-which module one should use for string arrays in newer versions.
+- World-space LSTM: code in `world_frame_lstm.py`.
+- Velocity-aligned-space LSTM: code in `velocity_frame_lstm.py`.
+- "Vanilla" velocity-aligned-space NN: one first must run `data_generator.py` to generate the data required, then run `velocity_frame_nn.py` for the actual NN.
+  - This is currently the best-performing network.
 
-For joblib, I had to accomodate a venv where I have Python 3.7 for running
-tensorflow-gpu on Windows. Unfortunately, newer joblib versions require
-Python 3.8. So that meant downgrading joblib to an older version (1.2), but said
-version did not have `parallel_config`, which I think is probably a good idea
-to use when possible. So I wrote some code to use it if the joblib version is
-new enough, but still allow the old joblib for that one venv.
+Other files include: `decision_tree_switch.py`, which is for decision tree training; `motionExperiments.py`, which is for testing non-ML motion models;
+and various other experiments.
+
+Aside from experiments, there are a bunch of other files, such as `posemath.py`, `minjerk.py`, etc. are just "helper"
+files. Of these, the only one that _might_ be worth reading through is `data_by_combo_functions.py`,
+as it contains the most documentation and used to be in my "one big file"
+containing all networks. However, I try to use docstrings for most of these
+"helper" files so you should be able to see the documentation for each
+function via your IDE from the files you actually run by hovering your 
+cursor over the calls to the imported function/class/etc.
+
+# About the Dataset
+
+The [source dataset](https://ar3dv.github.io/BCOT-Benchmark/) contains a bunch of videos split up by "sequence" and "body".
+Each "sequence" is a different set of lighting, motion, and background-clutter
+choices, while each body is a 3D-printed object in the scene whose motion is
+tracked. So the dataset has a bunch of folders for sequence, subfolders for
+body, and then a bunch of video frames and a poses .txt for the respective 
+video. E.g.:
+```
+easy_static_suspension/
+  Driller/
+     frame000.png
+     frame001.png
+        ...
+     pose.txt
+  Teapot/
+     frame000.png
+        ...
+     pose.txt
+easy_static_handheld/
+  Driller/
+     ...
+  Teapot/
+     ...
+```
+
+So, each (sequence, body) **VidID** represents a unique video in the dataset.
+As such, a lot of my code uses the word **"VidID"**, or (in older code) "combo", to denote this "ID".
+
+In the "dataset", each sequence and body are a string like "easy\_static\_handheld" or "Teapot", but when I use the IDs as dictionary
+keys, I instead use a tuple of ints (indices, I guess) for each video, where 
+the index-to-name relationship is defined in `gtCommon.py`. 
+
+Sometimes I'll add a third field to the ID tuple to get (sequence, body, motion\_kind)
+for ease of filtering videos in the non-regression-network code, but this third
+field is just a "subset" of the info encoded in the string for the sequence.
+Thus, when actually doing dictionary accesses, I'll just take the first two
+parts of the key with a `[:2]` slice.
+
+Finally, for the WIP support of training and testing on non-BCOT datasets, the concept of a VidID has been generalized.
+The IDs for videos in different datasets will always be tuples of ints, bools, etc. but the structure of the tuples may differ.
+E.g., for small datasets where there's just a few "uncategorized" videos, the ID might be a 1-tuple containing just a single integer.
+For Hot3D, the tuple contains the object ID, the clip number, and a bool that specifies whether we return the object-to-camera or object-to-world motion. 
+
+## BCOT bideo ID Summary:
+Unique identifier "**VidID**" for a video: `(str, str)`
+
+"Encoded" unique identifier for a video: `(int, int)`
+
+"Supplemented"/"redundant" identifier for a video for sorting in other/later code: `(int, int, str)`
+
+
+
 

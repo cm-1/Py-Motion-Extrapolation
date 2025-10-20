@@ -26,13 +26,18 @@ import gtCommon as gtc
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.posefeatures import (
-    MOTION_DATA, MOTION_MODEL, ANG_OR_MAG, JAV,     # Enums
+from motiontools.key_and_vec_specs import (
+    MOTION_DATA, MOTION_MODEL, ANG_OR_MAG,          # Enums
     SpecifiedMotionData, OneHotMotionData,          # Other "labels" for columns
-    NumpyForSkipAndID, OrderForJAV, PoseLoaderList, # Types
-    dataForCombosJAV, getWorldFrameDisplacements,
-    gtMultipliers6, getBaselineJAV6,
-    CalcsForVideo                                   # Classes
+)
+
+from motiontools.posefeatures import (
+    JAV,                                            # Enum
+    OrderForJAV,                                    # Type alias
+    CalcsForVideo,                                  # Class
+    dataForCombosJAV, dataForComboSplitJAV,         # Functions
+    getWorldFrameDisplacements,
+    gtMultipliers6, getBaselineJAV6
 )
     
 from nn_utilities.nn_losses import (
@@ -57,17 +62,10 @@ MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
 ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 #%%
-combos = PoseLoaderBCOT.getAllIDs(True)
-
-#%%
-
-# From the combo 3-tuples, construct nametuple versions containing only the
+# Instead of vid id 3-tuples, we get nametuple versions containing only the
 # uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-nametup_combos = [gtc.VidBCOT(*c[:2]) for c in combos]
-bcot_loaders = [
-    PoseLoaderBCOT(nc.body_ind, nc.seq_ind) for nc in nametup_combos
-]
-
+# We also get a list of pose loaders, one for each BCOT video.
+nametup_combos, bcot_loaders = PoseLoaderBCOT.getAllMinimalIDsAndLoaders()
 cfc = CalcsForVideo(
     obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
@@ -78,7 +76,7 @@ cfc = CalcsForVideo(
     # exclude_onehots=False, exclude_past_muls=False, exclude_timescaled=False,
     # exclude_vel_deg2=False
 )
-results = cfc.getAll(bcot_loaders)
+cfc.getAll(bcot_loaders)
 
 # Input features like velocity, acceleration, jerk, rotation speed, etc.
 all_motion_data = cfc.all_motion_data
@@ -122,7 +120,7 @@ for skip in range(3):
     for seq in range(len(gtc.BCOT_SEQ_NAMES)):
         seq_data = []
         test_seq_data = []
-        for combo in combos:
+        for combo in nametup_combos:
             if combo[1] == seq:
                 seq_combo_scores_stacked = np.stack(
                     list(err_norm_lists[skip][combo[:2]].values()), axis=-1
@@ -307,45 +305,6 @@ from sklearn.preprocessing import StandardScaler
 # that predicts multipliers for velocity, acceleration, and jerk that we will
 # use to construct the displacement from the current position to the position
 # we predict for the next timestamp.
-
-
-# Function that combines the results of the previous one into a 2D numpy
-# array.
-# List[Dict]
-def dataForComboSplitJAV(train_combos: typing.List, test_combos: typing.List, 
-                         validation_combos: typing.Optional[typing.List] = None,
-                         *,
-                         pose_loaders: typing.Optional[PoseLoaderList] = None, 
-                         precalc_per_combo: typing.Optional[NumpyForSkipAndID] = None):   
-    if pose_loaders is None and precalc_per_combo is None:
-        raise ValueError(
-            "Cannot have combos and precalc_per_combo both be None!"
-        )
-    elif pose_loaders is not None and precalc_per_combo is not None:
-        raise ValueError(
-            "Cannot provide values for both  combos and precalc_per_combo!"
-        )
-     
-    all_data = precalc_per_combo
-    if precalc_per_combo is None:
-        all_data = dataForCombosJAV(
-            pose_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
-        )
-    
-
-    train_res = np.concatenate(
-        concatForComboSubset(all_data, train_combos), axis=0
-    )
-    test_res = np.concatenate(
-        concatForComboSubset(all_data, test_combos), axis=0
-    )
-    if validation_combos is not None and len(validation_combos) > 0:
-        val_res = np.concatenate(
-            concatForComboSubset(all_data, validation_combos), axis=0
-        )
-        return train_res, test_res, val_res
-    return train_res, test_res
-
 
 
 def poseLossAngle(y_true, y_pred):
@@ -660,7 +619,7 @@ class DataForJAV:
             data_organizer.subset_ids[DataSubsetKind.TRAIN],
             data_organizer.subset_ids[DataSubsetKind.TEST],
             data_organizer.subset_ids[DataSubsetKind.VALIDATION],
-            precalc_per_combo=self.jav_per_combo
+            precalc_per_id=self.jav_per_combo
         )
         self.jav_train, self.jav_test = jav_split[:2]
         self.jav_validation = np.empty((0, ) + self.jav_train.shape[1:])
@@ -1061,7 +1020,7 @@ if TRAIN_NEW_MODEL:
     bcs_hist = bcs_model.fit(
         bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
         validation_data=val_param,
-        batch_size = 1024
+        # batch_size = 1024
     )
     latest_models[chosen_mode.name] = bcs_model
 else:
@@ -1128,7 +1087,7 @@ import errorstats as es
 motion_data_key_subset = [dog.motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
-for combo in combos:
+for combo in nametup_combos:
     calculator = PoseLoaderBCOT(combo[0], combo[1])
     all_rotation_mats_T[combo[:2]] = np.swapaxes(
         calculator.getRotationMatsGTNP(), -1, -2

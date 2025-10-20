@@ -152,8 +152,10 @@ class PoseLoader(ABC):
         return (train_data, val_data, test_data)
     
     @classmethod
-    def trainValidationTestSplitIDs(cls, validation_ratio = 0.15, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
-        all_ids = cls.getAllIDs()
+    def trainValidationTestSplitIDs(cls, validation_ratio = 0.15,
+                                    test_ratio = 0.2, random_seed = 0,
+                                    *args, **kwargs) -> typing.Tuple[typing.List, typing.List, typing.List]:
+        all_ids = cls.getAllIDs(*args, **kwargs)
 
         return PoseLoader.trainValidationTestSplit(
             all_ids, validation_ratio, test_ratio, random_seed
@@ -301,9 +303,16 @@ class PoseLoader(ABC):
         return PoseLoader._randHelper(1, upper, lower)[0]
     
     @classmethod
-    def prepIDsForConstructor(cls, ids):
+    def prepIDsForConstructor(cls, ids: typing.List) -> typing.List:
         return ids
     
+    @classmethod
+    def getAllMinimalIDsAndLoaders(cls, *args, **kwargs):
+        ids = cls.getAllIDs(*args, **kwargs)
+        clean_ids = cls.prepIDsForConstructor(ids)
+        loaders = [cls(*ci) for ci in clean_ids]
+        return clean_ids, loaders
+
     @classmethod
     def getSamplesByCriteria(cls, vid_ids, realign: bool, allow_overlap: bool,
                              criteria: str, step: int, num_to_find: int = -1,
@@ -721,13 +730,15 @@ class PoseLoaderBCOT(PoseLoader):
         return combos
 
     @staticmethod
-    def combosByBodyIDs(bods):
+    def combosByBodyIDs(bods, exclude_cam2: bool):
         '''Filter out combos based on the 3D object ("body") subset chosen.''' 
-        combos = PoseLoaderBCOT.getAllIDs()
+        combos = PoseLoaderBCOT.getAllIDs(exclude_cam2)
         return [c for c in combos if c[0] in bods]
 
     @classmethod
-    def trainValidationTestByBody(cls, validation_ratio = 0.15, test_ratio = 0.2, random_seed = 0) -> typing.Tuple[typing.List, typing.List, typing.List]:
+    def trainValidationTestByBody(cls, validation_ratio = 0.15,
+                                  test_ratio = 0.2, random_seed = 0,
+                                  exclude_cam2: bool = True) -> typing.Tuple[typing.List, typing.List, typing.List]:
         '''
         We'll split our data into train/validation/test sets where the vids for
         a single body will either all be train vids or all be test vids. This 
@@ -743,7 +754,10 @@ class PoseLoaderBCOT(PoseLoader):
 
         return typing.cast(
             typing.Tuple[typing.List, typing.List, typing.List],
-            tuple(PoseLoaderBCOT.combosByBodyIDs(b_ids) for b_ids in body_split)
+            tuple(
+                PoseLoaderBCOT.combosByBodyIDs(b_ids, exclude_cam2)
+                for b_ids in body_split
+            )
         )
 
     @classmethod

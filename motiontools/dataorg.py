@@ -4,10 +4,10 @@ from enum import IntEnum
 import numpy as np
 from numpy.typing import NDArray
 
-from motiontools.posefeatures import (
-    MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION
+from motiontools.key_and_vec_specs import (
+    MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION,
+    OneHotMotionData, MOTION_DATA_KEY_TYPE
 )
-from motiontools.posefeatures import OneHotMotionData, MOTION_DATA_KEY_TYPE
 from datatools.data_splitting import DataSubsetKind
 
 # We frequently work with data sequences that have the following type: 
@@ -509,6 +509,13 @@ class DataOrganizer:
             ret = self.col_subset_test
         elif subset == DataSubsetKind.VALIDATION:
             ret = self.col_subset_validation
+        elif subset == DataSubsetKind.WHOLE:
+            # TODO: The way things are currently structured, I would have to
+            # concatenate the arrays together, which would use much more RAM.
+            # TRY THAT FIRST, but then should modify so that the whole dataset
+            # is loaded as a single numpy array and then the train, test, and
+            # validation arrays are just slices into it!
+            raise NotImplementedError("Need better handling of WHOLE option!")
         else:
             raise ValueError(
                 "Subset kind {} is not train, test, or validation!".format(
