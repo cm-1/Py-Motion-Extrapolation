@@ -3,13 +3,11 @@
 # Vanilla Regression Network Code!
 ################################################################################
 
-import typing
-import pickle
-
 import numpy as np
 from numpy.typing import NDArray
 
 from sklearn.preprocessing import StandardScaler
+import gtCommon as gtc
 
 import tensorflow as tf
 import keras
@@ -22,6 +20,7 @@ import keras
 from motiontools.posefeatures import MOTION_DATA, MOTION_DATA_KEY_TYPE
 
 
+from motiontools.dataorg import DataOrganizer
 
 import posemath as pm # Small "library" I wrote for vector operations.
 
@@ -30,7 +29,6 @@ import posemath as pm # Small "library" I wrote for vector operations.
 # Loading/Filtering data!
 ###############################################################################
 print("Loading data from disc.")
-DATA_PATH = "./generated_data"
 
 def load_data(fname):
     loaded = np.load(fname)
@@ -39,20 +37,19 @@ def load_data(fname):
     return ret
 
 print("Loading input data.")
-concat_train_data = load_data(DATA_PATH + "/large_train_data.npz")
-concat_test_data = load_data(DATA_PATH + "/large_test_data.npz")
-
-motion_data_keys: typing.List[MOTION_DATA_KEY_TYPE] = []
-with open(DATA_PATH + "/large_data_columns.pickle", "rb") as col_file:
-    motion_data_keys = pickle.load(col_file)
+dog = DataOrganizer.load(gtc.PoseLoaderBCOT)
+concat_train_data = dog.concat_train_data
+concat_test_data = dog.concat_test_data
+motion_data_keys = dog.motion_data_keys
 
 print("Loading output data.")
 # The "bcs" in the name is an artifact from some older thing.
 # Will have to eventually rename this and the other instances in other files to
 # something else consistent.
 
-bcs_train = load_data(DATA_PATH + "/jav_train_data.npz")
-bcs_test = load_data(DATA_PATH + "/jav_test_data.npz")
+DATA_PATH = DataOrganizer.generatedDataPath()
+bcs_train = load_data(DATA_PATH / "jav_train_data.npz")
+bcs_test = load_data(DATA_PATH / "jav_test_data.npz")
 
 
 #%%

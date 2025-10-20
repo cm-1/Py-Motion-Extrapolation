@@ -102,6 +102,12 @@ class PoseLoader(ABC):
 
         self._are_timestamps_const = are_timestamps_const
         self._timestamps: typing.Optional[NDArray] = None
+
+    @staticmethod
+    @abstractmethod
+    def datasetName() -> str:
+        return "UNDEFINED"
+
     
     def areTimestampsConst(self):
         return self._are_timestamps_const
@@ -177,7 +183,7 @@ class PoseLoader(ABC):
 
     @abstractmethod
     def getVidID(self):
-        return tuple([])
+        return ()
 
     # The error-handling here was added by ChatGPT, but all remaining code is
     # human-written.
@@ -469,6 +475,10 @@ class SyntheticPoseLoader(PoseLoader):
         # specified. Then, here, save the seeds if they're provided, and if not,
         # create random seeds. Could use a lambda for that part.
 
+    @staticmethod
+    def datasetName():
+        return "Synthetic"
+
     @classmethod
     def getAllIDs(cls, max_id: int = 1) -> typing.List:
         raise AttributeError("Synthetic pose loader lacks pre-set IDs.")
@@ -691,9 +701,21 @@ class PoseLoaderBCOT(PoseLoader):
             + self._seq + "_" + self._bod +".txt"
         self.posePathCalc = PoseLoaderBCOT._CV_POSE_EXPORT_DIR / calcFName
 
+    def datasetName():
+        return "BCOT"
 
     def getVidID(self):
         return (self._bod_index, self._seq_index)
+
+    @staticmethod
+    def getMotionKind(seq_index: int):
+        # TODO: Precalculate and store this so that it's O(1) instead of O(n)
+        k = ""
+        for k_opt in PoseLoaderBCOT.motion_kinds:
+            if k_opt in BCOT_SEQ_NAMES[seq_index]:
+                k = k_opt
+                break
+        return k
 
     @classmethod
     def getAllIDs(cls, exclude_cam2: bool = True):
@@ -714,13 +736,8 @@ class PoseLoaderBCOT(PoseLoader):
         '''
 
         combos = []
-        for s, s_val in enumerate(BCOT_SEQ_NAMES):
-            k = ""
-            # For now, using a for loop, not regex, to get motion kind from seq name.
-            for k_opt in PoseLoaderBCOT.motion_kinds:
-                if k_opt in s_val:
-                    k = k_opt
-                    break
+        for s in range(len(BCOT_SEQ_NAMES)):
+            k = cls.getMotionKind(s)
             for b in range(len(BCOT_BODY_NAMES)):
                 # Some sequence-body pairs do not have videos, and some have two videos
                 # with identical motion but a different camera. So we first check that 
@@ -915,6 +932,10 @@ class PoseLoaderTUDL(PoseLoaderBOP):
 
         self.subseq_interval = (low, high)
     
+    @staticmethod
+    def datasetName():
+        return "TUDL"
+    
     @classmethod
     def getAllIDs(cls):
         return [
@@ -958,6 +979,9 @@ class PoseLoaderPauwels(PoseLoader):
         #     + self._seq + "_" + self._bod +".txt"
         # self.posePathCalc = PoseLoaderPauwels._CV_POSE_EXPORT_DIR / calcFName
 
+    @staticmethod
+    def datasetName():
+        return "Pauwels"
 
     def getVidID(self):
         return () # empty tuple
@@ -1078,6 +1102,9 @@ class PoseLoaderClipsHOT3D(PoseLoader):
 
         self._ind_in_loaded = -1
         
+    @staticmethod
+    def datasetName():
+        return "HOT3D"
 
     def getVidID(self):
         return (self._clip_num, self._obj_num, self._ignore_cam)

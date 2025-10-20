@@ -1,9 +1,14 @@
 import typing
 from enum import IntEnum
+import os
+import pathlib
+
+import pickle
 
 import numpy as np
 from numpy.typing import NDArray
 
+import gtCommon as gtc
 from motiontools.key_and_vec_specs import (
     MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION,
     OneHotMotionData, MOTION_DATA_KEY_TYPE
@@ -291,93 +296,160 @@ class DataOrganizer:
         skip_inds_dict: typing.Dict[SkipSubsetKind, NDArray]
         frame_boundaries: typing.List[NDArray]
         skip_bounds: NDArray
+    
+    class _NonNumpyData(typing.NamedTuple):
+        frame_bounds: typing.Dict[DataSubsetKind, typing.List[NDArray]]
+        skip_bounds: typing.Dict[DataSubsetKind, NDArray]
+        subset_skip_inds: typing.Dict[DataSubsetKind, typing.Dict[SkipSubsetKind, NDArray]]
+        motion_data_keys: typing.List[MOTION_DATA_KEY_TYPE]
+        motion_mod_keys: typing.List[MOTION_MODEL]
+        subset_ids: typing.Dict[DataSubsetKind, typing.List]
 
-    def __init__(self, all_motion_data, min_norm_labels, err_norm_lists, 
-                 train_ids, test_ids, validation_ids = None, 
-                 motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None,
-                 del_original_data: bool = False):
+
+    def __init__(self, other_fields: _NonNumpyData, concat_train_data: NDArray,
+                 concat_validation_data: NDArray, concat_test_data: NDArray,
+                 concat_train_class_errs: NDArray,
+                 concat_validation_class_errs: NDArray,
+                 concat_test_class_errs: NDArray,
+                 concat_train_labels: NDArray,
+                 concat_validation_labels: NDArray, concat_test_labels: NDArray,
+                 loader_class: typing.Type[gtc.PoseLoader]
+                 ):
+        self.motion_data_keys = other_fields.motion_data_keys
+        self.motion_mod_keys = other_fields.motion_mod_keys
+
+        self.frame_bounds = other_fields.frame_bounds
+        self.skip_bounds = other_fields.skip_bounds
+        self.subset_skip_inds = other_fields.subset_skip_inds
+        self.subset_ids = other_fields.subset_ids
         
-        # It is fine if this is None for now because, if it is, it will be
-        # overwritten later.
-        self.motion_data_keys = motion_data_keys
+        self.concat_train_data = concat_train_data
+        self.concat_validation_data = concat_validation_data
+        self.concat_test_data = concat_test_data
+        self.concat_train_class_errs = concat_train_class_errs
+        self.concat_validation_class_errs = concat_validation_class_errs
+        self.concat_test_class_errs = concat_test_class_errs
 
-        if motion_data_keys is None:
-            arbitrary_seq_dict = next(iter(all_motion_data[0].values()))
-            self.motion_data_keys = list(arbitrary_seq_dict.keys())
-        
-        self._timestep_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTEP)
-        
-        # We'll specify the column names/order manually for this one.
-        self.motion_mod_keys = [
-            MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
-        ] 
- 
-        DSK = DataSubsetKind
-        self.subset_ids: typing.Dict[DataSubsetKind, NDArray] = dict()
-        self.frame_bounds: typing.Dict[DataSubsetKind, typing.List[NDArray]] \
-            = dict()
-        self.skip_bounds: typing.Dict[DataSubsetKind, NDArray] = dict()
-        self.subset_skip_inds: typing.Dict[
-            DataSubsetKind, typing.Dict[SkipSubsetKind, NDArray]
-        ] = dict()
+        self.concat_train_labels = concat_train_labels
+        self.concat_validation_labels = concat_validation_labels
+        self.concat_test_labels = concat_test_labels
 
-        # print("Starting training data:")
-        # Training data:
-        sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, train_ids,
-            del_original_data
-        )
-        self.subset_ids[DSK.TRAIN], self.concat_train_labels = sd[:2]
-        self.concat_train_data, self.concat_train_class_errs = sd[2:4]
-        self.subset_skip_inds[DSK.TRAIN] = sd[4]
-        self.frame_bounds[DSK.TRAIN] = sd[5]
-        self.skip_bounds[DSK.TRAIN] = sd[6]
+        self.LoaderClass = loader_class
 
-        # print("Starting testing data:")
-        # Test data:
-        sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, test_ids,
-            del_original_data
-        )
-        self.subset_ids[DSK.TEST], self.concat_test_labels = sd[:2]
-        self.concat_test_data, self.concat_test_class_errs = sd[2:4]
-        self.subset_skip_inds[DSK.TEST] = sd[4]
-        self.frame_bounds[DSK.TEST] = sd[5]
-        self.skip_bounds[DSK.TEST] = sd[6]
-
-        # print("Starting vals data:")
-        # Validation data:
-        sd = self._splitAndConcatSubset(
-            all_motion_data, min_norm_labels, err_norm_lists, validation_ids,
-            del_original_data
-        )
-        self.subset_ids[DSK.VALIDATION], self.concat_validation_labels = sd[:2]
-        self.concat_validation_data, self.concat_validation_class_errs = sd[2:4]
-        self.subset_skip_inds[DSK.VALIDATION] = sd[4]
-        self.frame_bounds[DSK.VALIDATION] = sd[5]
-        self.skip_bounds[DSK.VALIDATION] = sd[6]
-
-        
         # Optional attributes to be set in later code.
         self.col_subset_train = np.empty(0)
         self.col_subset_test = np.empty(0)
         self.col_subset_validation = np.empty(0)
         self.motion_data_key_subset = []
 
+    @ staticmethod
+    def FromCalcs(loader_class: typing.Type[gtc.PoseLoader], all_motion_data,
+                  min_norm_labels, err_norm_lists, 
+                  train_ids, test_ids, validation_ids = None,
+                  motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None,
+                  del_original_data: bool = False):
+        
+        # It is fine if motion_data_keys is None for now because, if it is, it
+        # will be overwritten later.
+        if motion_data_keys is None:
+            arbitrary_seq_dict = next(iter(all_motion_data[0].values()))
+            motion_data_keys = list(arbitrary_seq_dict.keys())
+        
+        _timestep_ind = motion_data_keys.index(MOTION_DATA.TIMESTEP)
+        
+        # We'll specify the column names/order manually for this one.
+        motion_mod_keys = [
+            MOTION_MODEL(i) for i in range(1, len(MOTION_MODEL) + 1)
+        ] 
+ 
+        DSK = DataSubsetKind
+        subset_ids: typing.Dict[DataSubsetKind, NDArray] = dict()
+        frame_bounds: typing.Dict[DataSubsetKind, typing.List[NDArray]] \
+            = dict()
+        skip_bounds: typing.Dict[DataSubsetKind, NDArray] = dict()
+        subset_skip_inds: typing.Dict[
+            DataSubsetKind, typing.Dict[SkipSubsetKind, NDArray]
+        ] = dict()
+
+        # print("Starting training data:")
+        # Training data:
+        sd = DataOrganizer._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists,
+            _timestep_ind, motion_data_keys, motion_mod_keys, train_ids,
+            del_original_data
+        )
+        subset_ids[DSK.TRAIN], concat_train_labels = sd[:2]
+        concat_train_data, concat_train_class_errs = sd[2:4]
+        subset_skip_inds[DSK.TRAIN] = sd[4]
+        frame_bounds[DSK.TRAIN] = sd[5]
+        skip_bounds[DSK.TRAIN] = sd[6]
+
+        # print("Starting testing data:")
+        # Test data:
+        sd = DataOrganizer._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists,
+            _timestep_ind, motion_data_keys, motion_mod_keys, test_ids,
+            del_original_data
+        )
+        subset_ids[DSK.TEST], concat_test_labels = sd[:2]
+        concat_test_data, concat_test_class_errs = sd[2:4]
+        subset_skip_inds[DSK.TEST] = sd[4]
+        frame_bounds[DSK.TEST] = sd[5]
+        skip_bounds[DSK.TEST] = sd[6]
+
+        # print("Starting vals data:")
+        # Validation data:
+        sd = DataOrganizer._splitAndConcatSubset(
+            all_motion_data, min_norm_labels, err_norm_lists,
+            _timestep_ind, motion_data_keys, motion_mod_keys, validation_ids,
+            del_original_data
+        )
+        subset_ids[DSK.VALIDATION], concat_validation_labels = sd[:2]
+        concat_validation_data, concat_validation_class_errs = sd[2:4]
+        subset_skip_inds[DSK.VALIDATION] = sd[4]
+        frame_bounds[DSK.VALIDATION] = sd[5]
+        skip_bounds[DSK.VALIDATION] = sd[6]
+
+        
+        
+
+        non_np = DataOrganizer._NonNumpyData(
+            frame_bounds, skip_bounds, subset_skip_inds, motion_data_keys,
+            motion_mod_keys, subset_ids
+        )
+
+        return DataOrganizer(
+            non_np, concat_train_data, concat_validation_data, concat_test_data,
+            concat_train_class_errs, concat_validation_class_errs,
+            concat_test_class_errs, concat_train_labels,
+            concat_validation_labels, concat_test_labels, loader_class
+        )
+
         # self.untransformed_col_subset_train = empty_np
         # self.untransformed_col_subset_test = empty_np
 
+    def getAllIDs(self):
+        # Using list unpacking here so that (a) the order is explicit and (b) if
+        # some code accidentally uses NDArrays as IDs, then I don't get
+        # accidental summations instead of concatenation by using "+".
+        return [
+            *self.subset_ids[DataSubsetKind.TRAIN],
+            *self.subset_ids[DataSubsetKind.VALIDATION],
+            *self.subset_ids[DataSubsetKind.TEST]
+        ]
 
-    def _splitAndConcatSubset(self, all_motion_data, min_norm_labels,
-                              err_norm_lists,
+    def _splitAndConcatSubset(all_motion_data, min_norm_labels, err_norm_lists,
+                              timestep_ind: int,
+                              motion_data_keys: typing.List[MOTION_DATA_KEY_TYPE],
+                              motion_mod_keys: typing.List[MOTION_MODEL],
                               subset_ids: typing.Optional[typing.Iterable],
                               del_original_data: bool):
         skip_ul = 1 + max(SkipSubsetKind).value
         if subset_ids is None:
-            d_empty = np.empty((0, len(self.motion_data_keys)))
+            d_empty = np.empty((0, len(motion_data_keys)))
             lab_empty = np.empty((0, ), dtype=int)
-            e_empty = np.empty((0, len(self.motion_mod_keys)))
-            inds_empty = {k: ... for k in SkipSubsetKind}
+            e_empty = np.empty((0, len(motion_mod_keys)))
+            inds_empty = {k: np.empty(0, dtype=bool) for k in SkipSubsetKind}
             vid_bounds_empty = [lab_empty.copy() for _ in range(skip_ul)]
             skip_bounds_na = np.zeros(skip_ul + 1)
             return DataOrganizer._SubsetConcats(
@@ -410,17 +482,23 @@ class DataOrganizer:
         concat_labels = np.concatenate(labels)
         del labels # Delete now since it doesn't get used later anyway.
 
+        if motion_data_keys is None:
+            raise ValueError((
+                "Must specify motion_data_keys order because default does not "
+                "get saved anywhere!"
+            ))
+
         # print("- Cat data.")
         # Get the "keys" as another return value so that we know the column 
         # names/order.
-        self.motion_data_keys, concat_data = get2DArrayFromDataStruct(
-            data, self.motion_data_keys, stack_axis=-1
+        _, concat_data = get2DArrayFromDataStruct(
+            data, motion_data_keys, stack_axis=-1
         )
         del data # Delete now since it doesn't get used later anyway.
         
         # print("- Cat errs.")
         _, concat_errs = get2DArrayFromDataStruct(
-            errs, self.motion_mod_keys, stack_axis=-1
+            errs, motion_mod_keys, stack_axis=-1
         )
         del errs # Delete now since it doesn't get used later anyway.
 
@@ -430,7 +508,7 @@ class DataOrganizer:
         # things were previously split into lists by skip amount, but whatever.
         skip_inds = []
         for i in range(1,4): # We have data for frame steps of 1, 2, and 3.
-            skip_inds.append(concat_data[:, self._timestep_ind] == i)
+            skip_inds.append(concat_data[:, timestep_ind] == i)
 
         # Convert the above 3-item lists into dicts.
         skip_d = {SkipSubsetKind(i): skip_inds[i] for i in range(skip_ul)}
@@ -545,6 +623,107 @@ class DataOrganizer:
             self.concat_test_class_errs, pred_labels,
             self.subset_skip_inds[DataSubsetKind.TEST]
         )
+
+    @staticmethod
+    def generatedDataPath():
+        DATA_PATH = "./generated_data/"
+        if not os.path.exists(DATA_PATH):
+            os.mkdir(DATA_PATH)
+        return pathlib.Path(DATA_PATH)
+
+    @staticmethod
+    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader]):
+        return DataOrganizer.generatedDataPath() / (
+            "processed_columns_" + loaderClass.datasetName() + ".npz"
+        )
+    
+    @staticmethod
+    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader]):
+        return DataOrganizer.generatedDataPath() / (
+            "other_processed_data_" + loaderClass.datasetName() + ".pkl"
+        )
+    
+    def dump(self, compress: bool,
+             np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+             pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None):
+        if np_file is None:
+            np_file = self.getDumpFilenameNP(self.LoaderClass)
+        if pkl_file is None:
+            pkl_file = self.getDumpFilenamePkl(self.LoaderClass)
+
+        save_dict = {
+            "concat_train_data": self.concat_train_data,
+            "concat_test_data": self.concat_test_data,
+            "concat_validation_data": self.concat_validation_data,
+            "concat_train_class_errs": self.concat_train_class_errs,
+            "concat_validation_class_errs": self.concat_validation_class_errs,
+            "concat_test_class_errs": self.concat_test_class_errs,
+            "concat_train_labels": self.concat_train_labels,
+            "concat_validation_labels": self.concat_validation_labels,
+            "concat_test_labels": self.concat_test_labels
+        }
+
+        non_np = DataOrganizer._NonNumpyData(
+            self.frame_bounds, self.skip_bounds, self.subset_skip_inds,
+            self.motion_data_keys, self.motion_mod_keys, self.subset_ids
+        )
+
+        if compress:
+            np.savez_compressed(np_file, **save_dict)
+        else:
+            np.savez(np_file, **save_dict)
+        
+        with open(pkl_file, "wb") as f:
+            pickle.dump(non_np, f)
+
+    def load(loader_class: typing.Type[gtc.PoseLoader],
+             np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+             pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None):
+        if np_file is None:
+            np_file = DataOrganizer.getDumpFilenameNP(loader_class)
+        if pkl_file is None:
+            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class)
+
+        npl = np.load(np_file)
+
+        with open(pkl_file, "rb") as f:
+            nnpl = pickle.load(f)
+        ret = DataOrganizer(
+            nnpl, npl["concat_train_data"], npl["concat_validation_data"],
+            npl["concat_test_data"], npl["concat_train_class_errs"],
+            npl["concat_validation_class_errs"], npl["concat_test_class_errs"],
+            npl["concat_train_labels"], npl["concat_validation_labels"],
+            npl["concat_test_labels"], loader_class
+        )
+
+        npl.close()
+        return ret
+    
+    def getSelectionData(self, full_arr: NDArray, subset_kind: DataSubsetKind,
+                         skip_amt: SkipSubsetKind, vid_id = None):
+        '''NOTE: The upper bound returned is exclusive, so that you can just
+        use them as indices arr[bounds[0]:bounds[1]] directly.'''
+        if skip_amt == SkipSubsetKind._all:
+            # Would it even make sense to support this? Maybe ValueError?
+            raise NotImplementedError("Skip selection of _all not supported.")
+        if subset_kind == DataSubsetKind.WHOLE:
+            # Same here.
+            raise NotImplementedError("WHOLE selection not supported!")
+
+        per_skip_bounds = self.skip_bounds[subset_kind][
+            skip_amt:(skip_amt + 2)
+        ]
+        skip_subset = full_arr[per_skip_bounds[0]:per_skip_bounds[1]]
+
+        bounds_in_skip = self.frame_bounds[subset_kind][skip_amt]
+        
+        if vid_id is None:
+            return skip_subset
+        
+        id_ind = self.subset_ids[subset_kind].index(vid_id)
+        row_idxs = bounds_in_skip[id_ind:(id_ind + 2)]
+        return skip_subset[row_idxs[0]:row_idxs[1]] # Values for this video.
+
 
 def joinArrays(pts_lists: typing.List[NDArray]):
     join_list = []

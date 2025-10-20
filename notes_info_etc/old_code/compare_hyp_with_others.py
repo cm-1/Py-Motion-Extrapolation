@@ -10,8 +10,8 @@ single_loader = PoseLoaderBCOT(*(bcot_id_split[-1][-1]))
 cfc.getAll([single_loader], 1)
 
 #%%
-tdog = DataOrganizer(
-    cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists, *bcot_id_split
+tdog = DataOrganizer.FromCalcs(
+    some_loader_class, cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists, *bcot_id_split
 )
 col_inds = np.asarray([i for i, k in enumerate(tdog.motion_data_keys) if k in scaler.column_keys])
 tdog.setPickAndTransform(col_inds, scaler)#, True)

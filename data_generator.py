@@ -76,8 +76,8 @@ train_ids, test_ids = PoseLoaderBCOT.trainTestByBody(
 train_ids_c2 = [c[:2] for c in train_ids]
 test_ids_c2 = [c[:2] for c in test_ids] # Get the unique part of each.
 
-dog = DataOrganizer(
-    all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
+dog = DataOrganizer.FromCalcs(
+    PoseLoaderBCOT, all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
     train_ids_c2, test_ids_c2
 )
 
@@ -86,16 +86,7 @@ dog = DataOrganizer(
 # SAVING THE INPUT DATA
 ################################################################################
 
-DATA_PATH = "./generated_data"
-if not os.path.exists(DATA_PATH):
-    os.mkdir(DATA_PATH)
-
-print("Saving the input train and test data.")
-np.savez_compressed(DATA_PATH + "/large_train_data.npz", dog.concat_train_data)
-np.savez_compressed(DATA_PATH + "/large_test_data.npz", dog.concat_test_data)
-
-with open(DATA_PATH + "/large_data_columns.pickle", "wb") as col_file:
-    pickle.dump(dog.motion_data_keys, col_file)
+dog.dump(compress=True)
     
 #%%
 ################################################################################
@@ -122,10 +113,10 @@ bcs_train, bcs_test = dataForComboSplitJAV(
 # SAVING THE OUTPUT DATA
 ################################################################################
 
+#%%
 
-print("Saving the output train and test data.")
-
-np.savez_compressed(DATA_PATH + "/jav_train_data.npz", bcs_train)
-np.savez_compressed(DATA_PATH + "/jav_test_data.npz", bcs_test)
+DATA_PATH = DataOrganizer.generatedDataPath()
+np.savez_compressed(DATA_PATH / "jav_train_data.npz", bcs_train)
+np.savez_compressed(DATA_PATH / "jav_test_data.npz", bcs_test)
 
 print("Data generation/saving completed!")

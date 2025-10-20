@@ -53,77 +53,26 @@ from datatools.data_splitting import DataSubsetKind
 
 TRAIN_NEW_MODEL = False
 
-# Some consts used in calculating the input features.
-OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
-STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
-CIRC_ERR_RADIUS_RATIO_THRESH = 0.10 # Threshold for if motion's circular.
-MAX_MIN_JERK_OPT_ITERS = 33 # Max iters for min jerk optimization calcs.
-MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
-ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
-#%%
-# Instead of vid id 3-tuples, we get nametuple versions containing only the
-# uniquely-identifying parts. Some functions expect this instead of the 3-tuple. 
-# We also get a list of pose loaders, one for each BCOT video.
-nametup_combos, bcot_loaders = PoseLoaderBCOT.getAllMinimalIDsAndLoaders()
-cfc = CalcsForVideo(
-    obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
-    straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
-    err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
-    split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
-    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH,
-    # exclude_axis_angs=False, exclude_bidir=False, exclude_circ_data=False,
-    # exclude_onehots=False, exclude_past_muls=False, exclude_timescaled=False,
-    # exclude_vel_deg2=False
-)
-cfc.getAll(bcot_loaders)
+dog = DataOrganizer.load(PoseLoaderBCOT)
 
-# Input features like velocity, acceleration, jerk, rotation speed, etc.
-all_motion_data = cfc.all_motion_data
+bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
 
-# Errors for non-ML predictions using simple physics models like 
-# constant-velocity, constant-acceleration, etc.
-min_norm_labels = cfc.min_norm_labels
-
-# Labels for which of these physical models performed best for each vid frame.
-err_norm_lists = cfc.err_norm_lists
-
-#%%
-
-# We'll split our data into train/test sets where the vids for a single body
-# will either all be train vids or all be test vids. This way (a) we are
-# guaranteed to have every motion "class" in our train and test sets, and (b)
-# we'll know how well the models generalize to new 3D objects not trained on.
-bcot_split = PoseLoaderBCOT.trainValidationTestByBody(
-    validation_ratio=0.1, test_ratio=0.2, random_seed=0
-)
-bcot_train_combos, bcot_validation_combos, bcot_test_combos = bcot_split
-
-train_combos_c2 = [c[:2] for c in bcot_train_combos]
-test_combos_c2 = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
-val_combos_c2 = [c[:2] for c in bcot_validation_combos]
-if len(val_combos_c2) == 0:
-    val_combos_c2 = None
-
-dog = DataOrganizer(
-    all_motion_data, min_norm_labels, err_norm_lists,
-    train_combos_c2, test_combos_c2, val_combos_c2
-)
-
-#%%
-test_bodies = np.unique([c[0] for c in bcot_test_combos])
-best_seq_means = []
+#%% TODO: Fix the below again so that calculation across ALL videos supported!
+test_bodies = np.unique([c[0] for c in bcot_test_ids])
+# best_seq_means = []
 test_best_seq_means = []
 for skip in range(3):
-    best_seq_scores = []
+    # best_seq_scores = []
     test_best_seq_scores = []
     for seq in range(len(gtc.BCOT_SEQ_NAMES)):
         seq_data = []
         test_seq_data = []
-        for combo in nametup_combos:
+        for combo in dog.subset_ids[DataSubsetKind.TEST]:
             if combo[1] == seq:
-                seq_combo_scores_stacked = np.stack(
-                    list(err_norm_lists[skip][combo[:2]].values()), axis=-1
+                seq_combo_scores_stacked = dog.getSelectionData(
+                    dog.concat_test_class_errs, DataSubsetKind.TEST, skip,
+                    combo[:2]
                 )
                 seq_data.append(seq_combo_scores_stacked)
                 if combo[0] in test_bodies:
@@ -136,15 +85,15 @@ for skip in range(3):
             assert concat_seq_data.shape[1] == len(MOTION_MODEL)
             
             seq_best_mode = np.argmin(seq_sums)
-            best_seq_scores.append(concat_seq_data[:, seq_best_mode])
+            # best_seq_scores.append(concat_seq_data[:, seq_best_mode])
             test_best_seq_scores.append(concat_test_seq_data[:, seq_best_mode])
-    seq_best_mean = np.mean(np.concatenate(best_seq_scores))
+    # seq_best_mean = np.mean(np.concatenate(best_seq_scores))
     seq_best_test_mean = np.mean(np.concatenate(test_best_seq_scores))
     
-    best_seq_means.append(seq_best_mean)
+    # best_seq_means.append(seq_best_mean)
     test_best_seq_means.append(seq_best_test_mean)
 print("Best case one-model-per sequence results for skips 0, 1, 2:")
-print("All data:", best_seq_means)
+# print("All data:", best_seq_means)
 print("Test data:", test_best_seq_means)
 
 
@@ -525,7 +474,7 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 bcs_scaler = UnitAwareScaler(nonco_col_ks) #, False)
 
 class DataForJAV:
-    def __init__(self, data_organizer: DataOrganizer, loaders, bcs_scaler, 
+    def __init__(self, data_organizer: DataOrganizer, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
@@ -556,6 +505,9 @@ class DataForJAV:
 
         save_data_for_conf |= self.outVecMode in WORLD_VEC_MODES
         need_pos = save_data_for_conf or _rot_align
+        
+        all_true_ids = dog.LoaderClass.prepIDsForConstructor(dog.getAllIDs())
+        loaders = [dog.LoaderClass(*true_id) for true_id in all_true_ids] 
         jav_res = dataForCombosJAV(
             loaders, JAV_order, save_data_for_conf, need_pos,
             need_rot, need_rot_vel
@@ -991,7 +943,7 @@ class DataForJAV:
         return scores
     
 bcotjav = DataForJAV(
-    dog, bcot_loaders, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
+    dog, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
     save_data_for_conf=True, #skip=2
 )
 #%%
@@ -1015,7 +967,8 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
 if TRAIN_NEW_MODEL:
     val_param = None
-    if bcot_validation_combos is not None and len(bcot_validation_combos) > 0:
+    bcot_validation_ids = dog.subset_ids[DataSubsetKind.VALIDATION]
+    if bcot_validation_ids is not None and len(bcot_validation_ids) > 0:
         val_param = (bcotjav.in_validation, bcotjav.gt_validation)
     bcs_hist = bcs_model.fit(
         bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
@@ -1038,7 +991,6 @@ if TRAIN_NEW_MODEL:
     bcs_model.save(model_name)
 
 #%% Granular per-model scores on test data.
-bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST]
 median_store_shape = (3, len(bcot_test_ids))
 med_static_str = "median_static"
 model_medians = {med_static_str: np.empty(median_store_shape)}
@@ -1056,23 +1008,19 @@ for m, (score_model_prefix, score_model) in enumerate(latest_models.items()):
     model_medians[med_prefix] = np.empty(median_store_shape)
 
     for skip_amt in range(3):
-        per_skip_bounds = dog.skip_bounds[DataSubsetKind.TEST][
-            skip_amt:(skip_amt + 2)
-        ]
-        skip_subset = nn_errs[per_skip_bounds[0]:per_skip_bounds[1]]
-        static_subset = static_test_errs[per_skip_bounds[0]:per_skip_bounds[1]]
-
-        bounds_in_skip = dog.frame_bounds[DataSubsetKind.TEST][skip_amt]
-        
-        for i in range(len(bcot_test_ids)):
-            row_idxs = bounds_in_skip[i:(i+2)]
-            errs_for_id = skip_subset[row_idxs[0]:row_idxs[1]] # Errs for this video.
+        for i, vid_id in enumerate(bcot_test_ids):
+            errs_for_id = dog.getSelectionData(
+                nn_errs, DataSubsetKind.TEST, skip_amt, vid_id
+            )
 
             model_medians[med_prefix][skip_amt, i] = np.median(errs_for_id)
 
             if m == 0:
+                static_errs_for_id = dog.getSelectionData(
+                    static_test_errs, DataSubsetKind.TEST, skip_amt, vid_id
+                )
                 model_medians[med_static_str][skip_amt, i] = np.median(
-                    static_subset[row_idxs[0]:row_idxs[1]]
+                    static_errs_for_id
                 )
 
 #%%
@@ -1087,7 +1035,7 @@ import errorstats as es
 motion_data_key_subset = [dog.motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
-for combo in nametup_combos:
+for combo in dog.getAllIDs():
     calculator = PoseLoaderBCOT(combo[0], combo[1])
     all_rotation_mats_T[combo[:2]] = np.swapaxes(
         calculator.getRotationMatsGTNP(), -1, -2
@@ -1105,13 +1053,22 @@ lim_class_errs: typing.List[typing.Dict[str, NDArray]] = [
     {mk: [] for mk in motion_kinds_plus} for _ in range(3)
 ]
 
+bcot_test_ids_with_mk = [
+    (*c, PoseLoaderBCOT.getMotionKind(c[1])) for c in bcot_test_ids
+]
 for skip in range(3):
-    for combo in bcot_test_combos:
+    for combo in bcot_test_ids_with_mk:
         c2 = combo[:2]
-        curr_input_dict = all_motion_data[skip][c2]
-        curr_input = np.stack(
-            [curr_input_dict[k] for k in motion_data_key_subset], axis=-1
-        )
+        curr_dsk = [
+            d for d in DataSubsetKind.nonWholeValues()
+            if c2 in dog.subset_ids[d]
+        ][0]
+        curr_data = dog.col_subset_train
+        if curr_dsk == DataSubsetKind.VALIDATION:
+            curr_data = dog.col_subset_validation
+        elif curr_dsk == DataSubsetKind.TEST:
+            curr_data = dog.col_subset_test
+        curr_input = dog.getSelectionData(curr_data, curr_dsk, skip, c2)
         curr_input = bcs_scaler.transform(curr_input)
 
         curr_jav_pred = bcs_model.predict(
@@ -1136,19 +1093,19 @@ for skip in range(3):
         )["JAV"]
 
         # class_lim_start_ind = -(len(curr_min_norm_vecs) + 1)
-        curr_min_norm_vecs = cfc.min_norm_vecs[skip][c2] \
-            + curr_translations[-len(world_disp):]
+        # curr_min_norm_vecs = cfc.min_norm_vecs[skip][c2] \
+        #     + curr_translations[-len(world_disp):]
         
-        curr_class_lim_errs = es.localizeErrsInFrames(
-            {"Class Lim":  curr_min_norm_vecs},  curr_translations[1:],
-            curr_rotation_mats[1:], deg1_vels=curr_d1_vels,
-            deg2_vels=curr_d2_vels, deg2_acc=curr_accs
-        )["Class Lim"]
+        # curr_class_lim_errs = es.localizeErrsInFrames(
+        #     {"Class Lim":  curr_min_norm_vecs},  curr_translations[1:],
+        #     curr_rotation_mats[1:], deg1_vels=curr_d1_vels,
+        #     deg2_vels=curr_d2_vels, deg2_acc=curr_accs
+        # )["Class Lim"]
 
         reframed_JAV_errs[skip][combo[-1]].append(curr_jav_errs)
         reframed_JAV_errs[skip]["all"].append(curr_jav_errs)
-        lim_class_errs[skip][combo[-1]].append(curr_class_lim_errs)
-        lim_class_errs[skip]["all"].append(curr_class_lim_errs)
+        # lim_class_errs[skip][combo[-1]].append(curr_class_lim_errs)
+        # lim_class_errs[skip]["all"].append(curr_class_lim_errs)
         progress_str = "\rProgress: skip {}, combo ({:2},{:2})".format(
             skip, c2[0], c2[1]
         )
@@ -1436,12 +1393,13 @@ tudl_loaders = [PoseLoaderTUDL(*t) for t in tudl_ids]
 cfc.getAll(tudl_loaders)
 #%%
 tudl_train, tudl_test = PoseLoaderTUDL.trainTestIDs()
-tdog = DataOrganizer(
+tdog = DataOrganizer.FromCalcs(
+    PoseLoaderTUDL,
     cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
     tudl_train, tudl_test, dog.motion_data_keys
 )
 #
-tjav = DataForJAV(tdog, tudl_loaders, bcs_scaler, nonco_cols, JAV_order)
+tjav = DataForJAV(tdog, bcs_scaler, nonco_cols, JAV_order)
 #%%
 
 tjavps = bcs_model.predict(tdog.col_subset_test)
