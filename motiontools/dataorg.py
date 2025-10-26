@@ -676,6 +676,7 @@ class DataOrganizer:
         with open(pkl_file, "wb") as f:
             pickle.dump(non_np, f)
 
+    @staticmethod
     def load(loader_class: typing.Type[gtc.PoseLoader],
              np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None):

@@ -34,16 +34,11 @@ from motiontools.key_and_vec_specs import (
 from motiontools.posefeatures import (
     JAV,                                            # Enum
     OrderForJAV,                                    # Type alias
-    CalcsForVideo,                                  # Class
     dataForCombosJAV, dataForComboSplitJAV,         # Functions
     getWorldFrameDisplacements,
     gtMultipliers6, getBaselineJAV6
 )
     
-from nn_utilities.nn_losses import (
-    poseLossJAV, poseLossVec3
-)
-from nn_utilities.nn_loading import loadLatestModels
 
 from motiontools.dataorg import (
     DataOrganizer, concatForComboSubset, UnitAwareScaler, SkipSubsetKind
@@ -247,6 +242,12 @@ export_graphviz(
 
 import tensorflow as tf
 import keras
+
+from nn_utilities.nn_losses import (
+    poseLossJAV, poseLossVec3
+)
+from nn_utilities.nn_loading import loadLatestModels
+
 import posemath as pm # Small "library" I wrote for vector operations.
 from sklearn.preprocessing import StandardScaler
 
