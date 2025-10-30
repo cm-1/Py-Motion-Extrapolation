@@ -1707,13 +1707,14 @@ class HypotheticalInputsForNN:
         assert all_x5_choices.ndim == 2 and all_x5_choices.shape[1] == 3, \
         "The input of x5 choices must have shape (n, 3)!"
 
-
+        # Calculate velocities, speeds, and indices where speed is 0.
         vels: NDArray = self._stepDiv(all_x5_choices - self.x0_through_4[-1])
         vel_mags: NDArray = np.linalg.norm(vels, axis=-1, keepdims=True)
         vel_mag_is_0 = np.where((vel_mags == 0.0).flatten())[0]
         
+        # Safely obtain unit velocities, 
         safediv_vel_mags = np.copy(vel_mags)
-        safediv_vel_mags[vel_mag_is_0] = 1.0
+        safediv_vel_mags[vel_mag_is_0] = 1.0 # Avoid 0 div; overwritten later.
         unit_vels = vels / safediv_vel_mags
         last_nz_uvels = self.last_nonzero_unit_vels
         if last_nz_uvels.ndim > 1:
@@ -1833,6 +1834,23 @@ class HypotheticalInputsForNN:
         other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
         other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
         zeros_3d = np.zeros((3, n_ins))
+
+        tri_inds = np.tril_indices(n_other_vec_kinds)
+        ret = np.concatenate(
+            (
+                np.full((1, n_ins), self.step),
+                all_dots_with_prev.reshape(-1, n_ins),
+                all_proj_with_prev.reshape(-1, n_ins),
+                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots[tri_inds],
+                *vel_projs, *non_vel_projs, a_proj_with_curr_rel,
+                remaining_proj_with_curr_rel.reshape(-1, n_ins)
+            ), axis=0
+        ).transpose()
+        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
+
+
+        # Now, we'll calculate the JAV values that get used by the loss func.
+        # These are NOT required in the NN's initial input layer!
         jav_tup = (
             vel_mags.flatten(), a_proj_v, a_ortho_v, *other_frame_projs,
             *zeros_3d
@@ -1852,19 +1870,6 @@ class HypotheticalInputsForNN:
         # Because of the above, here I need to do said JAV multiplications.
         if self.step != 1:
             jav_stack[..., :12] *= self._jav_muls
-
-        tri_inds = np.tril_indices(n_other_vec_kinds)
-        ret = np.concatenate(
-            (
-                np.full((1, n_ins), self.step),
-                all_dots_with_prev.reshape(-1, n_ins),
-                all_proj_with_prev.reshape(-1, n_ins),
-                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots[tri_inds],
-                *vel_projs, *non_vel_projs, a_proj_with_curr_rel,
-                remaining_proj_with_curr_rel.reshape(-1, n_ins)
-            ), axis=0
-        ).transpose()
-        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
         return ret[:, self.to_nn_permut], jav_stack, curr_ortho_mats
 
