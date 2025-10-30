@@ -88,35 +88,4 @@ dog = DataOrganizer.FromCalcs(
 
 dog.dump(compress=True)
     
-#%%
-################################################################################
-# CALCULATING THE OUTPUT DATA
-################################################################################
-
-print("Calculating output data.")
-
-
-
-# Get local-frame data.
-# The "bcs" in the name is an artifact from some older thing.
-# Will have to eventually rename this and the other instances in other files to
-# something else consistent.
-bcs_per_id = dataForCombosJAV(
-    bcot_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY), False, False
-)
-
-bcs_train, bcs_test = dataForComboSplitJAV(
-    train_ids_c2, test_ids_c2, precalc_per_id=bcs_per_id
-)
-
-################################################################################
-# SAVING THE OUTPUT DATA
-################################################################################
-
-#%%
-
-DATA_PATH = DataOrganizer.generatedDataPath()
-np.savez_compressed(DATA_PATH / "jav_train_data.npz", bcs_train)
-np.savez_compressed(DATA_PATH / "jav_test_data.npz", bcs_test)
-
 print("Data generation/saving completed!")
