@@ -22,6 +22,8 @@ import gtCommon as gtc
 
 import posemath as pm # Small "library" I wrote for vector operations.
 
+import motiontools.shared_constants
+
 from nn_utilities.nn_losses import (
     poseLossJAV, poseLossVec3
 )
@@ -1571,7 +1573,7 @@ def plot_column(idx):
     val_max = np.max(all_column_data)
     quants = np.quantile(all_column_data, (0.1, 0.9))
 
-    na_inds = (all_column_data == ERR_NA_VAL)
+    na_inds = (all_column_data == motiontools.shared_constants.ERR_NA_VAL)
     if np.any(na_inds):
         n_na_vals = all_column_data[~na_inds]
         val_min = np.min(n_na_vals)

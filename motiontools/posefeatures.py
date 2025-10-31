@@ -243,7 +243,7 @@ class CalcsForVideo:
     def __init__(self, 
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
-                 err_na_val: float = FLOAT_32_MAX,
+                 err_na_val: typing.Union[float, np.float32] = FLOAT_32_MAX,
                  min_jerk_opt_iter_lim: int = DEFAULT_MIN_JERK_OPT_ITER_LIM,
                  split_min_jerk_opt_iter_lim: int = DEFAULT_SPLIT_MIN_JERK_OPT_ITER_LIM,
                  err_radius_ratio_thresh: float = DEFAULT_ERR_RADIUS_RATIO_THRESH,

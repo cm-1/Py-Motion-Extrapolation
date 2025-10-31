@@ -1,4 +1,6 @@
+from io import BufferedWriter
 import typing
+import builtins # For ellipsis type pre Python 3.10
 from enum import IntEnum
 import os
 import pathlib
@@ -40,7 +42,6 @@ def concatForComboSubset(data, combo_subset,
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
     vid_ids_all = sorted(set(combo_subset))  # list of unique video IDs
     num_vids = len(vid_ids_all)
-    vid_id_to_idx = {vid: i for i, vid in enumerate(vid_ids_all)}
     id_index_maps = []
     frame_boundaries = []
 
@@ -54,9 +55,9 @@ def concatForComboSubset(data, combo_subset,
         concated = None
         # front_trim = 0 # May set this via param in future code.
         end = -end_trim if end_trim > 0 else None
+        frame_counts = None
         if not subset_via_ids:
             break
-
         elif isinstance(subset_via_ids[0], dict):
             # print("  - dict() creation")
             if diff_order > 0:
@@ -92,7 +93,7 @@ def concatForComboSubset(data, combo_subset,
         ret_val.insert(0, concated)
 
         if return_indices:
-            frame_counts -= diff_order
+            frame_counts = typing.cast(NDArray, frame_counts) - diff_order
             id_index_maps.insert(
                 0, np.repeat(np.arange(num_vids), frame_counts)
             )
@@ -103,6 +104,7 @@ def concatForComboSubset(data, combo_subset,
                 del els_for_skip[ck]
     if not return_indices:
         return ret_val
+    vid_id_to_idx = {vid: i for i, vid in enumerate(vid_ids_all)}
     return ret_val, vid_ids_all, vid_id_to_idx, id_index_maps, frame_boundaries
 
 
@@ -112,7 +114,7 @@ def concatForComboSubset(data, combo_subset,
 # It also returns the dictionary keys in the order that the columns appear in
 # the 2D array so that we know which column is which.
 def get2DArrayFromDataStruct(data: typing.List[typing.Dict[typing.Any, NDArray]], 
-                            ks: typing.List[MOTION_DATA_KEY_TYPE] = None,
+                            ks: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]] = None,
                             stack_axis: int = 0):
     if ks is None:
         ks = list(data[0].keys())
@@ -125,9 +127,9 @@ def _isFitted(transformer):
 
 # Type hint for a dict with items that are either (int, int) intervals or a bool
 # numpy array of indices.
-IndDict = typing.Dict[
+IndDict: typing.TypeAlias = typing.Dict[
     typing.Any, 
-    typing.Union[typing.Tuple[int,int], NDArray] # NDArray holds bool indices.
+    typing.Union[typing.Tuple[int,int], NDArray, builtins.ellipsis] 
 ]
 
 # Gets the per-frame pose error in millimeters for a set of "labels" which 
@@ -149,7 +151,8 @@ def motionClassErrs(per_class_errs: NDArray, pred_labels: NDArray, inds_dict: In
 
 # Same as the above, but returns MAE per inds_dict category rather than a whole
 # list of per-frame errors.
-def motionClassScores(per_class_errs: NDArray, pred_labels, inds_dict = None):
+def motionClassScores(per_class_errs: NDArray, pred_labels,
+                      inds_dict: typing.Optional[IndDict] = None):
     if inds_dict is None:
         inds_dict = {SkipSubsetKind._all: ...}
     all_errs_dict = motionClassErrs(per_class_errs, pred_labels, inds_dict)
@@ -289,7 +292,7 @@ class SkipSubsetKind(IntEnum):
     
 class DataOrganizer:
     class _SubsetConcats(typing.NamedTuple):
-        ids: typing.Iterable
+        ids: typing.List
         concat_labels: NDArray
         concat_data: NDArray
         concat_class_errs: NDArray
@@ -363,7 +366,7 @@ class DataOrganizer:
         ] 
  
         DSK = DataSubsetKind
-        subset_ids: typing.Dict[DataSubsetKind, NDArray] = dict()
+        subset_ids: typing.Dict[DataSubsetKind, typing.List] = dict()
         frame_bounds: typing.Dict[DataSubsetKind, typing.List[NDArray]] \
             = dict()
         skip_bounds: typing.Dict[DataSubsetKind, NDArray] = dict()
@@ -438,11 +441,12 @@ class DataOrganizer:
             *self.subset_ids[DataSubsetKind.TEST]
         ]
 
+    @staticmethod
     def _splitAndConcatSubset(all_motion_data, min_norm_labels, err_norm_lists,
                               timestep_ind: int,
                               motion_data_keys: typing.List[MOTION_DATA_KEY_TYPE],
                               motion_mod_keys: typing.List[MOTION_MODEL],
-                              subset_ids: typing.Optional[typing.Iterable],
+                              subset_ids: typing.Optional[typing.List],
                               del_original_data: bool):
         skip_ul = 1 + max(SkipSubsetKind).value
         if subset_ids is None:
@@ -479,7 +483,7 @@ class DataOrganizer:
 
         # print("- Cat labels.")
         # Get 2D NDArrays from the above.
-        concat_labels = np.concatenate(labels)
+        concat_labels = np.concatenate(typing.cast(NDArray, labels))
         del labels # Delete now since it doesn't get used later anyway.
 
         if motion_data_keys is None:
@@ -644,8 +648,8 @@ class DataOrganizer:
         )
     
     def dump(self, compress: bool,
-             np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
-             pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None):
+             np_file: typing.Optional[typing.Union[str, os.PathLike]] = None,
+             pkl_file: typing.Optional[typing.Union[str, os.PathLike]] = None):
         if np_file is None:
             np_file = self.getDumpFilenameNP(self.LoaderClass)
         if pkl_file is None:

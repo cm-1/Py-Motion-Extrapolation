@@ -3,26 +3,17 @@
 
 
 #%% Imports
-import pickle
-import os
-
-import numpy as np
-
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
 from gtCommon import PoseLoaderBCOT
 
-# For the velocity-aligned frame data generation, we import some resuable stuff.
-# These are the a function to get velocity-aligned frame data per ID and an 
-# enum.
-from motiontools.posefeatures import dataForCombosJAV, JAV
 
 from motiontools.posefeatures import CalcsForVideo
 from motiontools.dataorg import DataOrganizer
 
 # Function for getting JAV data
-from motiontools.posefeatures import dataForComboSplitJAV
+import motiontools.shared_constants
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
@@ -30,7 +21,6 @@ STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10 # Threshold for if motion's circular.
 MAX_MIN_JERK_OPT_ITERS = 0 # Max iters for min jerk optimization calcs.
 MAX_SPLIT_MIN_JERK_OPT_ITERS = 0
-ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 
 #%%
@@ -48,7 +38,8 @@ nametup_ids, bcot_loaders = PoseLoaderBCOT.getAllMinimalIDsAndLoaders(True)
 cfc = CalcsForVideo(
     obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
-    err_na_val=ERR_NA_VAL, min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
+    err_na_val=motiontools.shared_constants.ERR_NA_VAL,
+    min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
     # exclude_axis_angs=False, exclude_bidir=False, exclude_circ_data=False,
