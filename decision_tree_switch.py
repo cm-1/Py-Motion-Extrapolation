@@ -22,7 +22,7 @@ import gtCommon as gtc
 # schemes like constant-velocity, constant-acceleration, etc.
 from motiontools.key_and_vec_specs import MOTION_MODEL
 
-from motiontools.dataorg import DataOrganizer
+from motiontools.dataorg import DataOrganizer, SkipSubsetKind
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -54,8 +54,8 @@ for skip in range(3):
         for combo in dog.subset_ids[DataSubsetKind.TEST]:
             if combo[1] == seq:
                 seq_combo_scores_stacked = dog.getSelectionData(
-                    dog.concat_test_class_errs, DataSubsetKind.TEST, skip,
-                    combo[:2]
+                    dog.concat_test_class_errs, DataSubsetKind.TEST,
+                    SkipSubsetKind(skip), combo[:2]
                 )
                 seq_data.append(seq_combo_scores_stacked)
                 if combo[0] in test_bodies:
