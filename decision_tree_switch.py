@@ -92,8 +92,17 @@ print("Classification MAE limit:", error_lim)
 # graphs don't show miraculous improvements past 8, so 8 seems like a good max.
 max_depth = 8
 
+# Determine the number of unique motion models (classes).
 motion_mod_len = len(MOTION_MODEL)
+
+# Ensure that the shape of the concatenated training class errors is correct.
+assert motion_mod_len == dog.concat_train_class_errs.shape[1], "Wrong shape!"
+
+# Initialize a custom criterion with the appropriate parameters.
 mc = WeightedErrorCriterion(1, np.array([motion_mod_len], dtype=np.intp))
+
+# Reshape because custom criterion supports general case where we may have
+# multiple output classes, on the 2nd axis. Here we just have 1.
 class_errs_shape = dog.concat_train_class_errs.shape
 y_errs_reshape = dog.concat_train_class_errs.reshape((
     class_errs_shape[0], 1, class_errs_shape[1]
@@ -102,16 +111,43 @@ mc.set_y_errs(y_errs_reshape)
 
 #%% Training decision tree at max depth.
 # ---
-# We'll train a tree at max depth and then trim it to smaller depths to evaulate
+# We'll train a tree at max depth and then trim it to smaller depths to evaluate
 # the performance at lower depths. This yields the exact same trees as if we
 # were to train individual ones with lower max depths (confirmed via tests), but
 # eliminates duplicated training time. I might leave the old code for training
 # individual trees below as a comment, for reference.
 
+# Initialize the decision tree classifier with the custom criterion.
 big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
+
 print("Starting decision tree training!")
 start_time = time.time()
-big_tree = big_tree.fit(dog.concat_train_data, dog.concat_train_labels)
+
+# Create an array to hold all possible labels. This is required by sklearn
+# even though our custom criterion does not use these labels for impurity
+# calculations.
+all_possible_labels = np.zeros_like(dog.concat_train_labels)
+
+# Check if there are enough data rows to represent all classes.
+if len(all_possible_labels) >= motion_mod_len:
+    # Fill the first `motion_mod_len` elements with all possible class labels.
+    all_possible_labels[:motion_mod_len] = np.arange(motion_mod_len)
+else:
+    # Raise an exception if there are fewer data rows than classes because
+    # sklearn needs an input array of labels containing every possible class or
+    # else my custom criterion crashes. This is a limitation due to how sklearn
+    # initializes internal arrays.
+    raise Exception((
+        "Fewer data rows than classes, which is problematic because sklearn "
+        "needs an input array of labels containing every possible class or "
+        "else my custom criterion crashes. As a fix, could duplicate all rows "
+        "until there are enough but then my custom criterion also does not "
+        "take ownership yet of the values passed in so if it's an ephemeral "
+        "copy that's an issue, but if I always take ownership I'd want to be "
+        "careful that I am not duplicating any data by mistake for when I work "
+        "with huge datasets. So take care if implementing a fix here!"
+    ))
+big_tree = big_tree.fit(dog.concat_train_data, all_possible_labels)
 print("Done!")
 print("Time spent:", time.time() - start_time)
 #%%
