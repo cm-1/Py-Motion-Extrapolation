@@ -129,7 +129,7 @@ def _isFitted(transformer):
 # numpy array of indices.
 IndDict: typing.TypeAlias = typing.Dict[
     typing.Any, 
-    typing.Union[typing.Tuple[int,int], NDArray, builtins.ellipsis] 
+    typing.Union[typing.Tuple[int,int], NDArray, builtins.Ellipsis] 
 ]
 
 # Gets the per-frame pose error in millimeters for a set of "labels" which 
