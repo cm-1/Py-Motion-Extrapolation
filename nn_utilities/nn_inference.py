@@ -144,3 +144,24 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
 
     return ret_mags, mats
 
+
+class PointsToInputsLayer(tf.keras.layers.Layer):
+    def __init__(self, step: int, **kwargs):
+        super(PointsToInputsLayer, self).__init__(**kwargs)
+
+        self.step = step
+        
+        self._jav_muls = tf.zeros((4, 3))
+        # Jerk through crackle each have 3 components we must multiply by a
+        # respective power of the step assuming it's also the next "delta T".
+        self._jav_muls[1:] = self.step ** tf.range(3, 6).reshape(3, 1)
+        # Then velocity and acceleration are special because they only have 1
+        # and 2 multipliers, respectively.
+        self._jav_muls = self._jav_muls.flatten()
+        self._jav_muls[0] = self.step
+        self._jav_muls[1:3] = self.step ** 2
+
+    def call(self, inputs):
+        
+        
+        return transformed_input
