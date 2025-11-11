@@ -28,6 +28,9 @@ from nn_utilities.nn_losses import (
     poseLossJAV, poseLossVec3
 )
 from nn_utilities.nn_loading import loadLatestModels
+from nn_utilities.data_cache import (
+    generate_cache_key, save_cached_data, load_cached_data
+)
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -59,6 +62,7 @@ from motiontools.dataorg import (
 TRAIN_NEW_MODEL = False
 
 
+print("Starting to load data!")
 dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
 
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
@@ -291,7 +295,8 @@ class DataForJAV:
                  col_inds: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
-                 *, save_data_for_conf: bool = False):
+                 *, save_data_for_conf: bool = False,
+                 use_cache: bool = True):
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(col_inds, bcs_scaler)
@@ -307,6 +312,20 @@ class DataForJAV:
                 "Non-unit-aware scaler not yet supported!"
             )
 
+        # Generate cache key for expensive operations
+        cache_key = None
+        cached_data = None
+        if use_cache:
+            cache_key = generate_cache_key(
+                data_organizer.subset_ids,
+                save_data_for_conf
+            )
+            print("Cache key:", cache_key)
+            cached_data = load_cached_data(
+                cache_key, skip, data_organizer.subset_skip_inds
+            )
+            if cached_data is not None:
+                print(f"Using cached data (key: {cache_key})")
 
         self.save_data_for_conf = save_data_for_conf
         self.jav_per_combo = None
@@ -319,12 +338,17 @@ class DataForJAV:
         save_data_for_conf |= self.outVecMode in WORLD_VEC_MODES
         need_pos = save_data_for_conf or _rot_align
         
-        all_true_ids = dog.LoaderClass.prepIDsForConstructor(dog.getAllIDs())
-        loaders = [dog.LoaderClass(*true_id) for true_id in all_true_ids] 
-        jav_res = dataForCombosJAV(
-            loaders, JAV_order, save_data_for_conf, need_pos,
-            need_rot, need_rot_vel
-        )
+        # Only compute JAV data if we need it (i.e., if not using cache or cache doesn't exist)
+        need_jav_computation = cached_data is None
+        
+        jav_res = None
+        if need_jav_computation:
+            all_true_ids = dog.LoaderClass.prepIDsForConstructor(dog.getAllIDs())
+            loaders = [dog.LoaderClass(*true_id) for true_id in all_true_ids] 
+            jav_res = dataForCombosJAV(
+                loaders, JAV_order, save_data_for_conf, need_pos,
+                need_rot, need_rot_vel
+            )
         # Default: assume all bools were False and no tuple returned.
         self.jav_per_combo = jav_res
         self.w2ls_JAV = None
