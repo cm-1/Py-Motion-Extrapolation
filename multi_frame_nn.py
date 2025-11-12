@@ -524,7 +524,7 @@ class DataForJAV:
 
         # If we want to only use data for one skip value, we filter things here.
         skip_inds = {
-            k: ... if skip == SkipSubsetKind._all else v[skip]
+            k: ... if skip == SkipSubsetKind._all else v[SkipSubsetKind(skip)]
             for k, v in _dog.subset_skip_inds.items()
         }
         self._in_arrs = {k: v[skip_inds[k]] for k, v in self._in_arrs.items()}
@@ -647,7 +647,7 @@ class DataForJAV:
     def _worldvec_concats(self, shift_from_gt: int, diff_ord: int, scale: float,
                           use_translation: bool = False, vecs = None,
                           curr_diff_ord: int = 0):
-        ret_dict = dict()
+        ret_dict: typing.Dict[DataSubsetKind, NDArray] = dict()
         for k in DataSubsetKind.nonWholeValues():
             ret_dict[k] = self._worldvec_helper(
                 self.data_organizer.subset_ids[k], shift_from_gt, diff_ord,
@@ -665,12 +665,14 @@ class DataForJAV:
             vecs = self.translations_JAV
         elif vecs is None:
             raise ValueError("No vectors specified!")
-        concat = np.concatenate(concatForComboSubset(
+        concat = np.concatenate(typing.cast(NDArray, concatForComboSubset(
             vecs, subset_ids, front_trim=start, end_trim=shift_from_gt,
             diff_order = diff_order
-        ), axis=0)
+        )), axis=0)
         if use_translation and scale == 0.0:
-            concat = self.translationScaler.transform(concat)
+            concat = typing.cast(
+                NDArray, self.translationScaler.transform(concat)
+            )
         elif scale != 0.0:
             concat /= scale
         return concat
