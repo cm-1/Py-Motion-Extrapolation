@@ -309,6 +309,7 @@ class DataForJAV:
         cache_key = None
         cached_data = None
         if use_cache:
+            print("Generating cache key....")
             cache_key = gen_cache_key(
                 data_organizer.LoaderClass.datasetName(),
                 data_organizer.subset_ids

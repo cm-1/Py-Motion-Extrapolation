@@ -22,10 +22,13 @@ GT_STORAGE_KEY = "gt_for_outvecmode"
 CACHE_DATA_LOCATION = "generated_data"
 POS_SCALE_KEY = "pos_scale"
 ROT_SCALE_KEY = "rot_scale"
+VALIDATION_START_IND_KEY = "validation_start_ind"
+TEST_START_IND_KEY = "test_start_ind"
 
 
 def gen_cache_key(
-    dataset_name: str, data_ids: typing.Dict[DataSubsetKind, typing.List]
+    dataset_name: str, data_ids: typing.Dict[DataSubsetKind, typing.List],
+    max_ids_per_hash: typing.Optional[int] = None
 ) -> str:
     """
     Generate a unique cache key based on parameters that affect the computation.
@@ -33,16 +36,22 @@ def gen_cache_key(
     Parameters:
         dataset_name (str): Name of dataset the IDs are for
         data_ids: Dictionary mapping subset kinds to lists of data IDs
-    
+        max_ids_per_hash (int): Maximum number of IDs per DataSubsetKind to use 
+            for hash calculations (default: None)
     Returns:
         A string that uniquely identifies this configuration
     """
     # Create a dictionary of all parameters that affect computation
-    cache_params = {
-        'train_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.TRAIN]],
-        'test_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.TEST]],
-        'validation_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.VALIDATION]]
+    partial_hashes = {
+        _dsk.name: hashlib.sha256(",".join(
+            [repr(tuple(x)) for x in ids[:max_ids_per_hash]]
+        ).encode('utf-8')).hexdigest()
+        for _dsk, ids in data_ids.items()
     }
+    id_lens = {}
+    if max_ids_per_hash is not None:
+        id_lens = {_dsk: len(ids) for _dsk, ids in data_ids.items()}
+    cache_params = {**partial_hashes, **id_lens}
     
     # Convert to JSON string for hashing (sorted for consistency)
     params_str = json.dumps(cache_params, sort_keys=True)
@@ -60,38 +69,55 @@ def get_cache_filepath(cache_key: str, cache_dir: str = CACHE_DATA_LOCATION) -> 
 
 
 def save_cached_data(
-    cache_key: str,
-    data_to_cache: typing.Dict[str, typing.Dict[DataSubsetKind, NDArray]],
-    gt_to_cache: typing.Dict[OutVecMode, typing.Dict[DataSubsetKind, NDArray]],
+    cache_key: str, data_to_cache: typing.Dict[str, NDArray],
+    gt_to_cache: typing.Dict[OutVecMode, NDArray],
+    validation_start_ind: int, test_start_ind: int,
     pos_scale: float, rot_scale: float, cache_dir: str = CACHE_DATA_LOCATION
 ) -> None:
     """
     Save expensive computed arrays to disk.
     
     Parameters:
-        cache_key: Unique identifier for this cache
-        data_to_cache: Dictionary containing various data to cache
-        gt_to_cache: Dictionary containing all ground truth data to cache
+        cache_key (str): Unique identifier for this cache
+        data_to_cache (dict[str, NDArray]): Dictionary containing various data to cache
+        gt_to_cache (dict[OutVecMode, NDArray]): Dictionary containing all ground truth data to cache
+        validation_start_ind (int): Index where validation data starts in the dataset
+        test_start_ind (int): Index where test data starts in the dataset
         pos_scale (float): Scaling used for translations
         rot_scale (float): Scaling used for rotations
-        cache_dir: Directory to save cache files
+        cache_dir (str, optional): Directory to save cache files; defaults to "generated_data"
     """
+    
+    if test_start_ind <= validation_start_ind:
+            raise ValueError("test_start_ind must exceed validation_start_ind")
+
+    # Check that all NDArrays have the same length
+    array_lengths = set(
+        len(arr) for arr in data_to_cache.values() | gt_to_cache.values()
+    )
+    if len(array_lengths) != 1:
+        raise ValueError("All NDArrays must have the same length")
+
+    # Check that test_start_ind does not exceed the length of the arrays
+    array_length = next(iter(array_lengths))
+    if test_start_ind >= array_length:
+        raise ValueError("test_start_ind must not exceed data length")
+
     filepath = get_cache_filepath(cache_key, cache_dir)
-    
-    # Build the save dictionary with flattened structure for npz
-    save_dict = {}
-    
-    for key, dsk_dict in data_to_cache.items():
-        for subset_kind, arr in dsk_dict.items():
-            save_dict[f"{key}_{subset_kind.name}"] = arr
-    for ovm, dsk_dict in gt_to_cache.items():
-        for subset_kind, arr in dsk_dict.items():
-            save_dict[f"{ovm.name}_{subset_kind.name}"] = arr
 
-    save_dict[POS_SCALE_KEY] = np.asarray(pos_scale)
-    save_dict[ROT_SCALE_KEY] = np.asarray(rot_scale)
+    # We now create a new dictionary that merges `data_to_cache` with a version
+    # of `gt_to_cache` that replaces each of its keys with the .name attribute
+    # of the original keys
+    merged_data = {
+        **data_to_cache, **{mode.name: arr for mode, arr in gt_to_cache.items()}
+    }
+    merged_data[VALIDATION_START_IND_KEY] = validation_start_ind
+    merged_data[TEST_START_IND_KEY] = test_start_ind
 
-    np.savez_compressed(filepath, **save_dict)
+    merged_data[POS_SCALE_KEY] = np.asarray(pos_scale)
+    merged_data[ROT_SCALE_KEY] = np.asarray(rot_scale)
+
+    np.savez_compressed(filepath, **merged_data)
     print(f"Cached data saved to {filepath}")
 
 
