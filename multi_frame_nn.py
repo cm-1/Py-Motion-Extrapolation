@@ -24,6 +24,8 @@ import posemath as pm # Small "library" I wrote for vector operations.
 
 import motiontools.shared_constants
 
+from nn_utilities.nn_modes import OutVecMode
+
 from nn_utilities.nn_losses import (
     poseLossJAV, poseLossVec3
 )
@@ -222,15 +224,6 @@ class ImportanceLayer(keras.layers.Layer):
     def call(self, inputs):
         return inputs * self.importance_weights  # Element-wise multiplication
 
-class OutVecMode(Enum):
-    JAV_MULTIPLIERS = 1
-    VEL_ALIGNED_VEC3 = 2
-    WORLD_VEC3 = 3
-    WORLD_DISP = 4
-    ROT_ALIGNED_VEC3 = 5
-    ROT_AA = 6
-    ROT_VEL_AA = 7
-    ROT_FIXED_AX = 8
 
 WORLD_VEC_MODES = (OutVecMode.WORLD_VEC3, OutVecMode.WORLD_DISP)
 ROT_VEC_MODES = (
