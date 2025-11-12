@@ -16,29 +16,32 @@ import numpy as np
 from numpy.typing import NDArray
 
 from datatools.data_splitting import DataSubsetKind
-from motiontools.dataorg import SkipSubsetKind
+from nn_utilities.nn_modes import OutVecMode
+
+GT_STORAGE_KEY = "gt_for_outvecmode"
+CACHE_DATA_LOCATION = "generated_data"
+POS_SCALE_KEY = "pos_scale"
+ROT_SCALE_KEY = "rot_scale"
 
 
-def generate_cache_key(
-    data_ids: typing.Dict[DataSubsetKind, typing.List],
-    save_data_for_conf: bool
+def gen_cache_key(
+    dataset_name: str, data_ids: typing.Dict[DataSubsetKind, typing.List]
 ) -> str:
     """
     Generate a unique cache key based on parameters that affect the computation.
     
     Parameters:
+        dataset_name (str): Name of dataset the IDs are for
         data_ids: Dictionary mapping subset kinds to lists of data IDs
-        save_data_for_conf: Whether confidence interval data is saved
     
     Returns:
-        A hash string that uniquely identifies this configuration
+        A string that uniquely identifies this configuration
     """
     # Create a dictionary of all parameters that affect computation
     cache_params = {
-        'train_ids': sorted([tuple(x) for x in data_ids[DataSubsetKind.TRAIN]]),
-        'test_ids': sorted([tuple(x) for x in data_ids[DataSubsetKind.TEST]]),
-        'validation_ids': sorted([tuple(x) for x in data_ids[DataSubsetKind.VALIDATION]]),
-        'save_data_for_conf': save_data_for_conf,
+        'train_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.TRAIN]],
+        'test_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.TEST]],
+        'validation_ids': [repr(tuple(x)) for x in data_ids[DataSubsetKind.VALIDATION]]
     }
     
     # Convert to JSON string for hashing (sorted for consistency)
@@ -46,10 +49,10 @@ def generate_cache_key(
     
     # Generate hash
     hash_obj = hashlib.sha256(params_str.encode('utf-8'))
-    return hash_obj.hexdigest()[:16]  # Use first 16 chars for brevity
+    return dataset_name + "_" + hash_obj.hexdigest()[:16]  # 16 for brevity
 
 
-def get_cache_filepath(cache_key: str, cache_dir: str = "generated_data") -> Path:
+def get_cache_filepath(cache_key: str, cache_dir: str = CACHE_DATA_LOCATION) -> Path:
     """Get the filepath for a cache file."""
     cache_path = Path(cache_dir)
     cache_path.mkdir(exist_ok=True)
@@ -58,15 +61,19 @@ def get_cache_filepath(cache_key: str, cache_dir: str = "generated_data") -> Pat
 
 def save_cached_data(
     cache_key: str,
-    data_to_cache: typing.Dict[str, typing.Any],
-    cache_dir: str = "generated_data"
+    data_to_cache: typing.Dict[str, typing.Dict[DataSubsetKind, NDArray]],
+    gt_to_cache: typing.Dict[OutVecMode, typing.Dict[DataSubsetKind, NDArray]],
+    pos_scale: float, rot_scale: float, cache_dir: str = CACHE_DATA_LOCATION
 ) -> None:
     """
     Save expensive computed arrays to disk.
     
     Parameters:
         cache_key: Unique identifier for this cache
-        data_to_cache: Dictionary containing all data to cache with appropriate keys
+        data_to_cache: Dictionary containing various data to cache
+        gt_to_cache: Dictionary containing all ground truth data to cache
+        pos_scale (float): Scaling used for translations
+        rot_scale (float): Scaling used for rotations
         cache_dir: Directory to save cache files
     """
     filepath = get_cache_filepath(cache_key, cache_dir)
@@ -74,35 +81,33 @@ def save_cached_data(
     # Build the save dictionary with flattened structure for npz
     save_dict = {}
     
-    for key, value in data_to_cache.items():
-        if isinstance(value, dict):
-            # If value is a dict of subset_kind -> arrays, flatten it
-            for subset_kind, arr in value.items():
-                if hasattr(subset_kind, 'name'):
-                    save_dict[f"{key}_{subset_kind.name}"] = arr
-                else:
-                    save_dict[f"{key}_{subset_kind}"] = arr
-        else:
-            # Direct value storage
-            save_dict[key] = value
-    
+    for key, dsk_dict in data_to_cache.items():
+        for subset_kind, arr in dsk_dict.items():
+            save_dict[f"{key}_{subset_kind.name}"] = arr
+    for ovm, dsk_dict in gt_to_cache.items():
+        for subset_kind, arr in dsk_dict.items():
+            save_dict[f"{ovm.name}_{subset_kind.name}"] = arr
+
+    save_dict[POS_SCALE_KEY] = np.asarray(pos_scale)
+    save_dict[ROT_SCALE_KEY] = np.asarray(rot_scale)
+
     np.savez_compressed(filepath, **save_dict)
     print(f"Cached data saved to {filepath}")
 
 
 def load_cached_data(
-    cache_key: str,
-    skip: typing.Union[int, SkipSubsetKind],
-    subset_skip_inds: typing.Dict[DataSubsetKind, typing.Dict[SkipSubsetKind, NDArray]],
-    cache_dir: str = "generated_data"
-) -> typing.Optional[typing.Dict[str, typing.Any]]:
+    cache_key: str, out_vec_mode: OutVecMode,
+    pos_scale: float, rot_scale: float,
+    cache_dir: str = CACHE_DATA_LOCATION
+) -> typing.Optional[typing.Dict[str, typing.Dict[DataSubsetKind, NDArray]]]:
     """
     Load cached data from disk if it exists and filter by skip value.
     
     Parameters:
-        cache_key: Unique identifier for this cache
-        skip: Skip amount or SkipSubsetKind to filter data
-        subset_skip_inds: Indices dictionary from DataOrganizer for filtering
+        cache_key (str): Unique identifier for this cache
+        out_vec_mode (OutVecMode): Which OutVecMode to load ground truth for
+        pos_scale (float): Scaling used for translations in the calling code
+        rot_scale (float): Scaling used for rotations in the calling code
         cache_dir: Directory where cache files are stored
     
     Returns:
@@ -115,46 +120,46 @@ def load_cached_data(
     
     try:
         # Load the compressed data
-        data = np.load(filepath, allow_pickle=True)
+        data = np.load(filepath, allow_pickle=False)
+
+        load_pos_scale = data[POS_SCALE_KEY]
+        load_rot_scale = data[ROT_SCALE_KEY]
+        scales_close = np.allclose(
+            [pos_scale, rot_scale], [load_pos_scale, load_rot_scale]
+        )
+        if not scales_close:
+            raise NotImplementedError("Scales differ! Handling that's a TODO.")
         
-        # Get skip indices for filtering
-        skip_val = skip if isinstance(skip, SkipSubsetKind) else SkipSubsetKind(skip)
-        skip_inds = {
-            k: ... if skip_val == SkipSubsetKind._all else v[skip_val]
-            for k, v in subset_skip_inds.items()
-        }
-        
-        # Reconstruct the nested structure
-        result = {}
-        
-        # Group keys by their base name (before the subset kind suffix)
-        key_groups = {}
+        load_res: typing.Dict[str, typing.Dict[DataSubsetKind, NDArray]] = {}
         for key in data.keys():
-            if key.startswith('_meta'):
+            if key in (POS_SCALE_KEY, ROT_SCALE_KEY):
                 continue
+            if key.startswith(GT_STORAGE_KEY):
+                continue
+
             # Split on last underscore to separate base name from subset kind
             parts = key.rsplit('_', 1)
             if len(parts) == 2:
                 base_name, subset_name = parts
-                if base_name not in key_groups:
-                    key_groups[base_name] = {}
-                key_groups[base_name][subset_name] = key
+                if base_name not in load_res:
+                    load_res[base_name] = typing.cast(
+                        typing.Dict[DataSubsetKind, NDArray], {}
+                    )
+                curr_dsk = DataSubsetKind.fromName(subset_name)
+                load_res[base_name][curr_dsk] = data[key]
             else:
                 # Single value, not per-subset
-                result[key] = data[key]
-        
-        # Reconstruct dictionaries with skip filtering
-        for base_name, subset_keys in key_groups.items():
-            result[base_name] = {}
-            for subset_kind in DataSubsetKind.nonWholeValues():
-                if subset_kind.name in subset_keys:
-                    key = subset_keys[subset_kind.name]
-                    arr = data[key]
-                    result[base_name][subset_kind] = arr[skip_inds[subset_kind]]
-        
+                raise ValueError(
+                    "Unexpected key without DataSubsetKind: " + repr(key)
+                )
+                # result[key] = data[key]
+                        
         print(f"Loaded cached data from {filepath}")
-        return result
+        return load_res
         
     except Exception as e:
         print(f"Error loading cache: {e}")
         return None
+
+# TODO/WIP notes:
+# - https://github.com/numpy/numpy/issues/22435
