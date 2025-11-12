@@ -1182,7 +1182,7 @@ class PoseLoaderClipsHOT3D(PoseLoader):
         # and over again. 
         for ct in PoseLoaderClipsHOT3D.CAM_TYPE:
             pose_path = data_dir / PoseLoaderClipsHOT3D._POSE_FNAMES[ct]
-            with np.load(pose_path) as f:
+            with np.load(pose_path, allow_pickle=False) as f:
                 PoseLoaderClipsHOT3D._ALL_CLIP_OBJS[ct] = \
                     PoseLoaderClipsHOT3D._np_load_single(f['obj_ids'])
                 PoseLoaderClipsHOT3D._ALL_CLIP_BASE_INDS[ct] = \
@@ -1201,7 +1201,7 @@ class PoseLoaderClipsHOT3D(PoseLoader):
             clip_range = PoseLoaderClipsHOT3D._CAM_TYPE_CLIP_RANGES[ct]
             clip_nums_copy = None
             all_ts_copy = None
-            with np.load(times_path) as np_load:
+            with np.load(times_path, allow_pickle=False) as np_load:
                 clip_nums_copy = PoseLoaderClipsHOT3D._np_load_single(
                     np_load['clip_nums']
                 )

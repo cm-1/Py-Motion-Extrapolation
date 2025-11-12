@@ -46,7 +46,9 @@ bcot_id_split = list(PoseLoaderBCOT.trainValidationTestByBody(0.1, 0.2, 0))
 
 overlap = True
 crit = "none"
-bcot_scores_npz = np.load("./results/models/scores_on_bcot.npz")
+bcot_scores_npz = np.load(
+    "./results/models/scores_on_bcot.npz", allow_pickle=False
+)
 load_id_order = bcot_scores_npz["id_order"]
 med_static_scores = bcot_scores_npz["median_static"]
 med_bcot_nn_scores = bcot_scores_npz["median_JAV_MULTIPLIERS"]

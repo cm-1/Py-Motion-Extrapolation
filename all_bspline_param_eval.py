@@ -219,7 +219,7 @@ elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
 elif mode == SplinePredictionMode.CONST_ACCEL:
     # Old: load_target = "./results/bspline_param_evals_deriv_c.npz"
     load_target = "./results/bspline_param_evals_constacc.npz"
-load_result = np.load(load_target)
+load_result = np.load(load_target, allow_pickle=False)
 # load_result.close()
 
 #%%
@@ -229,7 +229,7 @@ load_result = np.load(load_target)
 data_2cm = load_result['res_2cm'].mean(axis = -1)
 
 #%% 
-lr2 = np.load("./bspline_param_evals_latest.npz")
+lr2 = np.load("./bspline_param_evals_latest.npz", allow_pickle=False)
 # data_latest = lr2['res_2cm'].mean(axis = -1)
 # ds = data_2cm[:data_latest.shape[0], :data_latest.shape[1], :data_latest.shape[2]]
 data = lr2['res_mean_dist'].mean(axis = -1)

@@ -689,7 +689,7 @@ class DataOrganizer:
         if pkl_file is None:
             pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class)
 
-        npl = np.load(np_file)
+        npl = np.load(np_file, allow_pickle=False)
 
         with open(pkl_file, "rb") as f:
             nnpl = pickle.load(f)

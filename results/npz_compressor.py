@@ -18,14 +18,14 @@ def compress_npz(input_dir, output_postfix = "_c"):
             input_path = os.path.join(input_dir, file)
 
             # Load the uncompressed .npz file
-            data = np.load(input_path)
+            data = np.load(input_path, allow_pickle=False)
 
             # Save it in compressed format
             compressed_data = {key: data[key] for key in data.files}
             np.savez_compressed(output_path, **compressed_data)
 
             # Verify that the compressed file matches the original
-            with np.load(output_path) as new_data:
+            with np.load(output_path, allow_pickle=False) as new_data:
                 for key in data.files:
                     original = data[key]
                     compressed = new_data[key]
