@@ -13,7 +13,7 @@ import typing
 from pathlib import Path
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import NDArray, ArrayLike
 
 from datatools.data_splitting import DataSubsetKind
 from nn_utilities.nn_modes import OutVecMode
@@ -93,7 +93,7 @@ def save_cached_data(
 
     # Check that all NDArrays have the same length
     array_lengths = set(
-        len(arr) for arr in data_to_cache.values() | gt_to_cache.values()
+        len(arr) for d in (data_to_cache, gt_to_cache) for arr in d.values()
     )
     if len(array_lengths) != 1:
         raise ValueError("All NDArrays must have the same length")
@@ -108,7 +108,7 @@ def save_cached_data(
     # We now create a new dictionary that merges `data_to_cache` with a version
     # of `gt_to_cache` that replaces each of its keys with the .name attribute
     # of the original keys
-    merged_data = {
+    merged_data: typing.Dict[str, ArrayLike] = {
         **data_to_cache, **{mode.name: arr for mode, arr in gt_to_cache.items()}
     }
     merged_data[VALIDATION_START_IND_KEY] = validation_start_ind
@@ -117,7 +117,7 @@ def save_cached_data(
     merged_data[POS_SCALE_KEY] = np.asarray(pos_scale)
     merged_data[ROT_SCALE_KEY] = np.asarray(rot_scale)
 
-    np.savez_compressed(filepath, **merged_data)
+    np.savez_compressed(filepath, allow_pickle=False, **merged_data)
     print(f"Cached data saved to {filepath}")
 
 

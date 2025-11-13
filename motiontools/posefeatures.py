@@ -1450,37 +1450,6 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         return res
     return all_data
 
-# Function that combines the results of dataForCombosJav(...) into a 2D numpy
-# array.
-def dataForComboSplitJAV(train_ids: typing.List, test_ids: typing.List, 
-                         validation_ids: typing.Optional[typing.List] = None,
-                         *,
-                         pose_loaders: typing.Optional[PoseLoaderList] = None, 
-                         precalc_per_id: typing.Optional[NumpyForSkipAndID] = None):   
-    if pose_loaders is None and precalc_per_id is None:
-        raise ValueError(
-            "Cannot have combos and precalc_per_id both be None!"
-        )
-    elif pose_loaders is not None and precalc_per_id is not None:
-        raise ValueError(
-            "Cannot provide values for both  combos and precalc_per_id!"
-        )
-     
-    all_data = precalc_per_id
-    if precalc_per_id is None:
-        all_data = dataForCombosJAV(
-            pose_loaders, (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)
-        )
-    
-
-    tr_res = np.concatenate(concatForComboSubset(all_data, train_ids), axis=0)
-    te_res = np.concatenate(concatForComboSubset(all_data, test_ids), axis=0)
-    if validation_ids is not None and len(validation_ids) > 0:
-        va_res = np.concatenate(
-            concatForComboSubset(all_data, validation_ids), axis=0
-        )
-        return tr_res, te_res, va_res
-    return tr_res, te_res
 
 def getVelFrameDisplacements(y_true, y_pred):
     disp = np.empty((len(y_true), 3))

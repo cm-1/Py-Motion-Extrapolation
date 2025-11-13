@@ -35,22 +35,20 @@ from datatools.data_splitting import DataSubsetKind
 # a list of 3 items, where each list index again corresponds to the frame 
 # skip amount but results are no longer separated by combo.
 # Motivation: We may want to quickly filter out a skip amount for training.
-def concatForComboSubset(data, combo_subset,
-                         front_trim: int = 0, end_trim: int = 0,
+def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
                          diff_order: int = 0, del_original_data: bool = False,
                          return_indices: bool = False):
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
-    vid_ids_all = sorted(set(combo_subset))  # list of unique video IDs
-    num_vids = len(vid_ids_all)
+    num_vids = len(vid_ids)
     id_index_maps = []
     frame_boundaries = []
 
-    # process skips in reverse order (like your original code)
+    # process skips in reverse order
     for skip_ind in range(len(data) - 1, -1, -1):
         els_for_skip = data[skip_ind]
         # print("  - subset_via_ids creation")
         
-        subset_via_ids = [els_for_skip[vi] for vi in vid_ids_all]
+        subset_via_ids = [els_for_skip[vi] for vi in vid_ids]
 
         concated = None
         # front_trim = 0 # May set this via param in future code.
@@ -82,7 +80,8 @@ def concatForComboSubset(data, combo_subset,
             if diff_order > 0:
                 concated = np.concatenate([
                     np.diff(svc[front_trim:end], diff_order, axis=0)
-                    for svc in subset_via_ids])
+                    for svc in subset_via_ids
+                ])
             else:
                 concated = np.concatenate([
                     svc[front_trim:end] for svc in subset_via_ids
@@ -100,12 +99,12 @@ def concatForComboSubset(data, combo_subset,
             frame_boundaries.insert(0, np.pad(np.cumsum(frame_counts), (1, 0)))
 
         if del_original_data:
-            for ck in combo_subset:
+            for ck in vid_ids:
                 del els_for_skip[ck]
     if not return_indices:
         return ret_val
-    vid_id_to_idx = {vid: i for i, vid in enumerate(vid_ids_all)}
-    return ret_val, vid_ids_all, vid_id_to_idx, id_index_maps, frame_boundaries
+    vid_id_to_idx = {vid: i for i, vid in enumerate(vid_ids)}
+    return ret_val, vid_ids, vid_id_to_idx, id_index_maps, frame_boundaries
 
 
 
@@ -461,6 +460,7 @@ class DataOrganizer:
                 skip_bounds_na
             )
 
+        better_ids = sorted(set(subset_ids))
         
         # The below gets the data subset, but leaves them currently still 
         # separated by skip amount and by column key (if present). E.g., one can
@@ -468,15 +468,15 @@ class DataOrganizer:
         # one skip amount.
         # print("- Starting labels.")
         labels = concatForComboSubset(
-            min_norm_labels, subset_ids, del_original_data=del_original_data
+            min_norm_labels, better_ids, del_original_data=del_original_data
         )
         # print("- Starting errs.")
         errs = concatForComboSubset(
-            err_norm_lists, subset_ids, del_original_data=del_original_data
+            err_norm_lists, better_ids, del_original_data=del_original_data
         )
         # print("- Starting data.")
         data_and_ids = concatForComboSubset(
-            all_motion_data, subset_ids, del_original_data=del_original_data,
+            all_motion_data, better_ids, del_original_data=del_original_data,
             return_indices=True
         )
         data, reorged_ids, ord_of_ids, row_vid_ids, vid_id_ranges = data_and_ids
