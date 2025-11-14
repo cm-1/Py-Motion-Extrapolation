@@ -104,7 +104,7 @@ def safelyNormalizeArray(array: np.ndarray,
     normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
     # For zero axes, we can either use a supplied default vector, create our
     # own default, or propograte the last nonzero vector.
-    if propagate_last_nonzero_vec  and array.ndim > 1:
+    if propagate_last_nonzero_vec and array.ndim > 1:
         # First, we make sure that if the first vec is zero, that we replace it
         # with some default, since there'd be no previous vec to copy.
         if zero_norm_inds[0]:

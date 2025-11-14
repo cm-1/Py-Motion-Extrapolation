@@ -699,8 +699,13 @@ class CalcsForVideo:
             ).flatten()
             motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = inv_disp_mag_div
 
-            unit_vels_deg1 = pm.safelyNormalizeArray(deg1_vels, deg1_speeds_full)
-            unit_vels_deg2 = pm.safelyNormalizeArray(deg2_vels, deg2_speeds_full)
+            zeros_3 = np.zeros(3)
+            unit_vels_deg1 = pm.safelyNormalizeArray(
+                deg1_vels, deg1_speeds_full, vec_for_zero_norms=zeros_3
+            )
+            unit_vels_deg2 = pm.safelyNormalizeArray(
+                deg2_vels, deg2_speeds_full, vec_for_zero_norms=zeros_3
+            )
             unit_accs = pm.safelyNormalizeArray(deg2_accs, acc_mags_full)
 
             if not self.exclude_circ_data:
@@ -937,7 +942,7 @@ class CalcsForVideo:
             acc_ortho_is_0 = (acc_ortho_deg1_mags == 0.0)
             unit_acc_ortho_deg1_vecs = pm.safelyNormalizeArray(
                 acc_ortho_deg1_vecs, acc_ortho_deg1_mags,
-                vec_for_zero_norms=np.zeros(3),
+                vec_for_zero_norms=zeros_3,
                 propagate_last_nonzero_vec=False, zero_norm_inds=acc_ortho_is_0
             )
 
@@ -1746,7 +1751,6 @@ class HypotheticalInputsForNN:
         # frame calculations.
         # First, the dots with velocity:
         tri_dots[0, 0] = vel_mags.flatten() * a_proj_v # v*a
-        tri_dots[0, 0, vel_mag_is_0] = 0.0
         # tri_dots[1, 0] = v_mags * curr_ortho_mags[3] # v*j
         # Then, the dots with acceleration:
         accs_2D = np.stack((a_proj_v, a_ortho_v), axis=-1)
