@@ -265,7 +265,12 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         self.step = step
         self.zero_angle_thresh = zero_angle_thresh
 
-    def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
+        self._rel_ax_order = tuple(
+            k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
+        )
+
+    def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor,
+                       last_nonzero_unit_vels: tf.Tensor):
 
         all_pds = DerivativeCollectionConstTimeTF(
             keras.ops.diff(x0_through_5, 1, axis=0), 5, self.step
@@ -293,15 +298,15 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
 
         prev_vel_mags = tf.norm(all_prev_vels, axis=-1)
-        rev_prev_vel_mags = prev_vel_mags[..., ::-1]
-        last_nonzero_vels = all_prev_vels[-1]
+        # rev_prev_vel_mags = prev_vel_mags[..., ::-1]
+        # last_nonzero_vels = all_prev_vels[-1]
         
-        pm.handleCondsAtStart(
-            rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
-            arr_to_mod=last_nonzero_vels
-        )
+        # pm.handleCondsAtStart(
+        #     rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
+        #     arr_to_mod=last_nonzero_vels
+        # )
         
-        last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
+        # last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
 
 
         prev_ang_vel = all_rds.velocities[-2]
@@ -311,10 +316,6 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         new_ang_vel = all_rds.velocities[-1]
         new_ang_acc = all_rds.accelerations[-1]
         new_ang_jerk = all_rds.jerks[-1]
-
-        rel_ax_order = tuple(
-            k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
-        )
 
         prev_ortho_mags, prev_ortho_dirs = tfOrthonormalFramesFromUnitVec0s(
             True, last_nonzero_unit_vels, prev_acc, self.zero_angle_thresh
@@ -341,7 +342,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
         # Because the scales of the prev_ortho_dirs are just 1, we exclude these
         # from the array, hence the "-2" instances below.
-        num_scale_types = len(rel_ax_order) - 2
+        num_scale_types = len(self._rel_ax_order) - 2
 
         inner_prev_vecs_shape = prev_relative_vecs.shape[1:-1]
         prev_scale_shape = (num_scale_types, ) + inner_prev_vecs_shape #+ (1, )
@@ -357,11 +358,11 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags[-1])
+        vel_mag_is_0 = tf.reshape(vel_mags[-1], [-1]) < self.zero_angle_thresh
         unit_vels = tf.where(
-            tf.reshape(vel_mags[-1], [-1]) < self.zero_angle_thresh,
-            unit_vels, tf.zeros_like(unit_vels)
+            vel_mag_is_0, unit_vels, last_nonzero_unit_vels
         )
-        unit_vels[vel_mag_is_0] = last_nonzero_unit_vels[vel_mag_is_0]
+        # unit_vels[vel_mag_is_0] = last_nonzero_unit_vels[vel_mag_is_0]
 
         all_curr_vecs = tf.stack(
             (
@@ -384,7 +385,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
             set_zeros_to_zero=True
         )
 
-        a0_is_0 = np.where(a_ortho_v == 0.0)[0]
+        a0_is_0 = tf.where(a_ortho_v == 0.0)[0]
         _, j_orth = tfParallelAndOrthoParts(
             jerks[a0_is_0], curr_ortho_mats[a0_is_0, 0], True
         )
@@ -431,7 +432,9 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # However, we have the diagonal separated out already, so we can
         # exclude that.
         acc_vel_proj = tf.identity(a_proj_v)
-        acc_vel_proj[vel_mag_is_0] = 0.0
+        acc_vel_proj = tf.where(
+            vel_mag_is_0, unit_vels, tf.zeros_like(acc_vel_proj)
+        )
         vel_projs = [[acc_vel_proj]] #, curr_ortho_mags[3]]]
         other_projs_on_vel = tf.math.divide_no_nan(tri_dots[1:, 0], vel_mags)
 
@@ -466,29 +469,29 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         )
         other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
         other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
-        zeros_3d = np.zeros((3, n_ins))
 
-        tri_inds = https://www.tensorflow.org/probability/api_docs/python/tfp/math/fill_triangular_inverse
-        ret = np.concatenate(
+        tri_dots_lower = fdslksdflk
+        ret = tf.transpose(tf.concat(
             (
-                np.full((1, n_ins), self.step),
+                tf.fill((1, n_ins), self.step),
                 all_dots_with_prev.reshape(-1, n_ins),
                 all_proj_with_prev.reshape(-1, n_ins),
-                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots[tri_inds],
+                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots_lower,
                 *vel_projs, *non_vel_projs, a_proj_with_curr_rel,
                 remaining_proj_with_curr_rel.reshape(-1, n_ins)
             ), axis=0
-        ).transpose()
+        ))
         # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
 
         # Now, we'll calculate the JAV values that get used by the loss func.
         # These are NOT required in the NN's initial input layer!
+        zeros_3d = tf.zeros((3, n_ins))
         jav_tup = (
             vel_mags.flatten(), a_proj_v, a_ortho_v, *other_frame_projs,
             *zeros_3d
         )
-        jav_stack = typing.cast(NDArray, np.stack(jav_tup, axis=-1))
+        jav_stack = tf.stack(jav_tup, axis=-1)
 
         # TODO: The way I handle non-1 timesteps in my other JAV calculations
         # right now is kinda messy. I basically pre-multiply the acceleration,
