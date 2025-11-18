@@ -86,7 +86,7 @@ def getOutputsNN(model, scaler, hyp_calcer: HypotheticalInputsForNN,
 
 def tfNormalizeAll(vecs: tf.Tensor):
     norms = tf.norm(vecs, axis=-1, keepdims=True)
-    return vecs / norms
+    return tf.math.divide_no_nan(vecs, norms)
 
 def tfEinsumDot(vecs0: tf.Tensor, vecs1: tf.Tensor) -> tf.Tensor:
     return tf.reduce_sum(vecs0 * vecs1, axis=-1)
@@ -121,8 +121,11 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
     mags_o1 = tf.norm(vecs_o1, axis=-1)
 
     v1_is_parallel = mags_o1 < zero_thresh
-    unit_vecs1 = tf.math.divide_no_nan(vecs_o1, mags_o1)
-    unit_vecs1 = tf.where(v1_is_parallel, unit_vecs1, tf.zeros_like(unit_vecs1))
+    unit_vecs1 = tf.math.divide_no_nan(vecs_o1, mags_o1[..., tf.newaxis])
+    unit_vecs1 = tf.where(
+        v1_is_parallel[:, tf.newaxis], tf.zeros_like(unit_vecs1), unit_vecs1
+    )
+
 
     ret_mags = (mags_p1, mags_o1)
 
@@ -182,18 +185,18 @@ class LayerPostOutJAV12(keras.layers.Layer):
 
         self.step = step
         
-        self._jav_muls = tf.zeros((4, 3))
+        self._jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.int32))
         # Jerk through crackle each have 3 components we must multiply by a
         # respective power of the step assuming it's also the next "delta T".
-        self._jav_muls[1:] = self.step ** tf.range(3, 6).reshape(3, 1)
+        self._jav_muls[1:].assign(self.step ** tf.reshape(tf.range(3, 6), (3, 1)))
         # Then velocity and acceleration are special because they only have 1
         # and 2 multipliers, respectively.
+        self._jav_muls[0, :1].assign([self.step])
+        self._jav_muls[0, 1:3].assign(self.step ** 2)
         self._jav_muls = tf.reshape(self._jav_muls, [-1])
-        self._jav_muls[0] = self.step
-        self._jav_muls[1:3] = self.step ** 2
+
 
     def call(self, inputs):
-        
         
         return transformed_input
 
@@ -287,12 +290,12 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         tl_inds = np.column_stack([np_tril_rows, np_tril_cols]).astype(np.int32)
         
         # Store as a TensorFlow constant
-        self.tril_indices = tf.constant(tl_inds)
+        self._tril_indices = tf.constant(tl_inds)
 
 
-        self._rel_ax_order = tuple(
-            k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
-        )
+        # self._rel_ax_order = tuple(
+        #     k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
+        # )
 
 
 
@@ -386,7 +389,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags[-1])
         vel_mag_is_0 = tf.reshape(vel_mags[-1], [-1]) < self.zero_angle_thresh
-        unit_vels = tf.where(
+        unit_vels = tf.where1(
             vel_mag_is_0, unit_vels, last_nonzero_unit_vels
         )
         # unit_vels[vel_mag_is_0] = last_nonzero_unit_vels[vel_mag_is_0]
@@ -417,7 +420,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
             set_zeros_to_zero=True
         )
 
-        a0_is_0 = tf.where(a_ortho_v == 0.0)[0]
+        a0_is_0 = tf.where1(a_ortho_v == 0.0)[0]
         _, j_orth = tfParallelAndOrthoParts(
             jerks[a0_is_0], curr_ortho_mats[a0_is_0, 0], True
         )
@@ -463,7 +466,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # However, we have the diagonal separated out already, so we can
         # exclude that.
         acc_vel_proj = tf.identity(a_proj_v)
-        acc_vel_proj = tf.where(
+        acc_vel_proj = tf.where1(
             vel_mag_is_0, unit_vels, tf.zeros_like(acc_vel_proj)
         )
         acc_vel_proj = acc_vel_proj[tf.newaxis, ...]
@@ -500,7 +503,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
         other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
 
-        tri_dots_lower = tf.gather_nd(tri_dots, self.tril_indices)
+        tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
         ret = tf.transpose(tf.concat(
             (
                 tf.fill((1, n_ins), self.step),
