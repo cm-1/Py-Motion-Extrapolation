@@ -84,7 +84,7 @@ def getOutputsNN(model, scaler, hyp_calcer: HypotheticalInputsForNN,
         raise ValueError("Invalid return_inputs value of: " + return_inputs)
     return final_positions
 
-def tfNormalizeAll(vecs):
+def tfNormalizeAll(vecs: tf.Tensor):
     norms = tf.norm(vecs, axis=-1, keepdims=True)
     return vecs / norms
 
@@ -137,7 +137,7 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
     return ret_mags, mats
 
 
-def compute_relative_rotations(axis_angles1, axis_angles2):
+def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
     """
     Computes the relative axis-angle rotations between two sets of axis-angle
     rotations using quaternions.
@@ -151,9 +151,16 @@ def compute_relative_rotations(axis_angles1, axis_angles2):
     Returns:
         A tensor of shape (n, 3) representing the relative axis-angle rotations.
     """
+
+    angs1 = tf.norm(axis_angles1, axis=-1, keepdims=True)
+    angs2 = tf.norm(axis_angles2, axis=-1, keepdims=True)
+
+    units1 = tf.math.divide_no_nan(axis_angles1, angs1)
+    units2 = tf.math.divide_no_nan(axis_angles2, angs2)
+
     # Convert axis angles to quaternions
-    quaternions1 = tfg_transformation.quaternion.from_axis_angle(axis_angles1)
-    quaternions2 = tfg_transformation.quaternion.from_axis_angle(axis_angles2)
+    quaternions1 = tfg_transformation.quaternion.from_axis_angle(units1, angs1)
+    quaternions2 = tfg_transformation.quaternion.from_axis_angle(units2, angs2)
 
     # Compute the relative quaternion
     relative_quaternions = tfg_transformation.quaternion.multiply(
@@ -165,10 +172,11 @@ def compute_relative_rotations(axis_angles1, axis_angles2):
         relative_quaternions
     )
 
-    return relative_axis_angles
+    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
+    return relative_axis_angles[0] * relative_axis_angles[1]
 
 
-class LayerPostOutJAV12(tf.keras.layers.Layer):
+class LayerPostOutJAV12(keras.layers.Layer):
     def __init__(self, step: int, **kwargs):
         super(LayerPostOutJAV12, self).__init__(**kwargs)
 
@@ -265,9 +273,28 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         self.step = step
         self.zero_angle_thresh = zero_angle_thresh
 
+        # 8: vecs, accs, jerks, snaps, crackles, rot vel, rot acc, rot jerk
+        self._n_vec_kinds = 8
+        self._n_other_vec_kinds = self._n_vec_kinds - 1
+
+
+
+        # Pre-compute lower triangle indices in __init__ for efficiency
+        # Create index arrays using NumPy, then convert to TensorFlow constants
+        np_tril_rows, np_tril_cols = np.tril_indices(7)
+        
+        # Stack them together: shape (num_tril_elements, 2)
+        tl_inds = np.column_stack([np_tril_rows, np_tril_cols]).astype(np.int32)
+        
+        # Store as a TensorFlow constant
+        self.tril_indices = tf.constant(tl_inds)
+
+
         self._rel_ax_order = tuple(
             k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
         )
+
+
 
     def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor,
                        last_nonzero_unit_vels: tf.Tensor):
@@ -371,6 +398,11 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
             ), axis=0
         )
 
+        tf.debugging.assert_equal(
+            self._n_vec_kinds, len(all_curr_vecs),
+            "Hardcoded value for self._n_vec_kinds no longer correct!"
+        )
+
         all_dots_with_prev = tf.einsum(
             'aik,bik->abi', all_curr_vecs, prev_relative_vecs
         )
@@ -398,34 +430,33 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # We have 8 non-unit vec3s (vel..crackle and rot vel..jerk), but we'll 
         # handle the unit-length orthogonal relative axes separately, so our
         # dimensions will be 7x7x...
-        n_vec_kinds = len(all_curr_vecs)
-        n_other_vec_kinds = n_vec_kinds - 1
         n_ins = x0_through_5.shape[1]
         
-        tri_dots = []
+        tri_dots = tf.zeros((
+            self._n_other_vec_kinds, self._n_other_vec_kinds, n_ins
+        ))
 
         # Rather than keep the self-dots in the "diagonal", I think it may be
         # slightly more efficient to keep them separate; we'll need to divide
         # by them later, so this prevents the need for diag indexing or copies.
-        non_vel_mags = tf.zeros((n_other_vec_kinds, n_ins))
+        non_vel_mags = tf.zeros((self._n_other_vec_kinds, n_ins))
         non_vel_mags[0] = tf.norm(accs_2D, axis=-1) # sqrt(a*a)
         non_vel_mags[1:] = tf.norm(all_curr_vecs[2:], axis=-1)
         # We'll now copy in the magnitudes calculated during the orthonormal
         # frame calculations.
         # First, the dots with velocity:
-        vel_dots = tf.reshape(vel_mags, [-1]) * a_proj_v # v*a
+        tri_dots[0, 0] = tf.reshape(vel_mags, [-1]) * a_proj_v # v*a
         # tri_dots[1, 0] = v_mags * curr_ortho_mags[3] # v*j
 
-        tri_dots.append(vel_dots[tf.newaxis, :])
 
         # Then, the dots with acceleration:
         accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
         # tri_dots[1, 1] = pm.einsumDot(accs_2D, np.transpose(curr_ortho_mags[3:5])) # a*j (2D)
         # The remaining dots have no precalculations to take advantage of:
-        for i in range(2, n_vec_kinds):
-            tri_dots.append(tf.einsum(
+        for i in range(2, self._n_vec_kinds):
+            tri_dots[i-1, :i] = tf.einsum(
                 'jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i]
-            ))
+            )
 
         # For the projections, we don't worry about "duplicates" since there are
         # none: projecting jerk onto velocity is different from vice versa.
@@ -435,15 +466,14 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         acc_vel_proj = tf.where(
             vel_mag_is_0, unit_vels, tf.zeros_like(acc_vel_proj)
         )
-        vel_projs = [[acc_vel_proj]] #, curr_ortho_mags[3]]]
+        acc_vel_proj = acc_vel_proj[tf.newaxis, ...]
         other_projs_on_vel = tf.math.divide_no_nan(tri_dots[1:, 0], vel_mags)
 
-        vel_projs.append(other_projs_on_vel)
 
         CIND = 4 # Crackle's index
         # We don't divide by crackle's mag because it's not used as a relative
         # axis.
-        non_crackles = [i for i in range(1, n_vec_kinds) if i != CIND]
+        non_crackles = [i for i in range(1, self._n_vec_kinds) if i != CIND]
         non_vel_projs = []
         for i in non_crackles:
             prev_i = i - 1
@@ -451,7 +481,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
             non_vel_projs.append(tf.math.divide_no_nan(
                 tri_dots[prev_i, :i], mag_i
             ))
-            if i < n_other_vec_kinds:
+            if i < self._n_other_vec_kinds:
                 non_vel_projs.append(tf.math.divide_no_nan(
                     tri_dots[i:, i], mag_i
                 ))
@@ -470,14 +500,15 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
         other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
 
-        tri_dots_lower = fdslksdflk
+        tri_dots_lower = tf.gather_nd(tri_dots, self.tril_indices)
         ret = tf.transpose(tf.concat(
             (
                 tf.fill((1, n_ins), self.step),
                 all_dots_with_prev.reshape(-1, n_ins),
                 all_proj_with_prev.reshape(-1, n_ins),
-                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots_lower,
-                *vel_projs, *non_vel_projs, a_proj_with_curr_rel,
+                tf.reshape(vel_mags, (1, n_ins)), non_vel_mags, tri_dots_lower,
+                acc_vel_proj, other_projs_on_vel, *non_vel_projs,
+                a_proj_with_curr_rel,
                 remaining_proj_with_curr_rel.reshape(-1, n_ins)
             ), axis=0
         ))
@@ -488,7 +519,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # These are NOT required in the NN's initial input layer!
         zeros_3d = tf.zeros((3, n_ins))
         jav_tup = (
-            vel_mags.flatten(), a_proj_v, a_ortho_v, *other_frame_projs,
+            tf.reshape(vel_mags, [-1]), a_proj_v, a_ortho_v, *other_frame_projs,
             *zeros_3d
         )
         jav_stack = tf.stack(jav_tup, axis=-1)
