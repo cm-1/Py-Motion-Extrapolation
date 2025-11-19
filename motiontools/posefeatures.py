@@ -1539,7 +1539,8 @@ class HypotheticalInputsForNN:
         self._keyPermutation()
         self.updatePrecalcs(x0_through_4, rmats0_through_5)
     
-    def _keyPermutation(self):
+    @staticmethod
+    def _generated_key_order():
         MD = MOTION_DATA
         AM = ANG_OR_MAG
         kp_t = [MD.TIMESTEP]
@@ -1593,13 +1594,17 @@ class HypotheticalInputsForNN:
         ]
 
         kp = kp_t + kp_pd + kp_pp + kp_m + kp_nd + kp_np + kp_np2
+        return kp
+        
+    def _keyPermutation(self):
+        kp = self._generated_key_order()
         self._orig_key_order = kp
         self.to_nn_permut = np.asarray([kp.index(k) for k in self.ref_keys])
         return
     
     @staticmethod
     def _replaceAtInd(source_arr: NDArray, amt: int, arr_to_mod: NDArray):
-        arr_to_mod[:] = source_arr[amt]
+        arr_to_mod[0, :] = source_arr[amt]
 
     def updatePrecalcs(self, x0_through_4:NDArray, rmats0_through_5: NDArray):
         assert len(x0_through_4) == 5, "Must give exactly 5 fixed points!"
@@ -1638,14 +1643,13 @@ class HypotheticalInputsForNN:
         self.prev_snap = prev_snap
 
         vel_mags = np.linalg.norm(all_vels, axis=-1)
-        rev_vel_mags = vel_mags[..., ::-1]
-        last_nonzero_vels = all_vels[-1]
+        last_nonzero_vels = all_vels[-1:]
         pm.handleCondsAtStart(
-            rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
-            arr_to_mod=last_nonzero_vels
+            vel_mags[::-1] == 0.0, all_vels[::-1], self._replaceAtInd,
+            cond_bools_time_axis=0, arr_to_mod=last_nonzero_vels
         )
         
-        self.last_nonzero_unit_vels = pm.normalizeAll(last_nonzero_vels)
+        self.last_nonzero_unit_vels = pm.normalizeAll(last_nonzero_vels[0])
 
 
         prev_ang_vel = self.all_rds.velocities[-2]

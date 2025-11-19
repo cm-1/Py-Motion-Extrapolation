@@ -146,8 +146,14 @@ def safelyNormalizeArray(array: np.ndarray,
 
 def quatsFromAxisAngleVec3s(axisAngleVals):
     angles = np.linalg.norm(axisAngleVals, axis=1, keepdims=True)
+    
+    # Because we're returning quaternions in the next step, if the angle is 0,
+    # the axis will get multiplied by zero and (0, 0, 0) will be the last values
+    # of the respective quaternion, which is correct. Therefore, for
+    # normalization, we can just set these axes to zero already.
     normed = safelyNormalizeArray(
-        axisAngleVals, angles, propagate_back_if_first_vecs_zero=True
+        axisAngleVals, angles, vec_for_zero_norms=np.zeros(3),
+        propagate_last_nonzero_vec=False
     )
 
     return quatsFromAxisAngles(normed, angles)
@@ -920,20 +926,64 @@ def matsFromQuaternions(quats: np.ndarray):
     ]), -1, 0)
 
 def handleCondsAtStart(cond_bools: NDArray, ref_arr: NDArray, func_to_app,
-                       **kwargs):
-    n = cond_bools.shape[-1] # Length per sequence
-    flatter_conds = cond_bools.reshape(-1, n)
+                       cond_bools_time_axis: int = -1, **kwargs):
+
     
-    reshape_start = (cond_bools.ndim - flatter_conds.ndim) + 1
-
-    flatter_ref_shape = (-1, ) + ref_arr.shape[reshape_start:]
-    flatter_ref_arr = ref_arr.reshape(flatter_ref_shape)
+    pos_time_axis = cond_bools_time_axis
+    pos_default_axis = -1
+    new_cond_bools = cond_bools
+    if cond_bools_time_axis != -1:
+        pos_time_axis = cond_bools_time_axis % cond_bools.ndim
+        pos_default_axis = cond_bools.ndim - 1
+        new_cond_bools = np.swapaxes(cond_bools, pos_default_axis, pos_time_axis)
+    n = new_cond_bools.shape[-1] # Length per sequence
+    flatter_conds = new_cond_bools.reshape(-1, n)
+    
     is_np_d = {k: isinstance(v, np.ndarray) for k, v in kwargs.items()}
-    for k, v in kwargs.items():
-        if is_np_d[k]:
-            flatter_v_shape = (-1, ) + v.shape[reshape_start:]
-            kwargs[k] = v.reshape(flatter_v_shape)
+    
+    array_args = {k: v for k, v in kwargs.items() if is_np_d[k]}
+    array_args["ref_arr"] = ref_arr
+    
+    new_kwargs = dict(kwargs)
+    
+    for k, arr in array_args.items():
+        extra_ndims = arr.ndim - cond_bools.ndim
+        if extra_ndims != 0 and extra_ndims != 1:
+            if extra_ndims < 0:
+                raise ValueError("{}.ndim must >= cond_bools.ndim".format(k))
+            else:
+                # I'm not %100 sure I won't ever encounter a situation where I
+                # need arr.ndim - cond_bools.ndim > 1, e.g. for arrays of
+                # rotation matrices, so *maybe* I'll eventually have to change
+                # this code so that I don't raise an Error here. But for now,
+                # this behaviour would be unexpected and worth catching.
+                raise ValueError((
+                    "Currently, having {}.ndim > cond_bools.ndim + 1 is "
+                    "unexpected behaviour, though maybe it isn't for your use "
+                    "case; in that event, the handleCondsAtStart function "
+                    "should be edited to support your use case!"
+                ).format(k))
+        cshape = cond_bools.shape
+        ashape = arr.shape
+        for cd, ad in zip(cshape, ashape[:cond_bools.ndim]):
+            if cd != 1 and ad != 1 and cd != ad:
+                raise ValueError(
+                    f"{k} & cond_bools ({ashape} & {cshape}) not compatible!"
+                )
+        
+        if cond_bools_time_axis != -1:
+            arr = np.swapaxes(arr, pos_time_axis, pos_default_axis)
+            
+        flatter_shape = (-1, ) + arr.shape[(cond_bools.ndim - 1):]
+        arr = arr.reshape(flatter_shape)
+        
+        # Make sure our relevant params are updated!
+        if k == "ref_arr":
+            ref_arr = arr
+        else:
+            new_kwargs[k] = arr
 
+    
     seq_inds_starting_with_cond = np.where(flatter_conds[:, 0])[0]
     seqs_starting_with_cond = flatter_conds[seq_inds_starting_with_cond]
     for i, c_row in zip(seq_inds_starting_with_cond, seqs_starting_with_cond):
@@ -941,8 +991,10 @@ def handleCondsAtStart(cond_bools: NDArray, ref_arr: NDArray, func_to_app,
         conds_at_front = 1 
         while conds_at_front < n and c_row[conds_at_front]:
             conds_at_front += 1
-        kwargs_i = {k: v if not is_np_d[k] else v[i] for k, v in kwargs.items()}
-        func_to_app(flatter_ref_arr[i], conds_at_front, **kwargs_i)
+        kwargs_i = {
+            k: v if not is_np_d[k] else v[i] for k, v in new_kwargs.items()
+        }
+        func_to_app(ref_arr[i], conds_at_front, **kwargs_i)
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
@@ -1048,9 +1100,9 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH
         sqrtInput = 1 + diagMaxSubset + diagMaxSubset - matrixTraceVals[useDiag]
         # Because max-diag-element >= trace, sqrt(input) >= 1; no fp concerns.
         ax_i = np.sqrt(sqrtInput)
-        nonUnitAxes[useDiag, i_s] = ax_i
-        nonUnitAxes[useDiag, j_s] = (Aij + Aji)/ax_i
-        nonUnitAxes[useDiag, k_s] = (Aik + Aki)/ax_i
+        nonUnitAxes[useDiag + (i_s, )] = ax_i
+        nonUnitAxes[useDiag + (j_s, )] = (Aij + Aji)/ax_i
+        nonUnitAxes[useDiag + (k_s, )] = (Aik + Aki)/ax_i
 
         # Again, we need to clamp/clip in case of fp precision causing problems.
         acosInput = np.clip((Akj - Ajk)/(ax_i + ax_i), -1.0, 1.0)
@@ -1349,4 +1401,3 @@ def cross2D(vecs0, vecs1):
     y1 = vecs1[..., 1]
 
     return (x0 * y1) - (x1 * y0)
-
