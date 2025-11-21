@@ -64,12 +64,20 @@ def _defaultReplacementVec(length):
     ret[0] = 1.0
     return ret
 
+def _back_prop(arr: NDArray, count: int):
+    if count >= len(arr):
+        raise Exception("All vecs fail condition; propagation impossible!")
+    arr[:count] = arr[count]
+
+def _single_replacer(edited_arr: NDArray, _: int, replacement: NDArray):
+    edited_arr[0] = replacement[0]
+
 def safelyNormalizeArray(array: np.ndarray,
                          norms: typing.Optional[NDArray] = None,
                          vec_for_zero_norms: typing.Optional[NDArray] = None,
                          propagate_last_nonzero_vec: bool = True,
                          propagate_back_if_first_vecs_zero: bool = False,
-                         zero_norm_inds = None):
+                         zero_norm_inds = None, propagation_axis: int = -2):
     '''
     Normalize an array while handling the case where some elements have a norm 
     of zero, which would cause division errors.
@@ -92,37 +100,68 @@ def safelyNormalizeArray(array: np.ndarray,
             NDArray, np.linalg.norm(array, axis=-1, keepdims=True)
         )
 
+    # Validate vec_for_zero_norms if provided
+    if vec_for_zero_norms is not None:
+        vec_norm = np.linalg.norm(vec_for_zero_norms)
+        if not (np.isclose(vec_norm, 0.0) or np.isclose(vec_norm, 1.0)):
+            raise ValueError(
+                f"vec_for_zero_norms must be either a zero vector or a unit vector, "
+                f"but has norm {vec_norm}"
+            )
+
     if zero_norm_inds is None:
         zero_norm_inds = (norms == 0)
-    zero_norm_inds = zero_norm_inds.flatten()
+    zero_norm_inds = zero_norm_inds[..., 0]
 
     if not np.any(zero_norm_inds):
         return array / norms
+
+    pos_prop_ax = propagation_axis % array.ndim
     
     pos_norm_inds = ~np.asarray(zero_norm_inds)
     normed = np.empty_like(array)
     normed[pos_norm_inds] = array[pos_norm_inds]/norms[pos_norm_inds]
+    if propagate_back_if_first_vecs_zero and not propagate_last_nonzero_vec:
+        # TODO-reusability: There's really no reason *not* to support this other
+        # than the fact that I don't have time for a refactor right now.
+        raise NotImplementedError(
+            "Propagating back but not forwards not currently supported!"
+        )
     # For zero axes, we can either use a supplied default vector, create our
-    # own default, or propograte the last nonzero vector.
-    if propagate_last_nonzero_vec  and array.ndim > 1:
+    # own default, or propagate the last nonzero vector.
+    if propagate_last_nonzero_vec and array.ndim > 1:
+        if propagation_axis == -1:
+            raise NotImplementedError((
+                "Propagation axis of -1 not currently supported! "
+                "Implementation assumes -1 is the per-vector axis!"
+            ))
+        use_single_replacement = True
         # First, we make sure that if the first vec is zero, that we replace it
         # with some default, since there'd be no previous vec to copy.
-        if zero_norm_inds[0]:
-            if vec_for_zero_norms is None:
-                if propagate_back_if_first_vecs_zero:
-                    search_ind = 1
-                    while search_ind < len(zero_norm_inds):
-                        if not zero_norm_inds[search_ind]:
-                            normed[0] = normed[search_ind]
-                            break
-                        search_ind += 1
-                    if search_ind >= len(zero_norm_inds):
-                        raise Exception("All vecs 0; propagation impossible!")
-                else:
-                    replacement_vec = _defaultReplacementVec(array.shape[-1])
-                    normed[0] = replacement_vec
+        if vec_for_zero_norms is None:
+            if propagate_back_if_first_vecs_zero:
+                handleCondsAtStart(
+                    zero_norm_inds, normed, _back_prop, pos_prop_ax
+                )
+                use_single_replacement = False
             else:
-                normed[0] = vec_for_zero_norms
+                vec_for_zero_norms = _defaultReplacementVec(array.shape[-1])
+        if use_single_replacement:
+            if vec_for_zero_norms.ndim != 1:
+                raise NotImplementedError(
+                    "Only shape (k,) supported for vec_for_zero_norms so far!"
+                )
+            broadcast_replacer = np.broadcast_to(
+                vec_for_zero_norms, zero_norm_inds.shape + (normed.shape[-1], )
+            )
+            handleCondsAtStart(
+                zero_norm_inds, normed, _single_replacer, pos_prop_ax,
+                False, True, replacement=broadcast_replacer
+            )
+        if propagation_axis != -2:            
+            normed = normed.swapaxes(-2, pos_prop_ax)
+            zero_norm_inds = zero_norm_inds.swapaxes(-1, pos_prop_ax)
+        
         # To copy the last nonzero vectors, we'll use the technique proposed in 
         # a 2015-05-27 StackOverflow answer by user "jme" (1231929/jme) to a
         # 2015-05-27 question, "Fill zero values of 1d numpy array with last
@@ -131,11 +170,22 @@ def safelyNormalizeArray(array: np.ndarray,
         # forward-fill NaN values in numpy array" by user Xukrao
         # (7306999/xukrao) shows this to be more efficient than similar
         # for-loop, numba, pandas, etc. solutions.
-        replacement_inds = np.arange(len(norms))
+
+        seq_parent_shape = zero_norm_inds.shape[:-1]
+        replacement_inds = np.tile(np.arange(len(norms)), seq_parent_shape + (1, ))
         int_zero_inds = np.nonzero(zero_norm_inds)
         replacement_inds[int_zero_inds] = 0
         replacement_inds = np.maximum.accumulate(replacement_inds, axis = -1)
-        normed[int_zero_inds] = normed[replacement_inds[int_zero_inds]]
+        
+        zn_where = np.argwhere(zero_norm_inds).transpose()
+        zn_where[-1] = replacement_inds[int_zero_inds]
+
+        normed[int_zero_inds] = normed[tuple(zn_where)]
+
+        # We also swap axes back the way they were if necessary
+        if propagation_axis != -1:
+            zero_norm_inds = zero_norm_inds.swapaxes(-1, pos_prop_ax)
+            normed = normed.swapaxes(-2, pos_prop_ax)
     else:
         if vec_for_zero_norms is None:
             replacement_vec = _defaultReplacementVec(array.shape[-1])
@@ -926,7 +976,8 @@ def matsFromQuaternions(quats: np.ndarray):
     ]), -1, 0)
 
 def handleCondsAtStart(cond_bools: NDArray, ref_arr: NDArray, func_to_app,
-                       cond_bools_time_axis: int = -1, **kwargs):
+                       cond_bools_time_axis: int = -1, use_count: bool = True,
+                       update_cond_bools: bool = False, **kwargs):
 
     
     pos_time_axis = cond_bools_time_axis
@@ -989,12 +1040,16 @@ def handleCondsAtStart(cond_bools: NDArray, ref_arr: NDArray, func_to_app,
     for i, c_row in zip(seq_inds_starting_with_cond, seqs_starting_with_cond):
         # We know there's at least one because we already pre-filtered.
         conds_at_front = 1 
-        while conds_at_front < n and c_row[conds_at_front]:
-            conds_at_front += 1
+        if use_count:
+            while conds_at_front < n and c_row[conds_at_front]:
+                conds_at_front += 1
         kwargs_i = {
             k: v if not is_np_d[k] else v[i] for k, v in new_kwargs.items()
         }
         func_to_app(ref_arr[i], conds_at_front, **kwargs_i)
+        if update_cond_bools:
+            flatter_conds[i][:conds_at_front] = False
+    return
 
 # Input is assumed to be a numpy array with shape (n,3,3) for some n > 0.
 # Return value thus has shape (n,3).
@@ -1128,8 +1183,8 @@ def axisAngleFromMatArray(matrixArray, zeroAngleThresh = DEFAULT_ZERO_ANG_THRESH
     # NaN values in numpy array" by user Xukrao (7306999/xukrao) shows this to
     # be more efficient than similar for-loop, numba, pandas, etc. solutions.
     # --------------------------------------------------------------------------
-    # The below only works for a flat list of angles! *Might* be neat to
-    # consider more dimensions (but efficiency?). I think this could work by:
+    # This has been modified to work with more dimensions than just a flat list
+    # of angles! This works by, basically, doing:
     #  * `inds = np.tile(np.arange(angles.shape[-1]), angles.shape[:-1] + (1,))`
     #    * An array with same shape as angles, but with aranges on last axis.
     #  * Do the zero-setting and max accumulation similar to before.
