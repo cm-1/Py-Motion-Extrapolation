@@ -126,9 +126,15 @@ def _isFitted(transformer):
 
 # Type hint for a dict with items that are either (int, int) intervals or a bool
 # numpy array of indices.
+# For the ellipses type hint, the solution lies in the comments to a question
+# posted 2022-03-04 by Kyle (1574952/kyle) titled "Type hint for Ellipsis":
+# https://stackoverflow.com/questions/71355085/type-hint-for-ellipsis
+# The solution's in a comment by juanpa.arrivillaga (5014455/juanpa-arrivillaga)
+# and notes that pre Python 3.10, a solution is to `import builtins` and use the
+# type "builtins.ellipsis", *and to make sure it's in quotes*!
 IndDict: typing.TypeAlias = typing.Dict[
-    typing.Any, 
-    typing.Union[typing.Tuple[int,int], NDArray, builtins.Ellipsis] 
+    typing.Any,
+    typing.Union[typing.Tuple[int,int], NDArray, "builtins.ellipsis"]
 ]
 
 # Gets the per-frame pose error in millimeters for a set of "labels" which 
