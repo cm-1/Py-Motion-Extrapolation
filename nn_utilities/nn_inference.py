@@ -1,3 +1,5 @@
+# pyright: reportOperatorIssue=false
+# pyright: reportIndexIssue=false
 import typing
 
 import numpy as np
@@ -84,7 +86,7 @@ def getOutputsNN(model, scaler, hyp_calcer: HypotheticalInputsForNN,
         raise ValueError("Invalid return_inputs value of: " + return_inputs)
     return final_positions
 
-def tfNormalizeAll(vecs: tf.Tensor):
+def tfNormalizeAll(vecs: tf.Tensor) -> tf.Tensor:
     norms = tf.norm(vecs, axis=-1, keepdims=True)
     return tf.math.divide_no_nan(vecs, norms)
 
@@ -204,7 +206,7 @@ class LayerPostOutJAV12(keras.layers.Layer):
 
 class DerivativeCollectionConstTimeTF:
     def __init__(self, displacements: tf.Tensor, max_derivative_order: int,
-                 time_step: int):
+                 time_step: typing.Union[int, float]):
                         
         self.time_step = time_step
         self.velocities = displacements / time_step
@@ -233,10 +235,10 @@ class DerivativeCollectionWithTimestampsTF:
     def __init__(self, displacements: tf.Tensor, max_derivative_order: int,
                  timestamps: tf.Tensor):
                 
-        self.velocities: tf.Tensor = tf.identity(displacements)
+        self.velocities = typing.cast(tf.Tensor, tf.identity(displacements))
         
         # Reshape for broadcasting.
-        coeff_shape = self.velocities.shape[:-1] + (1, )
+        coeff_shape = self.velocities.shape[:-1] + tf.TensorShape(1)
         self.unflat_timestamps = tf.reshape(timestamps, coeff_shape)
 
         time_deltas = keras.ops.diff(self.unflat_timestamps, 1, axis=0)
@@ -268,7 +270,7 @@ class DerivativeCollectionWithTimestampsTF:
         ret_val = scalars * ret_val
         return ret_val
 
-class PointsToInputsConstStep(tf.keras.layers.Layer):
+class PointsToInputsConstStep(keras.layers.Layer):
     def __init__(self, step: typing.Union[int, float],
                  zero_angle_thresh: float = DEFAULT_ZERO_ANG_THRESH, **kwargs):
         super(PointsToInputsConstStep, self).__init__(**kwargs)
@@ -299,11 +301,11 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
 
 
-    def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor,
-                       last_nonzero_unit_vels: tf.Tensor):
+    def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
         all_pds = DerivativeCollectionConstTimeTF(
-            keras.ops.diff(x0_through_5, 1, axis=0), 5, self.step
+            typing.cast(tf.Tensor, keras.ops.diff(x0_through_5, 1, axis=0)), 5,
+            self.step
         )
         
         angvel_aas = compute_relative_rotations(
@@ -389,8 +391,8 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags[-1])
         vel_mag_is_0 = tf.reshape(vel_mags[-1], [-1]) < self.zero_angle_thresh
-        unit_vels = tf.where1(
-            vel_mag_is_0, unit_vels, last_nonzero_unit_vels
+        unit_vels = tf.where(
+            vel_mag_is_0, last_nonzero_unit_vels, unit_vels
         )
         # unit_vels[vel_mag_is_0] = last_nonzero_unit_vels[vel_mag_is_0]
 
@@ -416,11 +418,9 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
         
         (a_proj_v, a_ortho_v), curr_ortho_mats = tfOrthonormalFramesFromUnitVec0s(
-            True, unit_vels, accs, vecs0_are_unit_len=True,
-            set_zeros_to_zero=True
+            True, unit_vels, accs, self.zero_angle_thresh 
         )
-
-        a0_is_0 = tf.where1(a_ortho_v == 0.0)[0]
+        a0_is_0 = tf.equal(a_ortho_v, 0.0)
         _, j_orth = tfParallelAndOrthoParts(
             jerks[a0_is_0], curr_ortho_mats[a0_is_0, 0], True
         )
@@ -439,12 +439,32 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
             self._n_other_vec_kinds, self._n_other_vec_kinds, n_ins
         ))
 
+        accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
+        
         # Rather than keep the self-dots in the "diagonal", I think it may be
         # slightly more efficient to keep them separate; we'll need to divide
         # by them later, so this prevents the need for diag indexing or copies.
+        # Version 1:
         non_vel_mags = tf.zeros((self._n_other_vec_kinds, n_ins))
         non_vel_mags[0] = tf.norm(accs_2D, axis=-1) # sqrt(a*a)
         non_vel_mags[1:] = tf.norm(all_curr_vecs[2:], axis=-1)
+
+        # Version 2:
+        non_vel_mags = tf.zeros((self._n_other_vec_kinds, n_ins))
+        non_vel_mags = tf.tensor_scatter_nd_update(
+            non_vel_mags,
+            [[0], [1], [2], [3], [4], [5], [6]],
+            [
+                tf.norm(tf.stack((a_proj_v, a_ortho_v), axis=-1), axis=-1),  # sqrt(a*a)
+                tf.norm(all_curr_vecs[2:], axis=-1),
+                tf.norm(all_curr_vecs[3:], axis=-1),
+                tf.norm(all_curr_vecs[4:], axis=-1),
+                tf.norm(all_curr_vecs[5:], axis=-1),
+                tf.norm(all_curr_vecs[6:], axis=-1),
+                tf.norm(all_curr_vecs[7:], axis=-1)
+            ]
+        )
+
         # We'll now copy in the magnitudes calculated during the orthonormal
         # frame calculations.
         # First, the dots with velocity:
@@ -453,7 +473,7 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
 
 
         # Then, the dots with acceleration:
-        accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
+
         # tri_dots[1, 1] = pm.einsumDot(accs_2D, np.transpose(curr_ortho_mags[3:5])) # a*j (2D)
         # The remaining dots have no precalculations to take advantage of:
         for i in range(2, self._n_vec_kinds):
@@ -466,8 +486,8 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         # However, we have the diagonal separated out already, so we can
         # exclude that.
         acc_vel_proj = tf.identity(a_proj_v)
-        acc_vel_proj = tf.where1(
-            vel_mag_is_0, unit_vels, tf.zeros_like(acc_vel_proj)
+        acc_vel_proj = tf.where(
+            vel_mag_is_0, tf.zeros_like(acc_vel_proj), acc_vel_proj
         )
         acc_vel_proj = acc_vel_proj[tf.newaxis, ...]
         other_projs_on_vel = tf.math.divide_no_nan(tri_dots[1:, 0], vel_mags)
@@ -515,8 +535,28 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
                 remaining_proj_with_curr_rel.reshape(-1, n_ins)
             ), axis=0
         ))
-        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
+        # Note: fill_triangular_inverse is not available in TensorFlow
+        # This would need to be replaced with equivalent logic or imported from tfp
+
+        ret = tf.concat(
+            (
+                tf.fill((1, n_ins), self.step),
+                tf.reshape(all_dots_with_prev, [-1, n_ins]),
+                tf.reshape(all_proj_with_prev, [-1, n_ins]),
+                tf.reshape(vel_mags, [1, n_ins]),
+                non_vel_mags,
+                # tri_dots[tri_inds],  # This would need to be handled
+                *vel_projs,
+                *non_vel_projs,
+                a_proj_with_curr_rel,
+                tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins])
+            ), axis=0
+        )
+
+        # Note: The permutation logic would need to be implemented
+
+        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
         # Now, we'll calculate the JAV values that get used by the loss func.
         # These are NOT required in the NN's initial input layer!
@@ -541,8 +581,9 @@ class PointsToInputsConstStep(tf.keras.layers.Layer):
         if self.step != 1:
             jav_stack[..., :12] *= self._jav_muls
 
-        return ret[:, self.to_nn_permut], jav_stack, curr_ortho_mats
 
+        return ret, jav_stack, 
+    
 
 '''
 https://www.tensorflow.org/guide/advanced_autodiff
@@ -562,5 +603,14 @@ You can use pretty_printed_concrete_signatures() to see all of the available tra
 https://www.tensorflow.org/guide/function#obtaining_concrete_functions
 https://www.tensorflow.org/guide/saved_model
 https://www.tensorflow.org/api_docs/python/tf/print
+
+https://stackoverflow.com/questions/73267868/how-to-do-slice-and-update-operation-on-tensors-in-tensorflow-2-0
+https://stackoverflow.com/questions/62092147/how-to-efficiently-assign-to-a-slice-of-a-tensor-in-tensorflow
+https://www.tensorflow.org/api_docs/python/tf/tensor_scatter_nd_update
+
+
+https://stackoverflow.com/questions/56616485/equality-comparison-does-not-work-inside-tensorflow-2-0-tf-function
+
+
 
 '''
