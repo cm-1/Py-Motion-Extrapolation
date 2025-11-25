@@ -9,9 +9,8 @@ import tensorflow as tf
 import tensorflow_graphics.geometry.transformation as tfg_transformation
 import keras
 
-from motiontools.posefeatures import (
-    HypotheticalInputsForNN, getWorldFrameDisplacements
-)
+from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
+from motiontools.posefeatures import getWorldFrameDisplacements
 
 from posemath import DEFAULT_ZERO_ANG_THRESH
 
@@ -300,7 +299,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # )
 
 
-
+    @tf.function
     def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
         all_pds = DerivativeCollectionConstTimeTF(
@@ -339,7 +338,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # )
         
         # last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
-
+        prev_speed = tf.norm(prev_vel, axis=-1, keepdims=True)
+        prev_unit_vel = tf.math.divide_no_nan(prev_vel, prev_speed)
 
         prev_ang_vel = all_rds.velocities[-2]
         prev_ang_acc = all_rds.accelerations[-2]
@@ -350,7 +350,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         new_ang_jerk = all_rds.jerks[-1]
 
         prev_ortho_mags, prev_ortho_dirs = tfOrthonormalFramesFromUnitVec0s(
-            True, last_nonzero_unit_vels, prev_acc, self.zero_angle_thresh
+            True, prev_unit_vel, prev_acc, self.zero_angle_thresh
         )
 
         a0_is_0 = tf.equal(prev_ortho_mags[1], 0.0)
@@ -391,10 +391,9 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags[-1])
         vel_mag_is_0 = tf.reshape(vel_mags[-1], [-1]) < self.zero_angle_thresh
-        unit_vels = tf.where(
-            vel_mag_is_0, last_nonzero_unit_vels, unit_vels
-        )
-        # unit_vels[vel_mag_is_0] = last_nonzero_unit_vels[vel_mag_is_0]
+        # unit_vels = tf.where(
+        #     vel_mag_is_0, last_nonzero_unit_vels, unit_vels
+        # )
 
         all_curr_vecs = tf.stack(
             (
@@ -489,7 +488,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         acc_vel_proj = tf.where(
             vel_mag_is_0, tf.zeros_like(acc_vel_proj), acc_vel_proj
         )
-        acc_vel_proj = acc_vel_proj[tf.newaxis, ...]
+        acc_vel_proj = acc_vel_proj[tf.newaxis]
         other_projs_on_vel = tf.math.divide_no_nan(tri_dots[1:, 0], vel_mags)
 
 
@@ -517,11 +516,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         )
 
 
-        other_frame_proj_zip = zip(
-            other_projs_on_vel[:3], remaining_proj_with_curr_rel[:3]
-        )
-        other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
-        other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
+        
 
         tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
         ret = tf.transpose(tf.concat(
@@ -553,13 +548,19 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins])
             ), axis=0
         )
+        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
         # Note: The permutation logic would need to be implemented
 
-        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
         # Now, we'll calculate the JAV values that get used by the loss func.
         # These are NOT required in the NN's initial input layer!
+        other_frame_proj_zip = zip(
+            other_projs_on_vel[:3], remaining_proj_with_curr_rel[:3]
+        )
+        other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
+        other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
+        
         zeros_3d = tf.zeros((3, n_ins))
         jav_tup = (
             tf.reshape(vel_mags, [-1]), a_proj_v, a_ortho_v, *other_frame_projs,
@@ -586,6 +587,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
     
 
 '''
+Some notes/references for myself:
+
 https://www.tensorflow.org/guide/advanced_autodiff
 https://www.tensorflow.org/guide/autodiff
 https://www.tensorflow.org/guide/intro_to_graphs
