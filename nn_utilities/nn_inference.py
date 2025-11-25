@@ -10,7 +10,9 @@ import tensorflow_graphics.geometry.transformation as tfg_transformation
 import keras
 
 from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
-from motiontools.posefeatures import getWorldFrameDisplacements
+from motiontools.posefeatures import (
+    getWorldFrameDisplacements, MOTION_DATA, ALL_RELATIVE_VECTORS
+)
 
 from posemath import DEFAULT_ZERO_ANG_THRESH
 
@@ -179,6 +181,17 @@ def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor)
     # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
     return relative_axis_angles[0] * relative_axis_angles[1]
 
+def _get_JAV_muls(step: int):
+        _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.int32))
+        # Jerk through crackle each have 3 components we must multiply by a
+        # respective power of the step assuming it's also the next "delta T".
+        _jav_muls[1:].assign(step ** tf.reshape(tf.range(3, 6), (3, 1)))
+        # Then velocity and acceleration are special because they only have 1
+        # and 2 multipliers, respectively.
+        _jav_muls[0, :1].assign([step])
+        _jav_muls[0, 1:3].assign(step ** 2)
+        _jav_muls = tf.reshape(_jav_muls, [-1])
+        return tf.constant(_jav_muls, dtype=tf.float32)
 
 class LayerPostOutJAV12(keras.layers.Layer):
     def __init__(self, step: int, **kwargs):
@@ -186,20 +199,13 @@ class LayerPostOutJAV12(keras.layers.Layer):
 
         self.step = step
         
-        self._jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.int32))
-        # Jerk through crackle each have 3 components we must multiply by a
-        # respective power of the step assuming it's also the next "delta T".
-        self._jav_muls[1:].assign(self.step ** tf.reshape(tf.range(3, 6), (3, 1)))
-        # Then velocity and acceleration are special because they only have 1
-        # and 2 multipliers, respectively.
-        self._jav_muls[0, :1].assign([self.step])
-        self._jav_muls[0, 1:3].assign(self.step ** 2)
-        self._jav_muls = tf.reshape(self._jav_muls, [-1])
+        self._jav_muls = _get_JAV_muls(step)
 
 
     def call(self, inputs):
-        
-        return transformed_input
+        # Multiply the JAV outputs by the timestep powers
+        # inputs should be shape (batch_size, 12) - the 12 JAV components
+        return inputs * self._jav_muls[tf.newaxis, :]
 
 
 
@@ -294,13 +300,19 @@ class PointsToInputsConstStep(keras.layers.Layer):
         self._tril_indices = tf.constant(tl_inds)
 
 
-        # self._rel_ax_order = tuple(
-        #     k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
-        # )
+        self._jav_muls = _get_JAV_muls(step)
+
+        CIND = ALL_RELATIVE_VECTORS.index(MOTION_DATA.JERK_ERR_VEC3)
+        # We don't divide by crackle's mag because it's not used as a relative
+        # axis.
+        self._non_crackles = tf.constant([
+            i for i in range(1, self._n_vec_kinds) if i != CIND
+        ], dtype=tf.int32)
+
 
 
     @tf.function
-    def updatePrecalcs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
+    def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
         all_pds = DerivativeCollectionConstTimeTF(
             typing.cast(tf.Tensor, keras.ops.diff(x0_through_5, 1, axis=0)), 5,
@@ -374,19 +386,18 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         # Because the scales of the prev_ortho_dirs are just 1, we exclude these
         # from the array, hence the "-2" instances below.
-        num_scale_types = len(self._rel_ax_order) - 2
+        # num_scale_types = self._n_rel_axes_excl_ortho  # 7 relative axes (vel, acc, jerk, snap, ang_vel, ang_acc, ang_jerk)
 
-        inner_prev_vecs_shape = prev_relative_vecs.shape[1:-1]
-        prev_scale_shape = (num_scale_types, ) + inner_prev_vecs_shape #+ (1, )
+        # inner_prev_vecs_shape = tf.shape(prev_relative_vecs)[1:-1]
+        # n_ins = x0_through_5.shape[1]
+        # prev_scale_shape = (num_scale_types, n_ins)
 
-        prev_relative_scales = tf.zeros(prev_scale_shape)
-        prev_relative_scales[0] = prev_vel_mags[-1] #[..., np.newaxis]
-        prev_relative_scales[1] = tf.sqrt(
-            prev_ortho_mags[0]**2 + prev_ortho_mags[1]**2
-        )#[..., np.newaxis]
-        prev_relative_scales[2:] = tf.norm(
-            prev_relative_vecs[2:-2], axis=-1#, keepdims=True
-        )
+        # Build prev_relative_scales using tensor_scatter_nd_update for graph compatibility
+        scale_0 = tf.reshape(prev_vel_mags[-1], [1, -1])
+        scale_1 = tf.reshape(tf.sqrt(prev_ortho_mags[0]**2 + prev_ortho_mags[1]**2), [1, -1])
+        scales_2_onwards = tf.norm(prev_relative_vecs[2:-2], axis=-1)  # Shape: (5, n_ins)
+        
+        prev_relative_scales = tf.concat([scale_0, scale_1, scales_2_onwards], axis=0)
 
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags[-1])
@@ -443,26 +454,10 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Rather than keep the self-dots in the "diagonal", I think it may be
         # slightly more efficient to keep them separate; we'll need to divide
         # by them later, so this prevents the need for diag indexing or copies.
-        # Version 1:
-        non_vel_mags = tf.zeros((self._n_other_vec_kinds, n_ins))
-        non_vel_mags[0] = tf.norm(accs_2D, axis=-1) # sqrt(a*a)
-        non_vel_mags[1:] = tf.norm(all_curr_vecs[2:], axis=-1)
-
-        # Version 2:
-        non_vel_mags = tf.zeros((self._n_other_vec_kinds, n_ins))
-        non_vel_mags = tf.tensor_scatter_nd_update(
-            non_vel_mags,
-            [[0], [1], [2], [3], [4], [5], [6]],
-            [
-                tf.norm(tf.stack((a_proj_v, a_ortho_v), axis=-1), axis=-1),  # sqrt(a*a)
-                tf.norm(all_curr_vecs[2:], axis=-1),
-                tf.norm(all_curr_vecs[3:], axis=-1),
-                tf.norm(all_curr_vecs[4:], axis=-1),
-                tf.norm(all_curr_vecs[5:], axis=-1),
-                tf.norm(all_curr_vecs[6:], axis=-1),
-                tf.norm(all_curr_vecs[7:], axis=-1)
-            ]
-        )
+        # Build non_vel_mags using concat for graph compatibility
+        acc_mag = tf.norm(accs_2D, axis=-1, keepdims=True)  # Shape: (n_ins, 1)
+        other_mags = tf.norm(all_curr_vecs[2:], axis=-1)    # Shape: (6, n_ins)
+        non_vel_mags = tf.concat([tf.transpose(acc_mag), other_mags], axis=0)  # Shape: (7, n_ins)
 
         # We'll now copy in the magnitudes calculated during the orthonormal
         # frame calculations.
@@ -484,20 +479,15 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # none: projecting jerk onto velocity is different from vice versa.
         # However, we have the diagonal separated out already, so we can
         # exclude that.
-        acc_vel_proj = tf.identity(a_proj_v)
         acc_vel_proj = tf.where(
-            vel_mag_is_0, tf.zeros_like(acc_vel_proj), acc_vel_proj
+            vel_mag_is_0, tf.zeros_like(a_proj_v), a_proj_v
         )
         acc_vel_proj = acc_vel_proj[tf.newaxis]
         other_projs_on_vel = tf.math.divide_no_nan(tri_dots[1:, 0], vel_mags)
 
 
-        CIND = 4 # Crackle's index
-        # We don't divide by crackle's mag because it's not used as a relative
-        # axis.
-        non_crackles = [i for i in range(1, self._n_vec_kinds) if i != CIND]
         non_vel_projs = []
-        for i in non_crackles:
+        for i in self._non_crackles:
             prev_i = i - 1
             mag_i = non_vel_mags[prev_i]
             non_vel_projs.append(tf.math.divide_no_nan(
@@ -534,20 +524,6 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Note: fill_triangular_inverse is not available in TensorFlow
         # This would need to be replaced with equivalent logic or imported from tfp
 
-        ret = tf.concat(
-            (
-                tf.fill((1, n_ins), self.step),
-                tf.reshape(all_dots_with_prev, [-1, n_ins]),
-                tf.reshape(all_proj_with_prev, [-1, n_ins]),
-                tf.reshape(vel_mags, [1, n_ins]),
-                non_vel_mags,
-                # tri_dots[tri_inds],  # This would need to be handled
-                *vel_projs,
-                *non_vel_projs,
-                a_proj_with_curr_rel,
-                tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins])
-            ), axis=0
-        )
         # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
         # Note: The permutation logic would need to be implemented
