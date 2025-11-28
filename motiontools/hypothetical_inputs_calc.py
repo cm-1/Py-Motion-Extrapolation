@@ -179,9 +179,9 @@ class HypotheticalInputsForNN:
         a0_is_0 = np.asarray(prev_ortho_mags[2] == 0.0)
         if np.any(a0_is_0):
             _, j_orth = pm.parallelAndOrthoParts(
-                prev_jerk[a0_is_0], prev_ortho_dirs[0][a0_is_0], True
+                prev_jerk[a0_is_0], prev_ortho_dirs[..., 0][a0_is_0], True
             )
-            prev_ortho_dirs[..., 2, :][a0_is_0] = pm.normalizeAll(j_orth[a0_is_0])
+            prev_ortho_dirs[..., 2][a0_is_0] = pm.normalizeAll(j_orth[a0_is_0])
 
         # print("hyp pre:", prev_ortho_dirs)
 
@@ -323,13 +323,15 @@ class HypotheticalInputsForNN:
             prev_i = i - 1
             mag_i = non_vel_mags[prev_i]
             mag_i_nonzero = non_vel_mags_nonzero[prev_i]
-            non_vel_projs.append(pm.safeDivideElseZero(
+            proj_val = pm.safeDivideElseZero(
                 tri_dots[prev_i, :i], mag_i, mag_i_nonzero
-            ))
+            )
+            non_vel_projs.append(proj_val)
             if i < n_other_vec_kinds:
-                non_vel_projs.append(pm.safeDivideElseZero(
+                proj_val_h = pm.safeDivideElseZero(
                     tri_dots[i:, i], mag_i, mag_i_nonzero
-                ))
+                )
+                non_vel_projs.append(proj_val_h)
         
         a_proj_with_curr_rel = (
             a_ortho_v, #curr_ortho_mags[4], curr_ortho_mags[5]
