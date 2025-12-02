@@ -1,0 +1,171 @@
+# %%
+import typing
+
+import numpy as np
+from numpy.typing import NDArray
+
+import tensorflow as tf
+import keras
+
+# tf.config.run_functions_eagerly(True) 
+
+from gtCommon import PoseLoaderBCOT
+
+from data_by_combo_functions import rnnDataWindows
+
+from motiontools.dataorg import UnitAwareScaler
+
+from nn_utilities.nn_loading import loadLatestModels
+
+
+CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
+CUSTOM_LAYER_SKIP = 2          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+
+# Custom Layer Mode: Attach preprocessing layer to model
+print("\n" + "="*60)
+print("CUSTOM LAYER MODE ACTIVATED")
+print("="*60)
+
+from nn_utilities.nn_inference import PointsToInputsConstStep
+import pickle
+
+# Get train/test IDs
+train_ids, test_ids = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
+train_ids = sorted(PoseLoaderBCOT.prepIDsForConstructor(train_ids))
+test_ids = sorted(PoseLoaderBCOT.prepIDsForConstructor(test_ids))
+
+print(f"Loading test pose windows...")
+print(f"  Window size: {CUSTOM_LAYER_WINDOW_SIZE}")
+print(f"  Skip: {CUSTOM_LAYER_SKIP}")
+
+all_poses: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+# all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+# all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+custom_step = CUSTOM_LAYER_SKIP + 1
+for combo in train_ids + test_ids:
+    calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
+    curr_translations = calculator.getTranslationsGTNP()[::custom_step]
+    curr_rotations = calculator.getRotationsGTNP()[::custom_step]
+    curr_poses = np.concatenate(
+        (curr_translations, curr_rotations), axis=-1
+    )
+    # TODO: Better-comment this part, maybe make a switch to turn it on/off,
+    # etc.
+    curr_poses = np.pad(curr_poses, ((2, 0), (0, 0)), mode="edge")
+
+    all_poses[combo[:2]] = curr_poses
+
+test_windows, test_gt_pts = rnnDataWindows(
+    all_poses, test_ids, CUSTOM_LAYER_WINDOW_SIZE, skip=0
+)
+print("Test shape:", test_windows.shape)
+
+# Load scaler to get ref_keys
+loaded_scaler: UnitAwareScaler
+with open("./results/models/scaler.pickle", "rb") as f:
+    loaded_scaler = pickle.load(f)
+ref_keys = loaded_scaler.column_keys
+
+
+
+print(f"Shape: {test_windows.shape}")
+
+# Create custom layer
+custom_layer = PointsToInputsConstStep(
+    step=custom_step,
+    scale_means=loaded_scaler.mean_, scale_scales=loaded_scaler.scale_,
+    ref_keys=ref_keys,
+    zero_angle_thresh=0.01
+)
+
+print(f"Creating combined model with custom layer...")
+
+# Build new model: Input -> Custom Layer -> Original Model -> Output
+window_input = keras.layers.Input(
+    shape=test_windows.shape[1:],
+    name='pose_window_input', dtype=tf.float32
+)
+
+# Apply custom preprocessing layer
+features = custom_layer(window_input)
+# %%
+model_key = "JAV_MULTIPLIERS"
+bcs_model = loadLatestModels((model_key, ))[model_key]
+
+# Apply loaded model
+predictions = bcs_model(features[0])
+
+# Create combined model
+combined_model = keras.Model(
+    inputs=window_input,
+    outputs=predictions,
+    name='model_with_preprocessing'
+)
+
+print("Combined model architecture:")
+combined_model.summary()
+print("="*60)
+print("Custom layer setup complete")
+print("="*60 + "\n")
+
+# %%
+# Define the getVelFrameDisplacements function as a TensorFlow operation
+def getVelFrameDisplacements(y_true, y_pred):
+
+
+    # y_pred2 = y_pred + y_true[:, 9:15]
+    # Calculating the local displacement is the same as custom tf loss function.
+    disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
+        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
+        + y_true[:, 9] * y_pred[:, 9]
+    disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
+        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
+    disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
+        + y_true[:, 11] * y_pred[:, 11]
+
+    return tf.stack((disp_0, disp_1, disp_2), axis=-1)
+
+# Define the getWorldFrameDisplacements function as a TensorFlow operation
+def getWorldFrameDisplacements(y_true, y_pred, world2locals):
+    disp = getVelFrameDisplacements(y_true, y_pred)
+    # Convert local displacement into world displacement.
+    local2worlds = tf.transpose(world2locals, perm=[0, 2, 1])
+    return tf.einsum('bij,bj->bi', local2worlds, disp)
+
+# Create a new layer that wraps getWorldFrameDisplacements
+class WorldFrameDisplacementsLayer(keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super(WorldFrameDisplacementsLayer, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        y_true = tf.cast(inputs[0], tf.float32)
+        y_pred = tf.cast(inputs[1], tf.float32)
+        world2locals = tf.cast(inputs[2], tf.float32)
+        return getWorldFrameDisplacements(y_true, y_pred, world2locals)
+
+# Append the new layer to the combined model
+world_frame_displacements_layer = WorldFrameDisplacementsLayer()
+combined_model_output = combined_model.output
+world_frame_displacements_output = world_frame_displacements_layer([features[1], combined_model_output, features[2]])
+
+# Create the final model
+final_model = keras.Model(
+    inputs=combined_model.input,
+    outputs=[world_frame_displacements_output, features[0], features[1], features[2], combined_model_output], 
+    name='final_model_with_world_frame_displacements'
+)
+
+print("Final model architecture:")
+final_model.summary()
+print("="*60)
+print("Final model setup complete")
+print("="*60 + "\n")
+
+test_out = final_model.predict(test_windows)
+out_pts = test_out[0]
+#%%
+test_gt = test_gt_pts[:, :3] - test_windows[:, -1, :3]
+test_errs = out_pts - test_gt[:, :3]
+
+test_score = np.mean(np.linalg.norm(test_errs, axis=-1))
+print("Test score:", test_score)

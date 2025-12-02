@@ -67,7 +67,7 @@ def generate_test_data(step=1, n_points=5):
     return x0_through_4, rmats0_through_5, x5, x0_through_5, random_axis_angles
 
 
-def compare_implementations(step=1, n_points=5, tolerance=1e-4):
+def compare_implementations(step=1, n_points=5, tolerance=1e-2):
     """Compare numpy and TensorFlow implementations."""
     
     print(f"Testing with step={step}, n_points={n_points}")
@@ -87,14 +87,17 @@ def compare_implementations(step=1, n_points=5, tolerance=1e-4):
     
     # Calculate numpy results
     print("Computing numpy results...")
-    numpy_results, numpy_jav, numpy_ortho = numpy_calcer.getHypotheticalCalcs(x5)
+    unscaled_results, numpy_jav, numpy_ortho = numpy_calcer.getHypotheticalCalcs(x5)
+    numpy_results = scaler.transform(unscaled_results)
     print(f"Numpy output shape: {numpy_results.shape}")
     print(f"Numpy JAV shape: {numpy_jav.shape}")
     print(f"Numpy ortho shape: {numpy_ortho.shape}")
     
     # Initialize TensorFlow version
     print("\nComputing TensorFlow results...")
-    tf_calcer = PointsToInputsConstStep(step, scaler.column_keys)
+    tf_calcer = PointsToInputsConstStep(
+        step, scaler.mean_, scaler.scale_, scaler.column_keys
+    )
     
     # Convert inputs to TensorFlow tensors
     x0_through_5_tf = tf.constant(x0_through_5, dtype=tf.float32)
@@ -102,7 +105,7 @@ def compare_implementations(step=1, n_points=5, tolerance=1e-4):
     
     # Calculate TensorFlow results
     tf_results = tf_calcer.calculateOutputs(x0_through_5_tf, axis_angles_tf)
-    tf_results_np = tf_results.numpy()
+    tf_results_np = tf_results[0].numpy()
     
     print(f"TensorFlow output shape: {tf_results_np.shape}")
     

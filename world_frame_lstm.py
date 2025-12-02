@@ -30,6 +30,8 @@ combos = PoseLoaderBCOT.getAllIDs()
 
 print("Getting train-test split.")
 train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
+train_combos = PoseLoaderBCOT.prepIDsForConstructor(train_combos)
+test_combos = PoseLoaderBCOT.prepIDsForConstructor(test_combos)
 
 #%%
 ################################################################################

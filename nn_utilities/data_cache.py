@@ -11,6 +11,7 @@ import hashlib
 import json
 import typing
 from pathlib import Path
+import enum
 
 import numpy as np
 from numpy.typing import NDArray, ArrayLike
@@ -18,12 +19,23 @@ from numpy.typing import NDArray, ArrayLike
 from datatools.data_splitting import DataSubsetKind
 from nn_utilities.nn_modes import OutVecMode
 
-GT_STORAGE_KEY = "gt_for_outvecmode"
 CACHE_DATA_LOCATION = "generated_data"
-POS_SCALE_KEY = "pos_scale"
-ROT_SCALE_KEY = "rot_scale"
-VALIDATION_START_IND_KEY = "validation_start_ind"
-TEST_START_IND_KEY = "test_start_ind"
+
+class CacheKeys(enum.Enum):
+    PREV_VEL_AX_KEY = "prev_vel_axes"
+    PREV_ANG_KEY = "prev_vel_angs"
+    GT_ROT_VELS_KEY = "gt_rot_vels"
+
+    W2L_MATS_KEY = "w2l_mats"
+
+    EXTRA_ROT_ALIGN_COLS_KEY = "_extra_rot_align_cols"
+    EXTRA_NO_ROT_ALIGN_COLS_KEY = "_extra_no_rot_align_cols"
+
+    GT_STORAGE_KEY = "gt_for_outvecmode"
+    POS_SCALE_KEY = "pos_scale"
+    ROT_SCALE_KEY = "rot_scale"
+    VALIDATION_START_IND_KEY = "validation_start_ind"
+    TEST_START_IND_KEY = "test_start_ind"
 
 
 def gen_cache_key(
@@ -111,11 +123,11 @@ def save_cached_data(
     merged_data: typing.Dict[str, ArrayLike] = {
         **data_to_cache, **{mode.name: arr for mode, arr in gt_to_cache.items()}
     }
-    merged_data[VALIDATION_START_IND_KEY] = validation_start_ind
-    merged_data[TEST_START_IND_KEY] = test_start_ind
+    merged_data[CacheKeys.VALIDATION_START_IND_KEY] = validation_start_ind
+    merged_data[CacheKeys.TEST_START_IND_KEY] = test_start_ind
 
-    merged_data[POS_SCALE_KEY] = np.asarray(pos_scale)
-    merged_data[ROT_SCALE_KEY] = np.asarray(rot_scale)
+    merged_data[CacheKeys.POS_SCALE_KEY] = np.asarray(pos_scale)
+    merged_data[CacheKeys.ROT_SCALE_KEY] = np.asarray(rot_scale)
 
     np.savez_compressed(filepath, allow_pickle=False, **merged_data)
     print(f"Cached data saved to {filepath}")
@@ -148,8 +160,8 @@ def load_cached_data(
         # Load the compressed data
         data = np.load(filepath, allow_pickle=False)
 
-        load_pos_scale = data[POS_SCALE_KEY]
-        load_rot_scale = data[ROT_SCALE_KEY]
+        load_pos_scale = data[CacheKeys.POS_SCALE_KEY]
+        load_rot_scale = data[CacheKeys.ROT_SCALE_KEY]
         scales_close = np.allclose(
             [pos_scale, rot_scale], [load_pos_scale, load_rot_scale]
         )
@@ -158,9 +170,9 @@ def load_cached_data(
         
         load_res: typing.Dict[str, typing.Dict[DataSubsetKind, NDArray]] = {}
         for key in data.keys():
-            if key in (POS_SCALE_KEY, ROT_SCALE_KEY):
+            if key in (CacheKeys.POS_SCALE_KEY, CacheKeys.ROT_SCALE_KEY):
                 continue
-            if key.startswith(GT_STORAGE_KEY):
+            if key.startswith(CacheKeys.GT_STORAGE_KEY):
                 continue
 
             # Split on last underscore to separate base name from subset kind

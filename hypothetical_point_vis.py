@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 
 from datatools.data_splitting import DataSubsetKind
 
-from motiontools.posefeatures import HypotheticalInputsForNN
+from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 
 from motiontools.dataorg import UnitAwareScaler, joinArrays
 from motiontools.shared_constants import *

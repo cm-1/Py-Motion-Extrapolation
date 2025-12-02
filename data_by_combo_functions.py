@@ -49,7 +49,7 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
         ), RuntimeWarning)
 
     for combo in combo_subset:
-        combo_data = data[combo[:2]][::step]
+        combo_data = data[combo][::step]
         if scaler is not None:
             scaler.transform(combo_data)
         w2l_data = None

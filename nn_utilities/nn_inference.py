@@ -182,7 +182,7 @@ def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor)
     return relative_axis_angles[0] * relative_axis_angles[1]
 
 def _get_JAV_muls(step: typing.Union[int, float]):
-        _jav_muls = tf.Variable(tf.zeros((4, 3)))
+        _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.float32))
         # Jerk through crackle each have 3 components we must multiply by a
         # respective power of the step assuming it's also the next "delta T".
         range_rs = tf.cast(tf.reshape(tf.range(3, 6), (3, 1)), tf.float32)
@@ -278,12 +278,15 @@ class DerivativeCollectionWithTimestampsTF:
 
 class PointsToInputsConstStep(keras.layers.Layer):
     def __init__(self, step: typing.Union[int, float],
+                 scale_means: NDArray, scale_scales: NDArray,
                  ref_keys: typing.List,
                  zero_angle_thresh: float = DEFAULT_ZERO_ANG_THRESH, **kwargs):
         super(PointsToInputsConstStep, self).__init__(**kwargs)
 
         self.step = step
         self.zero_angle_thresh = zero_angle_thresh
+        self.scale_means = tf.constant(scale_means.astype(np.float32))
+        self.scale_scales = tf.constant(scale_scales.astype(np.float32))
         self.ref_keys = ref_keys
 
         # 8: vecs, accs, jerks, snaps, crackles, rot vel, rot acc, rot jerk
@@ -333,13 +336,14 @@ class PointsToInputsConstStep(keras.layers.Layer):
     @tf.function
     def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
+        scaled_disps = keras.ops.diff(x0_through_5, 1, axis=0)
         all_pds = DerivativeCollectionConstTimeTF(
-            typing.cast(tf.Tensor, keras.ops.diff(x0_through_5, 1, axis=0)), 5,
-            self.step
+            typing.cast(tf.Tensor, scaled_disps), 5, self.step
         )
         
+        scaled_aas = aa0_through_5 #/ self.rot_scale
         angvel_aas = compute_relative_rotations(
-            aa0_through_5[:-1], aa0_through_5[1:]
+            scaled_aas[:-1], scaled_aas[1:]
         )
 
         all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
@@ -400,6 +404,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
             
             # Build indices for scatter: we need to update ortho_dirs[i, 2, :] for each i in indices
             # Cast to match indices dtype (int64 from tf.where)
+            # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
             scatter_indices = tf.concat([
                 indices,
                 tf.cast(tf.fill([tf.shape(indices)[0], 1], 2), indices.dtype)
@@ -458,7 +463,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         )
 
         tf.debugging.assert_equal(
-            self._n_vec_kinds, len(all_curr_vecs),
+            self._n_vec_kinds, all_curr_vecs.shape[0],
             "Hardcoded value for self._n_vec_kinds no longer correct!"
         )
 
@@ -489,11 +494,9 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # We have 8 non-unit vec3s (vel..crackle and rot vel..jerk), but we'll 
         # handle the unit-length orthogonal relative axes separately, so our
         # dimensions will be 7x7x...
-        n_ins = x0_through_5.shape[1]
+        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
+        n_ins = tf.shape(x0_through_5)[1]
         
-        tri_dots = tf.zeros((
-            self._n_other_vec_kinds, self._n_other_vec_kinds, n_ins
-        ))
 
         accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
         
@@ -516,7 +519,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         row_0_val = tf.reshape(vel_mags, [-1]) * a_proj_v  # Shape: (n_ins,)
         row_0 = tf.concat([
             row_0_val[tf.newaxis, :],  # Element [0,0]
-            tf.zeros((self._n_other_vec_kinds - 1, n_ins))  # Rest are zeros
+            tf.zeros((self._n_other_vec_kinds - 1, n_ins), dtype=tf.float32)  # Rest are zeros
         ], axis=0)
         tri_dots_rows = tri_dots_rows.write(0, row_0)
         
@@ -527,7 +530,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
             # Pad with zeros for the rest of the row
             row_i = tf.concat([
                 dots_i,  # Shape: (i, n_ins)
-                tf.zeros((self._n_other_vec_kinds - i, n_ins))
+                tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
             ], axis=0)
             tri_dots_rows = tri_dots_rows.write(i - 1, row_i)
         
@@ -598,32 +601,29 @@ class PointsToInputsConstStep(keras.layers.Layer):
         ))
         
         # Apply column permutation to match the reference key order
-        ret = tf.gather(ret, self.to_nn_permut, axis=1)
-        
-        return ret
-        # Note: fill_triangular_inverse is not available in TensorFlow
-        # This would need to be replaced with equivalent logic or imported from tfp
+        ret = tf.gather(ret, self.to_nn_permut, axis=1)            
+
+        ret = (ret - self.scale_means) / self.scale_scales
 
         # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
-        # Note: The permutation logic would need to be implemented
+        jsc_on_vel = tf.reshape(other_projs_on_vel[:3], [3, 1, -1]) # Jerk, Snap, Crackle are first 3, then comes the rotation stuff.
+        jsc_on_aj = remaining_proj_with_curr_rel[:3]
+        #(shape (3, 1, n) and (3, 2, n), respectively)
 
+        jsc_on_all = tf.concat((jsc_on_vel, jsc_on_aj), axis=1) # (3, 3, n)
+        jsc_on_all_t = tf.transpose(jsc_on_all, [2, 0, 1])
 
-        # Now, we'll calculate the JAV values that get used by the loss func.
-        # These are NOT required in the NN's initial input layer!
-        other_frame_proj_zip = zip(
-            other_projs_on_vel[:3], remaining_proj_with_curr_rel[:3]
-        )
-        other_frame_proj_tups = [(a, b, c) for a, (b, c) in other_frame_proj_zip]
-        other_frame_projs = [a for tup in other_frame_proj_tups for a in tup]
+        # Build the 12-component JAV vector plus 3 zeros
+        zeros_3 = tf.zeros((n_ins, 3), dtype=tf.float32)
+        jav_15 = tf.concat((
+            tf.reshape(vel_mags, [n_ins, 1]),    # velocity magnitude
+            tf.reshape(a_proj_v, [n_ins, 1]),    # acceleration parallel
+            tf.reshape(a_ortho_v, [n_ins, 1]),   # acceleration orthogonal
+            tf.reshape(jsc_on_all_t, [n_ins, 9]),
+            zeros_3
+        ), axis=1)
         
-        zeros_3d = tf.zeros((3, n_ins))
-        jav_tup = (
-            tf.reshape(vel_mags, [-1]), a_proj_v, a_ortho_v, *other_frame_projs,
-            *zeros_3d
-        )
-        jav_stack = tf.stack(jav_tup, axis=-1)
-
         # TODO: The way I handle non-1 timesteps in my other JAV calculations
         # right now is kinda messy. I basically pre-multiply the acceleration,
         # velocity, etc. by delta T, (delta T)^2, etc. so that the loss function
@@ -636,10 +636,46 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # ---
         # Because of the above, here I need to do said JAV multiplications.
         if self.step != 1:
-            jav_stack[..., :12] *= self._jav_muls
+            # Multiply the first 12 components by the appropriate power of step
+            jav_first_12 = jav_15[:, :12] * self._jav_muls #[tf.newaxis, :]
+            jav_15 = tf.concat((jav_first_12, zeros_3), axis=1)
 
-
-        return ret, jav_stack, 
+        return ret, jav_15, curr_ortho_mats 
+    
+    @tf.function
+    def call(self, inputs):
+        """Keras layer call method for computing features from raw pose sequences.
+        
+        Args:
+            inputs: Tensor of shape (batch_size, n_frames, 6) where last dimension
+                   is [x, y, z, aa_x, aa_y, aa_z] for each frame.
+        
+        Returns:
+            Tensor of shape (batch_size, n_features) containing computed features.
+        """
+        inputs_swapax = tf.transpose(inputs, [1, 0, 2])
+        # Split inputs into positions and axis-angles
+        positions = inputs_swapax[..., :3]    # Shape: (batch_size, n_frames, 3)
+        axis_angles = inputs_swapax[..., 3:]  # Shape: (batch_size, n_frames, 3)
+        
+        # # Process each batch item separately using map_fn
+        # def process_single_window(single_input):
+        #     pos = single_input[0]   # Shape: (n_frames, 3)
+        #     aa = single_input[1]    # Shape: (n_frames, 3)
+            
+        #     # calculateOutputs returns (features, jav_stack, curr_ortho_mats)
+        #     # We only need features for the neural network input
+        #     features, _, _ = self.calculateOutputs(pos, aa)
+        #     return features
+        
+        # # Apply to all batch items
+        # batch_features = tf.map_fn(
+        #     process_single_window,
+        #     (positions, axis_angles),
+        #     dtype=tf.float32
+        # )
+        
+        return self.calculateOutputs(positions, axis_angles)
     
 
 '''
