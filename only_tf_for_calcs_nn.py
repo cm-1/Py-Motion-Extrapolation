@@ -58,7 +58,11 @@ for combo in train_ids + test_ids:
 test_windows, test_gt_pts = rnnDataWindows(
     all_poses, test_ids, CUSTOM_LAYER_WINDOW_SIZE, skip=0
 )
+test_windows_flatter = test_windows.reshape(
+    test_windows.shape[0], CUSTOM_LAYER_WINDOW_SIZE * 6
+)
 print("Test shape:", test_windows.shape)
+print("Test reshape:", test_windows_flatter.shape)
 
 # Load scaler to get ref_keys
 loaded_scaler: UnitAwareScaler
@@ -67,8 +71,6 @@ with open("./results/models/scaler.pickle", "rb") as f:
 ref_keys = loaded_scaler.column_keys
 
 
-
-print(f"Shape: {test_windows.shape}")
 
 # Create custom layer
 custom_layer = PointsToInputsConstStep(
@@ -82,7 +84,7 @@ print(f"Creating combined model with custom layer...")
 
 # Build new model: Input -> Custom Layer -> Original Model -> Output
 window_input = keras.layers.Input(
-    shape=test_windows.shape[1:],
+    shape=test_windows_flatter.shape[1:],
     name='pose_window_input', dtype=tf.float32
 )
 
@@ -161,7 +163,7 @@ print("="*60)
 print("Final model setup complete")
 print("="*60 + "\n")
 
-test_out = final_model.predict(test_windows)
+test_out = final_model.predict(test_windows_flatter)
 out_pts = test_out[0]
 #%%
 test_gt = test_gt_pts[:, :3] - test_windows[:, -1, :3]

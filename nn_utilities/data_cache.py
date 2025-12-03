@@ -28,6 +28,8 @@ class CacheKeys(enum.Enum):
 
     W2L_MATS_KEY = "w2l_mats"
 
+    JAV_12 = "jav_12_vals"
+
     EXTRA_ROT_ALIGN_COLS_KEY = "_extra_rot_align_cols"
     EXTRA_NO_ROT_ALIGN_COLS_KEY = "_extra_no_rot_align_cols"
 

@@ -647,13 +647,15 @@ class PointsToInputsConstStep(keras.layers.Layer):
         """Keras layer call method for computing features from raw pose sequences.
         
         Args:
-            inputs: Tensor of shape (batch_size, n_frames, 6) where last dimension
+            inputs: Tensor of shape (batch_size, n_frames*6) where last dimension
                    is [x, y, z, aa_x, aa_y, aa_z] for each frame.
         
         Returns:
             Tensor of shape (batch_size, n_features) containing computed features.
         """
-        inputs_swapax = tf.transpose(inputs, [1, 0, 2])
+        input_shape = tf.shape(inputs)
+        inputs_rs = tf.reshape(inputs, [input_shape[0], 6, 6])
+        inputs_swapax = tf.transpose(inputs_rs, [1, 0, 2])
         # Split inputs into positions and axis-angles
         positions = inputs_swapax[..., :3]    # Shape: (batch_size, n_frames, 3)
         axis_angles = inputs_swapax[..., 3:]  # Shape: (batch_size, n_frames, 3)
