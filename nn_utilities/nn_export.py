@@ -41,6 +41,8 @@ class ModelExportWrapper(tf.Module):
     def save_jacobian(self, fname):
         self.save_func(self.jacobian, fname)
 
+    def save_as_savedmodel(self, fname):
+        tf.saved_model.save(self.model, fname)
 
 # The below, if I were to try using it again, may require wrapt version <1.15.
 # See: https://github.com/tensorflow/tensorflow/issues/59869#issuecomment-1452785730

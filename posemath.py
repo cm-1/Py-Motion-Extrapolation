@@ -1456,3 +1456,20 @@ def cross2D(vecs0, vecs1):
     y1 = vecs1[..., 1]
 
     return (x0 * y1) - (x1 * y0)
+
+# TODO: Move this to another file.
+def poseLossAngle(y_true, y_pred):
+    # 2acos(abs([cos||x/2|| cos||y/2|| + <x>*<y> sin||x/2|| sin||y/2||))
+    ang_true = np.linalg.norm(y_true, axis=-1) + 0.00000001
+    ang_pred = np.linalg.norm(y_pred, axis=-1) + 0.00000001
+    half_ang_true = ang_true / 2
+    half_ang_pred = ang_pred / 2
+    cos_true = np.cos(half_ang_true)
+    cos_pred = np.cos(half_ang_pred)
+    sin_true = np.sin(half_ang_true)
+    sin_pred = np.sin(half_ang_pred)
+    vec3_dots = einsumDot(y_true, y_pred)
+    unit_vec3_dots = vec3_dots / (ang_true * ang_pred)
+    quat_dots = cos_true * cos_pred + unit_vec3_dots * sin_true * sin_pred
+    quat_dots_1 = np.abs(np.clip(quat_dots, -1, 1))
+    return 2 * np.arccos(quat_dots_1) #tf.convert_to_tensor(...)

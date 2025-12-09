@@ -1,5 +1,6 @@
 # %%
 import typing
+import pickle
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,23 +12,26 @@ import keras
 
 from gtCommon import PoseLoaderBCOT
 
+import posemath as pm
+
 from data_by_combo_functions import rnnDataWindows
 
 from motiontools.dataorg import UnitAwareScaler
 
+from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
+
 from nn_utilities.nn_loading import loadLatestModels
 
+from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
-CUSTOM_LAYER_SKIP = 2          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+CUSTOM_LAYER_SKIP = 0          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
 
 # Custom Layer Mode: Attach preprocessing layer to model
 print("\n" + "="*60)
 print("CUSTOM LAYER MODE ACTIVATED")
 print("="*60)
 
-from nn_utilities.nn_inference import PointsToInputsConstStep
-import pickle
 
 # Get train/test IDs
 train_ids, test_ids = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
@@ -69,6 +73,9 @@ loaded_scaler: UnitAwareScaler
 with open("./results/models/scaler.pickle", "rb") as f:
     loaded_scaler = pickle.load(f)
 ref_keys = loaded_scaler.column_keys
+# Get the column permutation using the static method from HypotheticalInputsForNN
+_orig_key_order = HypotheticalInputsForNN._generated_key_order()
+permutation_np = np.asarray([_orig_key_order.index(k) for k in ref_keys])
 
 
 
@@ -76,7 +83,7 @@ ref_keys = loaded_scaler.column_keys
 custom_layer = PointsToInputsConstStep(
     step=custom_step,
     scale_means=loaded_scaler.mean_, scale_scales=loaded_scaler.scale_,
-    ref_keys=ref_keys,
+    to_nn_permut=permutation_np,
     zero_angle_thresh=0.01
 )
 
@@ -140,20 +147,33 @@ class WorldFrameDisplacementsLayer(keras.layers.Layer):
         super(WorldFrameDisplacementsLayer, self).__init__(**kwargs)
 
     def call(self, inputs):
-        y_true = tf.cast(inputs[0], tf.float32)
-        y_pred = tf.cast(inputs[1], tf.float32)
-        world2locals = tf.cast(inputs[2], tf.float32)
-        return getWorldFrameDisplacements(y_true, y_pred, world2locals)
+        y_true = inputs[0] #tf.cast(inputs[0], tf.float32)
+        y_pred = inputs[1] #tf.cast(inputs[1], tf.float32)
+        world2locals = inputs[2] #tf.cast(inputs[2], tf.float32)
+        orig_inputs = tf.reshape(inputs[3], [-1, 6, 6])
+        
+        orig_aas_0 = orig_inputs[:, -2, 3:]
+        orig_aas_1 = orig_inputs[:, -1, 3:]
+        orig_pos = orig_inputs[:, -1, :3]
+
+        disp = getWorldFrameDisplacements(y_true, y_pred, world2locals)
+        ret_pos = orig_pos + disp
+        ret_aas = ang_vel_extrapolate(orig_aas_0, orig_aas_1)
+        return tf.concat((ret_pos, ret_aas), axis=-1) 
 
 # Append the new layer to the combined model
 world_frame_displacements_layer = WorldFrameDisplacementsLayer()
 combined_model_output = combined_model.output
-world_frame_displacements_output = world_frame_displacements_layer([features[1], combined_model_output, features[2]])
+world_frame_displacements_output = world_frame_displacements_layer(
+    [features[1], combined_model_output, features[2], window_input]
+)
+
+
 
 # Create the final model
 final_model = keras.Model(
     inputs=combined_model.input,
-    outputs=[world_frame_displacements_output, features[0], features[1], features[2], combined_model_output], 
+    outputs=world_frame_displacements_output, #features[0], features[1], features[2], combined_model_output], 
     name='final_model_with_world_frame_displacements'
 )
 
@@ -164,10 +184,31 @@ print("Final model setup complete")
 print("="*60 + "\n")
 
 test_out = final_model.predict(test_windows_flatter)
-out_pts = test_out[0]
+out_pts = test_out[..., :3]
+out_aas = test_out[..., 3:]
 #%%
-test_gt = test_gt_pts[:, :3] - test_windows[:, -1, :3]
-test_errs = out_pts - test_gt[:, :3]
+test_errs = out_pts - test_gt_pts[:, :3]
 
 test_score = np.mean(np.linalg.norm(test_errs, axis=-1))
-print("Test score:", test_score)
+print("Translation test score:", test_score)
+
+# %%
+test_aa_errs = pm.poseLossAngle(test_gt_pts[:, 3:], out_aas)
+print("AA test score:", np.mean(test_aa_errs))
+
+# %%
+import datetime
+model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
+    "state_transition", datetime.datetime.now()
+)
+final_model.save(model_name)
+
+# %%
+from nn_utilities.nn_export import ModelExportWrapper
+wrapper = ModelExportWrapper(final_model)
+
+wrapper.save_as_savedmodel()#"D:\\forward_model.pb")
+# wrapper.save_jacobian("D:\\jacobian_model.pb")
+
+# %%
+print(final_model.predict(np.arange(36).reshape(1, 36).astype(np.float32)))

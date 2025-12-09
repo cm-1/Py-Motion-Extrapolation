@@ -111,6 +111,14 @@ def tfParallelAndOrthoParts(vectors: tf.Tensor, dirs: tf.Tensor, dirs_already_no
     orthos = vectors - parallels
     return (parallels, orthos)
 
+def tfCross(x: tf.Tensor, y:tf.Tensor):
+    # i,  j,  k
+    # x0, x1, x2
+    # y0, y1, y2
+    z0 = x[..., 1] * y[..., 2] - y[..., 1] * x[..., 2]
+    z1 = x[..., 2] * y[..., 0] - y[..., 2] * x[..., 0]
+    z2 = x[..., 0] * y[..., 1] - y[..., 0] * x[..., 1]
+    return tf.stack((z0, z1, z2), axis=-1)
 
 def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
                                      unit_vecs0: tf.Tensor, vecs1: tf.Tensor,
@@ -133,7 +141,7 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
     ret_mags = (mags_p1, mags_o1)
 
     # Compute the third orthogonal vector
-    unit_vecs2 = tf.linalg.cross(unit_vecs0, unit_vecs1)
+    unit_vecs2 = tfCross(unit_vecs0, unit_vecs1)
     
     stack_ax = -2 if returned_mats_are_world2vecs else -1
 
@@ -180,6 +188,49 @@ def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor)
 
     # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
     return relative_axis_angles[0] * relative_axis_angles[1]
+
+def ang_vel_extrapolate(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
+    """
+    Computes the relative axis-angle rotations between two sets of axis-angle
+    rotations using quaternions.
+
+    Args:
+        axis_angles1: A tensor of shape (n, 3) representing the first set
+                      of axis-angle rotations.
+        axis_angles2: A tensor of shape (n, 3) representing the second set
+                      of axis-angle rotations.
+
+    Returns:
+        A tensor of shape (n, 3) representing the relative axis-angle rotations.
+    """
+
+    angs1 = tf.norm(axis_angles1, axis=-1, keepdims=True)
+    angs2 = tf.norm(axis_angles2, axis=-1, keepdims=True)
+
+    units1 = tf.math.divide_no_nan(axis_angles1, angs1)
+    units2 = tf.math.divide_no_nan(axis_angles2, angs2)
+
+    # Convert axis angles to quaternions
+    quaternions1 = tfg_transformation.quaternion.from_axis_angle(units1, angs1)
+    quaternions2 = tfg_transformation.quaternion.from_axis_angle(units2, angs2)
+
+    # Compute the relative quaternion
+    relative_quaternions = tfg_transformation.quaternion.multiply(
+        quaternions2, tfg_transformation.quaternion.conjugate(quaternions1)
+    )
+
+    new_quaternions = tfg_transformation.quaternion.multiply(
+        relative_quaternions, quaternions2
+    )
+
+    # Convert the new quaternion back to axis angles
+    relative_axis_angles = tfg_transformation.axis_angle.from_quaternion(
+        new_quaternions
+    )
+
+    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
+    return relative_axis_angles[0] * relative_axis_angles[1]
+
 
 def _get_JAV_muls(step: typing.Union[int, float]):
         _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.float32))
@@ -276,10 +327,11 @@ class DerivativeCollectionWithTimestampsTF:
         ret_val = scalars * ret_val
         return ret_val
 
+@keras.saving.register_keras_serializable()
 class PointsToInputsConstStep(keras.layers.Layer):
     def __init__(self, step: typing.Union[int, float],
                  scale_means: NDArray, scale_scales: NDArray,
-                 ref_keys: typing.List,
+                 to_nn_permut: NDArray,
                  zero_angle_thresh: float = DEFAULT_ZERO_ANG_THRESH, **kwargs):
         super(PointsToInputsConstStep, self).__init__(**kwargs)
 
@@ -287,17 +339,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
         self.zero_angle_thresh = zero_angle_thresh
         self.scale_means = tf.constant(scale_means.astype(np.float32))
         self.scale_scales = tf.constant(scale_scales.astype(np.float32))
-        self.ref_keys = ref_keys
 
         # 8: vecs, accs, jerks, snaps, crackles, rot vel, rot acc, rot jerk
         self._n_vec_kinds = 8
         self._n_other_vec_kinds = self._n_vec_kinds - 1
         
-        # Get the column permutation using the static method from HypotheticalInputsForNN
-        self._orig_key_order = HypotheticalInputsForNN._generated_key_order()
-        permutation_np = np.asarray([self._orig_key_order.index(k) for k in self.ref_keys])
-        self.to_nn_permut = tf.constant(permutation_np, dtype=tf.int32)
-
+        self.to_nn_permut = tf.constant(to_nn_permut, dtype=tf.int32)
 
 
         # Pre-compute lower triangle indices in __init__ for efficiency
@@ -319,6 +366,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
         self._non_crackles = tf.constant([
             i for i in range(1, self._n_vec_kinds) if i != CIND
         ], dtype=tf.int32)
+        if len(self._non_crackles) != 6:
+            raise Exception(
+                "Hardcoded self._non_crackles length in non_vel_projs_flat no "
+                "longer correct!"
+            )
+
         
         # Calculate the size of non_vel_projs for fixed-size TensorArray
         # For each i in _non_crackles: we add 1 tensor, plus 1 more if i < _n_other_vec_kinds
@@ -327,6 +380,38 @@ class PointsToInputsConstStep(keras.layers.Layer):
             for i in range(1, self._n_vec_kinds) if i != CIND
         )
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "step": self.step,
+            "zero_angle_thresh": self.zero_angle_thresh,
+            "scale_means": self.scale_means.numpy().tolist(),
+            "scale_scales": self.scale_scales.numpy().tolist(),
+            "to_nn_permut": self.to_nn_permut.numpy().tolist(),
+        })
+        return config
+    
+    @classmethod
+    def from_config(cls, config, custom_objects=None):
+        tf.print("config:", config)
+        
+        # Extract parameters from the config
+        step = config["step"]
+        zero_angle_thresh = config["zero_angle_thresh"]
+        scale_means = config["scale_means"]
+        scale_scales = config["scale_scales"]
+        to_nn_permut = config["to_nn_permut"]
+        
+
+
+        # Create a new instance of the layer
+        return cls(
+            step=step,
+            scale_means=np.array(scale_means),
+            scale_scales=np.array(scale_scales),
+            to_nn_permut=np.array(to_nn_permut),
+            zero_angle_thresh=zero_angle_thresh,
+        )
     # The below function is basically a version of HypotheticalInputsForNN
     # but using tensorflow instead of numpy. Because I'm not very familiar with
     # tensorflow's API I experimented by letting Claude Code take a shot at it.
@@ -511,7 +596,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Build tri_dots row by row using TensorArray for graph compatibility
         tri_dots_rows = tf.TensorArray(
             dtype=tf.float32,
-            size=self._n_other_vec_kinds,
+            size=self._n_other_vec_kinds - 1,
+            dynamic_size=False,
             clear_after_read=False
         )
         
@@ -521,10 +607,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
             row_0_val[tf.newaxis, :],  # Element [0,0]
             tf.zeros((self._n_other_vec_kinds - 1, n_ins), dtype=tf.float32)  # Rest are zeros
         ], axis=0)
-        tri_dots_rows = tri_dots_rows.write(0, row_0)
         
+
         # Rows 1 through n_other_vec_kinds-1: compute dot products
-        for i in range(2, self._n_vec_kinds):
+        i = tf.constant(2)
+        lt_n_vec_kinds = lambda _i, _, _2: tf.less(_i, self._n_vec_kinds)
+        def loop_bod(i, all_curr_vecs, tri_dots_rows): #: _Try_Dot_Bod_Tup):
             # Compute tri_dots[i-1, :i] = dot products with all previous vectors
             dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
             # Pad with zeros for the rest of the row
@@ -532,10 +620,19 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 dots_i,  # Shape: (i, n_ins)
                 tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
             ], axis=0)
-            tri_dots_rows = tri_dots_rows.write(i - 1, row_i)
-        
+            
+            return i+1, all_curr_vecs, tri_dots_rows.write(i - 2, row_i)
+        # I'm trying to follow a working example:
+        #https://github.com/onnx/tensorflow-onnx/issues/1899
+        # 
+        i, all_curr_vecs, tri_dots_rows = tf.while_loop(
+            lt_n_vec_kinds, loop_bod, loop_vars=[i, all_curr_vecs, tri_dots_rows]
+        )
         # Stack all rows together
-        tri_dots = tri_dots_rows.stack()  # Shape: (n_other_vec_kinds, n_other_vec_kinds, n_ins)
+        tri_dot_stack = tri_dots_rows.stack()  # Shape: (n_other_vec_kinds, n_other_vec_kinds, n_ins)
+        tri_dots = tf.concat((tf.reshape(row_0, [1, 7, n_ins]), tri_dot_stack), axis=0) 
+
+
 
         # For the projections, we don't worry about "duplicates" since there are
         # none: projecting jerk onto velocity is different from vice versa.
@@ -552,30 +649,48 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         # Collect non_vel_projs by flattening each piece before storing
         # Since the final result needs to be concatenated anyway, we flatten to 1D first
-        non_vel_projs_arr = tf.TensorArray(
+        non_vel_projs = tf.TensorArray(
             dtype=tf.float32, 
-            size=self._non_vel_projs_size,
+            size=len(self._non_crackles),
+            dynamic_size=False,
             clear_after_read=False,
             infer_shape=False  # Don't infer shape from first element - allow varying lengths
         )
-        arr_idx = 0
         
-        for i in self._non_crackles:
+        lt_len_non_crack = lambda _i, _, _2: tf.less(_i, len(self._non_crackles))
+        def nvp_loop_bod(i_ind, arr_idx, non_vel_projs):
+            i = self._non_crackles[i_ind]
             prev_i = i - 1
             mag_i = non_vel_mags[prev_i]
             proj_val = tf.math.divide_no_nan(tri_dots[prev_i, :i], mag_i)
             # Flatten to 1D: shape (i, n_ins) -> (i * n_ins,)
-            non_vel_projs_arr = non_vel_projs_arr.write(arr_idx, tf.reshape(proj_val, [-1]))
-            arr_idx += 1
-            
+            proj_val_flat = tf.reshape(proj_val, [-1])
+        # def nvp_loop_bod2(i_ind, arr_idx, non_vel_projs2):
+            # i = self._non_crackles[i_ind]
+            # if i < self._n_other_vec_kinds:
+            towrite = proj_val_flat
             if i < self._n_other_vec_kinds:
                 proj_val_h = tf.math.divide_no_nan(tri_dots[i:, i], mag_i)
                 # Flatten to 1D: shape (n_other_vec_kinds - i, n_ins) -> ((n_other_vec_kinds - i) * n_ins,)
-                non_vel_projs_arr = non_vel_projs_arr.write(arr_idx, tf.reshape(proj_val_h, [-1]))
-                arr_idx += 1
+                proj_val_h_flat = tf.reshape(proj_val_h, [-1])
+                towrite = tf.concat((proj_val_flat, proj_val_h_flat), axis=0)
+            non_vel_projs = non_vel_projs.write(arr_idx, towrite)
+            return i_ind + 1, arr_idx + 1, non_vel_projs
+        i = tf.constant(0)
+        arr_idx = 0
+        i, arr_idx, non_vel_projs = tf.while_loop(lt_len_non_crack, nvp_loop_bod, [i, arr_idx, non_vel_projs])
         
+        non_vel_projs_flat = tf.concat((
+            non_vel_projs.read(0), #non_vel_projs2.read(0),
+            non_vel_projs.read(1), #non_vel_projs2.read(1),
+            non_vel_projs.read(2), #non_vel_projs2.read(2),
+            non_vel_projs.read(3), #non_vel_projs2.read(3),
+            non_vel_projs.read(4), #non_vel_projs2.read(4),
+            non_vel_projs.read(5) #, non_vel_projs2.read(5),
+            # non_vel_projs.read(6) #, non_vel_projs2.read(0),
+        ), axis=0)
         # Concatenate all flattened pieces into one 1D tensor, then reshape to (total_elements, n_ins)
-        non_vel_projs_flat = non_vel_projs_arr.concat()
+        # non_vel_projs_flat = non_vel_projs.concat()
         # The total number of rows across all pieces
         non_vel_projs_stacked = tf.reshape(non_vel_projs_flat, [-1, n_ins])
         
@@ -599,6 +714,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins])
             ), axis=0
         ))
+        # missing_zeros = tf.zeros((n_ins, 227))
+        # ret = tf.concat((ret, missing_zeros), axis=1)
         
         # Apply column permutation to match the reference key order
         ret = tf.gather(ret, self.to_nn_permut, axis=1)            

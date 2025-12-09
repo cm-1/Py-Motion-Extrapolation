@@ -76,21 +76,6 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 # we predict for the next timestamp.
 
 
-def poseLossAngle(y_true, y_pred):
-    # 2acos(abs([cos||x/2|| cos||y/2|| + <x>*<y> sin||x/2|| sin||y/2||))
-    ang_true = np.linalg.norm(y_true, axis=-1) + 0.00000001
-    ang_pred = np.linalg.norm(y_pred, axis=-1) + 0.00000001
-    half_ang_true = ang_true / 2
-    half_ang_pred = ang_pred / 2
-    cos_true = np.cos(half_ang_true)
-    cos_pred = np.cos(half_ang_pred)
-    sin_true = np.sin(half_ang_true)
-    sin_pred = np.sin(half_ang_pred)
-    vec3_dots = pm.einsumDot(y_true, y_pred)
-    unit_vec3_dots = vec3_dots / (ang_true * ang_pred)
-    quat_dots = cos_true * cos_pred + unit_vec3_dots * sin_true * sin_pred
-    quat_dots_1 = np.abs(np.clip(quat_dots, -1, 1))
-    return 2 * np.arccos(quat_dots_1) #tf.convert_to_tensor(...)
 
 
 #%%
@@ -231,6 +216,9 @@ ROT_VEC_MODES = (
     OutVecMode.ROT_AA, OutVecMode.ROT_VEL_AA, OutVecMode.ROT_FIXED_AX
 )
 #%%
+# JAV_MULTIPLIERS, VEL_ALIGNED_VEC3, WORLD_VEC3, WORLD_DISP, ROT_ALIGNED_VEC3
+# ROT_AA, ROT_VEL_AA, ROT_FIXED_AX
+
 chosen_mode = OutVecMode.JAV_MULTIPLIERS
 
 def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
@@ -292,7 +280,6 @@ class DataForJAV:
         aas_JAV: NumpyForSkipAndID
         rot_vels_JAV: NumpyForSkipAndID
         prev_vel_axes: NumpyForSkipAndID
-        concatted_ids: typing.List[typing.Any]
 
     def __init__(self, data_organizer: DataOrganizer, bcs_scaler, 
                  col_inds: NDArray, JAV_order: OrderForJAV,
@@ -346,6 +333,8 @@ class DataForJAV:
             ]
         if save_data_for_conf:
             needed_keys.append(CacheKeys.W2L_MATS_KEY)
+        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
+            needed_keys.append(CacheKeys.JAV_12)
 
         # Generate cache key for expensive operations
         cache_key = None
@@ -424,7 +413,7 @@ class DataForJAV:
             
             self._cache_help = DataForJAV._CacheHelper(
                 i_w2ls_JAV, i_translations_JAV, i_rmatsv9, i_aas_JAV,
-                i_rot_vels_JAV, i_prev_vel_axes, self.data_organizer.getAllIDs()
+                i_rot_vels_JAV, i_prev_vel_axes
             )
 
             self._fitWorldScaler(self.pos_scale)
@@ -528,61 +517,23 @@ class DataForJAV:
                 if k not in needed_keys:
                     del cached_data[k]
 
+            if CacheKeys.JAV_12 in needed_keys:
+                cached_data[CacheKeys.JAV_12] = all_gt_data[OutVecMode.JAV_MULTIPLIERS]
         # endif cached_data is None
         #-----------------------------------------------------------------------
+        all_cols_data = _dog.col_subset_whole
+        extra_cols: typing.Optional[NDArray] = None
+        if need_more_cols:
+            if _rot_align:
+                extra_cols = cached_data[CacheKeys.EXTRA_ROT_ALIGN_COLS_KEY]
+            else:
+                extra_cols = cached_data[CacheKeys.EXTRA_NO_ROT_ALIGN_COLS_KEY]
+            all_cols_data = np.concatenate((all_cols_data, extra_cols), axis=1)
+            _dog.reset_col_subset_slices(all_cols_data)
         
         self.cache_data_by_dsk = {
-            k: self._getTrainValTestSplit(v) for k, v in cached_data.items()
+            k: self._getSplitByDSK(v) for k, v in cached_data.items()
         }
-        # TODO: All reference predictions, for all modes, assume constant
-        # timesteps for now.
-        self.ref_prediction_name = "Const vel" if _rot_output else "Quadratic" 
-        self.ref_predictions = { # Quadratic acc JAV multipliers.
-            k: np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
-            for k in DataSubsetKind
-        }
-        # TODO: Left off here!
-        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
-            raise NotImplementedError("Need to fix this!")
-            b, e = 12, 15
-            for k, _ref_javs in _javs_by_subset.items():
-                _ref_preds = np.empty((len(_ref_javs), 3))
-                # Constructing quadratic interpolation predictions.
-                # TODO: These assume constant timesteps for now.
-                _ref_preds[:, 0] = _ref_javs[:, 0] + _ref_javs[:, 1]
-                _ref_preds[:, 1] = _ref_javs[:, 2]
-                _ref_preds[:, 2] = 0.0
-                self.ref_predictions[k] = _ref_preds
-        elif self.outVecMode == OutVecMode.ROT_FIXED_AX:
-            # self.ref_predictions[subset_kind] = \
-            #     self._prev_ang_concat[subset_kind]
-            self.ref_predictions = {k: np.ones((1, 1)) for k in DataSubsetKind}
-        else:
-            def vec3_selector(arr: NDArray, i3: int):
-                start = i3*3
-                end = None
-                if i3 != -1:
-                    end = start + 3
-                return arr[start:end]
-            # vels = 
-            if self.outVecMode == OutVecMode.WORLD_VEC3:
-                self.ref_predictions[subset_kind] = coords + vels + accs
-            elif self.outVecMode == OutVecMode.WORLD_DISP:
-                self.ref_predictions[subset_kind] = vels + accs
-            elif self.outVecMode == OutVecMode.ROT_ALIGNED_VEC3:
-                self.ref_predictions[subset_kind] = derivs[0] + derivs[1]
-            elif self.outVecMode == OutVecMode.ROT_VEL_AA:
-                self.ref_predictions[subset_kind] = rot_vels
-            elif self.outVecMode == OutVecMode.ROT_AA:
-                rot_vels_unscaled = self.rot_scale * rot_vels
-                vel_qs = pm.quatsFromAxisAngleVec3s(rot_vels_unscaled)
-                extrap_vel_qs = pm.multiplyQuatLists(
-                    vel_qs, pm.quatsFromAxisAngleVec3s(aas)
-                )
-                self.ref_predictions[subset_kind] = pm.axisAngleVec3sFromQuats(
-                    extrap_vel_qs, True
-                ) / rs
-
 
         full_gt: NDArray
         if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
@@ -597,18 +548,73 @@ class DataForJAV:
         else:
             full_gt = all_gt_data[self.outVecMode]
             del all_gt_data
-        self._gt_arrs = self._getTrainValTestSplit(full_gt)
+        self._gt_arrs = self._getSplitByDSK(full_gt)
 
-        all_cols_data = _dog.col_subset_whole
-        if need_more_cols:
-            extra_cols: NDArray
-            if _rot_align:
-                extra_cols = cached_data[CacheKeys.EXTRA_ROT_ALIGN_COLS_KEY]
+        self._in_arrs = self._getSplitByDSK(all_cols_data)
+        
+        # TODO: All reference predictions, for all modes, assume constant
+        # timesteps for now.
+        self.ref_prediction_name = "Const vel" if _rot_output else "Quadratic" 
+        self.ref_predictions = { # Quadratic acc JAV multipliers.
+            k: np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
+            for k in DataSubsetKind
+        }
+        # TODO: Left off here!
+        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
+            all_javs = cached_data[CacheKeys.JAV_12]
+            # Constructing quadratic interpolation predictions.
+            # TODO: These assume constant timesteps for now.
+            _ref_preds = np.zeros_like(all_javs[:, :3])
+            _ref_preds[:, 0] = all_javs[:, 0] + all_javs[:, 1]
+            _ref_preds[:, 1] = all_javs[:, 2]
+            _ref_preds[:, 2] = 0.0
+            _ref_preds /= self.pos_scale
+
+            self.ref_predictions = self._getSplitByDSK(_ref_preds)
+        elif self.outVecMode == OutVecMode.ROT_FIXED_AX:
+            # self.ref_predictions[subset_kind] = \
+            #     self._prev_ang_concat[subset_kind]
+            self.ref_predictions = {k: np.ones((1, 1)) for k in DataSubsetKind}
+        elif self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
+            if extra_cols is None:
+                raise Exception("Should have set extra_cols in this case!")
+            def vec3_selector(arr: NDArray, i3: int):
+                start = i3*3
+                end = None
+                if i3 != -1:
+                    end = start + 3
+                return arr[:, start:end]
+            # vels = 
+            vels = vec3_selector(extra_cols, 0)
+            accs = vec3_selector(extra_cols, 1)
+            rot_vels = vec3_selector(extra_cols, 3)
+            ref_preds_whole: NDArray
+            if self.outVecMode == OutVecMode.WORLD_VEC3:
+                coords = vec3_selector(extra_cols, -1)
+                ref_preds_whole = coords + vels + accs
+            elif self.outVecMode == OutVecMode.WORLD_DISP:
+                ref_preds_whole = vels + accs
+            elif self.outVecMode == OutVecMode.ROT_ALIGNED_VEC3:
+                ref_preds_whole = vels + accs
+            elif self.outVecMode == OutVecMode.ROT_VEL_AA:
+                ref_preds_whole = rot_vels
+            elif self.outVecMode == OutVecMode.ROT_AA:
+                rot_vels_unscaled = self.rot_scale * rot_vels
+                vel_qs = pm.quatsFromAxisAngleVec3s(rot_vels_unscaled)
+                _aas = vec3_selector(extra_cols, 6)
+                extrap_vel_qs = pm.multiplyQuatLists(
+                    vel_qs, pm.quatsFromAxisAngleVec3s(_aas)
+                )
+                ref_preds_whole = pm.axisAngleVec3sFromQuats(
+                    extrap_vel_qs, True
+                ) / self.rot_scale
             else:
-                extra_cols = cached_data[CacheKeys.EXTRA_NO_ROT_ALIGN_COLS_KEY]
-            all_cols_data = np.concatenate((all_cols_data, extra_cols), axis=1)
-            _dog.reset_col_subset_slices(all_cols_data)
-        self._in_arrs = self._getTrainValTestSplit(all_cols_data)
+                raise Exception(
+                    self.outVecMode.name + " missing ref predictions!"
+                )
+            self.ref_predictions = self._getSplitByDSK(ref_preds_whole)
+
+
 
 
         need_scaler_fit = save_data_for_conf or _rot_align or (self.outVecMode in WORLD_VEC_MODES) 
@@ -625,18 +631,9 @@ class DataForJAV:
         self.score_fn = poseLossJAV
         if self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
             if self.outVecMode in ROT_VEC_MODES:
-                self.score_fn = poseLossAngle 
+                self.score_fn = pm.poseLossAngle 
             else:
                 self.score_fn = poseLossVec3
-
-        
-        # These wouldn't have been scaled earlier. Might want to move/fix things
-        # so that all scaling happens in the same place, though.
-        # TODO: move this scaling earlier!!!
-        if self.outVecMode == OutVecMode.VEL_ALIGNED_VEC3:
-            for k in DataSubsetKind.nonWholeValues():
-                self.ref_predictions[k] /= self.pos_scale
-
 
         self.in_train = self._in_arrs[DataSubsetKind.TRAIN]
         self.in_test = self._in_arrs[DataSubsetKind.TEST]
@@ -654,8 +651,8 @@ class DataForJAV:
         #     (partial_jav_test, jav_te_append), axis=-1
         # )
 
-    def _concat_per_id_data_by_dsk(self, per_id_data):
-        
+    def _concat_per_id_data_by_dsk(self, per_id_data, **kwargs):
+        # TODO: instead of concat, might save RAM to set in empty.
         temp_dict = {}
         for k, v in self.data_organizer.subset_ids.items():
             if k == DataSubsetKind.WHOLE:
@@ -664,7 +661,7 @@ class DataForJAV:
                 temp_dict[k] = temp_dict[DataSubsetKind.TRAIN][:0]
             else:
                 temp_dict[k] = np.concatenate(
-                    concatForComboSubset(per_id_data, v), axis=0
+                    concatForComboSubset(per_id_data, v, **kwargs), axis=0
                 )
         
         ret_concat = np.concatenate((
@@ -677,7 +674,7 @@ class DataForJAV:
 
         return ret_concat
 
-    def _getTrainValTestSplit(self, array: NDArray):
+    def _getSplitByDSK(self, array: NDArray):
         tr = array[:self._val_start]
         va = array[self._val_start:self._test_start]
         te = array[self._test_start:]
@@ -710,9 +707,9 @@ class DataForJAV:
             1, diff_order=2,
             current_diff_order=1, vecs=self._cache_help.rot_vels_JAV, scale=rs
         )
-        w2ls_concat: NDArray = np.concatenate(concatForComboSubset(
-            self._cache_help.w2ls_JAV, self._cache_help.concatted_ids
-        ), axis=0)
+        w2ls_concat: NDArray = self._concat_per_id_data_by_dsk(
+            self._cache_help.w2ls_JAV
+        )
         other_coords = (coords_tm1, coords_tm2, coords_tm3)
         derivs = (vels, accs, jerks, rot_vels, rot_accs, rot_jerks)
         aas_tup = (aas, )
@@ -721,7 +718,8 @@ class DataForJAV:
 
         rmatv9s = self._worldvec_helper(1, vecs=self._cache_help.rmatsv9)
         no_rot_cols = other_vecs + other_coords + w2l_thing + (rmatv9s, coords)
-        
+        no_rot_cols_np = np.concatenate(no_rot_cols, axis=-1)
+
         other_coords_rotated = tuple(
             pm.einsumMatVecMul(w2l_rotations, c - coords)
             for c in other_coords
@@ -733,7 +731,12 @@ class DataForJAV:
         w2l_thing_rotated = (local_to_vel.reshape(-1, 9), )
         rot_cols = other_vecs_rotated + other_coords_rotated + w2l_thing_rotated
         
-        return no_rot_cols, rot_cols
+        # Might need to refine deletion order a bit if I encounter RAM issues.
+        del no_rot_cols
+        rot_cols_np = np.concatenate(rot_cols, axis=-1)
+        del rot_cols
+
+        return no_rot_cols_np, rot_cols_np
     
     def _fitWorldScaler(self, scale: float):
         scaler = StandardScaler()
@@ -760,10 +763,10 @@ class DataForJAV:
             vecs = self._cache_help.translations_JAV
         elif vecs is None:
             raise ValueError("No vectors specified!")
-        concat = np.concatenate(typing.cast(NDArray, concatForComboSubset(
-            vecs, self._cache_help.concatted_ids, front_trim=start,
-            end_trim=shift_from_gt, diff_order = diff_order
-        )), axis=0)
+        concat = self._concat_per_id_data_by_dsk(
+            vecs, front_trim=start, end_trim=shift_from_gt,
+            diff_order = diff_order
+        )
         if use_translation and scale == 0.0:
             concat = typing.cast(
                 NDArray, self.translationScaler.transform(concat)

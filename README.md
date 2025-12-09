@@ -34,6 +34,18 @@ containing all networks. However, I try to use docstrings for most of these
 function via your IDE from the files you actually run by hovering your 
 cursor over the calls to the imported function/class/etc.
 
+# Converting from TensorFlow to ONNX
+For use in my OpenCV code, I tried exporting the model to ONNX because I was
+having difficulty reading just a frozen graph .pb version when I introduced my
+custom feature-generating layer.
+
+To get this working
+(at least, in Python with ONNX; still need to get OpenCV working with it...)
+I had to save the model in Python using `tf.saved_model.save(...)` and then
+run the command `python -m tf2onnx.convert --saved-model D:\saved_model\saved_model.pb\ --output D:\forward_model.onnx` in the venv in which tf2onnx is installed.
+Setting up that venv was a bit frustrating;
+see [DependencyInfo.md](./DependencyInfo.md) for more info.
+
 # About the Dataset
 
 The [source dataset](https://ar3dv.github.io/BCOT-Benchmark/) contains a bunch of videos split up by "sequence" and "body".
