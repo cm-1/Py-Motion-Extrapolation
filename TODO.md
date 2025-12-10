@@ -6,7 +6,6 @@ Try the following:
 
 - https://onnxruntime.ai/docs/tutorials/tf-get-started.html
 - https://github.com/lutzroeder/netron/issues/71
-- Maybe try `model.export(...)` instead of `tf.saved_model.save(...)`?
 
 ## Not Important But Maybe Useful
 
