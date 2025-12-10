@@ -103,6 +103,9 @@ bcs_model = loadLatestModels((model_key, ))[model_key]
 
 # Apply loaded model
 predictions = bcs_model(features[0])
+if isinstance(predictions, list):
+    predictions = predictions[0]
+    print("Loaded model prediction was a list for whatever reason?")
 
 # Create combined model
 combined_model = keras.Model(
@@ -207,7 +210,7 @@ final_model.save(model_name)
 from nn_utilities.nn_export import ModelExportWrapper
 wrapper = ModelExportWrapper(final_model)
 
-wrapper.save_as_savedmodel()#"D:\\forward_model.pb")
+wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
 # wrapper.save_jacobian("D:\\jacobian_model.pb")
 
 # %%

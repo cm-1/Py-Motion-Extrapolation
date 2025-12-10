@@ -1,5 +1,13 @@
 # TODO
 
+## TensorFlow to Onnx to OpenCV troubles
+
+Try the following:
+
+- https://onnxruntime.ai/docs/tutorials/tf-get-started.html
+- https://github.com/lutzroeder/netron/issues/71
+- Maybe try `model.export(...)` instead of `tf.saved_model.save(...)`?
+
 ## Not Important But Maybe Useful
 
 - Having "menus" in matplotlib plots: https://matplotlib.org/stable/gallery/widgets/menu.html

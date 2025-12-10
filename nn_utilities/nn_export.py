@@ -42,6 +42,10 @@ class ModelExportWrapper(tf.Module):
         self.save_func(self.jacobian, fname)
 
     def save_as_savedmodel(self, fname):
+        # Might fail unless WRAPT_DISABLE_EXTENSIONS=1 environment variable is
+        # set. See the following for more info:
+        # https://github.com/tensorflow/tensorflow/issues/63548#issuecomment-2008941537
+        # https://github.com/GrahamDumpleton/wrapt/issues/231#issuecomment-1455800902
         tf.saved_model.save(self.model, fname)
 
 # The below, if I were to try using it again, may require wrapt version <1.15.
