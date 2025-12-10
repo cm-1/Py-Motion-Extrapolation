@@ -14,6 +14,7 @@ Try the following:
 
 ## Possibly/likely _after_ paper submission
 
+- Include gravity direction as another input vector.
 - Try a NN with 10 (or so) output nodes that interpolates between the different
   classes of predictions.
 - Prediction scheme that finds the point x in local space that moved the least
