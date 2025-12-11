@@ -6,7 +6,6 @@ Try the following:
 
 - https://onnxruntime.ai/docs/tutorials/tf-get-started.html
 - https://github.com/lutzroeder/netron/issues/71
-- Maybe try `model.export(...)` instead of `tf.saved_model.save(...)`?
 
 ## Not Important But Maybe Useful
 
@@ -14,6 +13,7 @@ Try the following:
 
 ## Possibly/likely _after_ paper submission
 
+- Include gravity direction as another input vector.
 - Try a NN with 10 (or so) output nodes that interpolates between the different
   classes of predictions.
 - Prediction scheme that finds the point x in local space that moved the least
