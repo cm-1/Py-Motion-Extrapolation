@@ -212,6 +212,7 @@ wrapper = ModelExportWrapper(final_model)
 
 wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
 # wrapper.save_jacobian("D:\\jacobian_model.pb")
+wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
 print(final_model.predict(np.arange(36).reshape(1, 36).astype(np.float32)))

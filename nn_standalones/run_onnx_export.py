@@ -1,6 +1,6 @@
 import numpy as np
 import onnxruntime as ort
-mp = "./results/models/forward_model.onnx"
+mp = "./results/models/forward_graph.onnx"
 session = ort.InferenceSession(mp)
 indat = np.arange(36).reshape(1, 36).astype(np.float32)
 inn = session.get_inputs()[0].name

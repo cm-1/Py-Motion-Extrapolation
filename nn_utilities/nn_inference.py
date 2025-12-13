@@ -366,10 +366,10 @@ class PointsToInputsConstStep(keras.layers.Layer):
         self._non_crackles = tf.constant([
             i for i in range(1, self._n_vec_kinds) if i != CIND
         ], dtype=tf.int32)
-        if len(self._non_crackles) != 6:
+        if self._n_vec_kinds != 8:
             raise Exception(
-                "Hardcoded self._non_crackles length in non_vel_projs_flat no "
-                "longer correct!"
+                "Hardcoded 'loop' iterations and whatnot assume "
+                "self.n_vec_kinds == 8, but this is no longer true!"
             )
 
         
@@ -594,12 +594,10 @@ class PointsToInputsConstStep(keras.layers.Layer):
         non_vel_mags = tf.concat([tf.transpose(acc_mag), other_mags], axis=0)  # Shape: (7, n_ins)
 
         # Build tri_dots row by row using TensorArray for graph compatibility
-        tri_dots_rows = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._n_other_vec_kinds - 1,
-            dynamic_size=False,
-            clear_after_read=False
-        )
+        # tri_dots_rows = tf.TensorArray(
+        #     dtype=tf.float32, size=self._n_other_vec_kinds - 1,
+        #     dynamic_size=False, clear_after_read=False
+        # )
         
         # First, the dots with velocity. Row looks like [v*a, 0, 0, ...]
         row_0_val = tf.reshape(vel_mags, [-1]) * a_proj_v  # Shape: (n_ins,)
@@ -610,27 +608,21 @@ class PointsToInputsConstStep(keras.layers.Layer):
         
 
         # Rows 1 through n_other_vec_kinds-1: compute dot products
-        i = tf.constant(2)
-        lt_n_vec_kinds = lambda _i, _, _2: tf.less(_i, self._n_vec_kinds)
-        def loop_bod(i, all_curr_vecs, tri_dots_rows): #: _Try_Dot_Bod_Tup):
+        def loop_bod(i): #: _Try_Dot_Bod_Tup):
             # Compute tri_dots[i-1, :i] = dot products with all previous vectors
             dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
             # Pad with zeros for the rest of the row
-            row_i = tf.concat([
+            return tf.concat([
                 dots_i,  # Shape: (i, n_ins)
                 tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
             ], axis=0)
-            
-            return i+1, all_curr_vecs, tri_dots_rows.write(i - 2, row_i)
-        # I'm trying to follow a working example:
-        #https://github.com/onnx/tensorflow-onnx/issues/1899
-        # 
-        i, all_curr_vecs, tri_dots_rows = tf.while_loop(
-            lt_n_vec_kinds, loop_bod, loop_vars=[i, all_curr_vecs, tri_dots_rows]
-        )
+        
         # Stack all rows together
-        tri_dot_stack = tri_dots_rows.stack()  # Shape: (n_other_vec_kinds, n_other_vec_kinds, n_ins)
-        tri_dots = tf.concat((tf.reshape(row_0, [1, 7, n_ins]), tri_dot_stack), axis=0) 
+        # Shape: (n_other_vec_kinds, n_other_vec_kinds, n_ins)
+        tri_dots = tf.stack((
+            row_0, loop_bod(2), loop_bod(3), loop_bod(4), loop_bod(5),
+            loop_bod(6), loop_bod(7)
+        ), axis=0) 
 
 
 
@@ -649,16 +641,13 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         # Collect non_vel_projs by flattening each piece before storing
         # Since the final result needs to be concatenated anyway, we flatten to 1D first
-        non_vel_projs = tf.TensorArray(
-            dtype=tf.float32, 
-            size=len(self._non_crackles),
-            dynamic_size=False,
-            clear_after_read=False,
-            infer_shape=False  # Don't infer shape from first element - allow varying lengths
-        )
+        # non_vel_projs = tf.TensorArray(
+        #     dtype=tf.float32, size=len(self._non_crackles), dynamic_size=False,
+        #     clear_after_read=False,
+        #     infer_shape=False  # Don't infer shape from first element - allow varying lengths
+        # )
         
-        lt_len_non_crack = lambda _i, _, _2: tf.less(_i, len(self._non_crackles))
-        def nvp_loop_bod(i_ind, arr_idx, non_vel_projs):
+        def nvp_loop_bod(i_ind):
             i = self._non_crackles[i_ind]
             prev_i = i - 1
             mag_i = non_vel_mags[prev_i]
@@ -674,20 +663,16 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 # Flatten to 1D: shape (n_other_vec_kinds - i, n_ins) -> ((n_other_vec_kinds - i) * n_ins,)
                 proj_val_h_flat = tf.reshape(proj_val_h, [-1])
                 towrite = tf.concat((proj_val_flat, proj_val_h_flat), axis=0)
-            non_vel_projs = non_vel_projs.write(arr_idx, towrite)
-            return i_ind + 1, arr_idx + 1, non_vel_projs
-        i = tf.constant(0)
-        arr_idx = 0
-        i, arr_idx, non_vel_projs = tf.while_loop(lt_len_non_crack, nvp_loop_bod, [i, arr_idx, non_vel_projs])
+            return towrite
         
         non_vel_projs_flat = tf.concat((
-            non_vel_projs.read(0), #non_vel_projs2.read(0),
-            non_vel_projs.read(1), #non_vel_projs2.read(1),
-            non_vel_projs.read(2), #non_vel_projs2.read(2),
-            non_vel_projs.read(3), #non_vel_projs2.read(3),
-            non_vel_projs.read(4), #non_vel_projs2.read(4),
-            non_vel_projs.read(5) #, non_vel_projs2.read(5),
-            # non_vel_projs.read(6) #, non_vel_projs2.read(0),
+            nvp_loop_bod(0), #non_vel_projs2.read(0),
+            nvp_loop_bod(1), #non_vel_projs2.read(1),
+            nvp_loop_bod(2), #non_vel_projs2.read(2),
+            nvp_loop_bod(3), #non_vel_projs2.read(3),
+            nvp_loop_bod(4), #non_vel_projs2.read(4),
+            nvp_loop_bod(5) #, non_vel_projs2.read(5),
+            # nvp_loop_bod(6) #, non_vel_projs2.read(0),
         ), axis=0)
         # Concatenate all flattened pieces into one 1D tensor, then reshape to (total_elements, n_ins)
         # non_vel_projs_flat = non_vel_projs.concat()
