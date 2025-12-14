@@ -363,9 +363,9 @@ class PointsToInputsConstStep(keras.layers.Layer):
         CIND = ALL_RELATIVE_VECTORS.index(MOTION_DATA.JERK_ERR_VEC3)
         # We don't divide by crackle's mag because it's not used as a relative
         # axis.
-        self._non_crackles = tf.constant([
+        self._non_crackles = tuple([
             i for i in range(1, self._n_vec_kinds) if i != CIND
-        ], dtype=tf.int32)
+        ])#, dtype=tf.int32)
         if self._n_vec_kinds != 8:
             raise Exception(
                 "Hardcoded 'loop' iterations and whatnot assume "
@@ -478,7 +478,14 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Only compute if any acceleration orthogonal components are zero
         def update_ortho_dirs_with_jerk(ortho_dirs, jerk_vals, condition_mask):
             """Update third orthogonal direction using jerk where condition is True."""
-            indices = tf.where(condition_mask)
+            # If we don't specify tf.int32 here, the tf.cond fails in eager mode
+            # because the original ortho_dirs has a tf.int32 "dense_shape"
+            # for whatever reason, whereas the "default" when indices are
+            # constructed as below is int64. And tf wants the two "branches" of
+            # cond to match. TODO: Try to understand this more and maybe make
+            # it consistently int64 instead of int32, which would require
+            # figuring out why the original is int32....
+            indices = tf.cast(tf.where(condition_mask), tf.int32)
             jerk_masked = tf.gather_nd(jerk_vals, indices)
             ortho_dirs_0_masked = tf.gather_nd(ortho_dirs[:, 0, :], indices)
             
