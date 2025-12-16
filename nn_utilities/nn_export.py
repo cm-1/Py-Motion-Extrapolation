@@ -47,7 +47,18 @@ class ModelExportWrapper(tf.Module):
         # https://github.com/tensorflow/tensorflow/issues/63548#issuecomment-2008941537
         # https://github.com/GrahamDumpleton/wrapt/issues/231#issuecomment-1455800902
         tf.saved_model.save(self.model, fname)
-
+        
+    def save_tflite(self, func, fname):
+        concrete_func = func.get_concrete_function()
+        converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter.allow_custom_ops = False
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        converter._experimental_lower_tensor_list_ops = False
+        tflite_model = converter.convert()
+        
+        with open(fname, 'wb') as f:
+            f.write(tflite_model)
 # The below, if I were to try using it again, may require wrapt version <1.15.
 # See: https://github.com/tensorflow/tensorflow/issues/59869#issuecomment-1452785730
 # tf.saved_model.save(wrapper, "forward_savedmodel", signatures={"serving_default": forward_func})
