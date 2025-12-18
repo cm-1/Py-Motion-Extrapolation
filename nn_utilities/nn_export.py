@@ -8,11 +8,10 @@ class ModelExportWrapper(tf.Module):
         super().__init__()
         self.model = model
 
-    @tf.function(input_signature=[tf.TensorSpec([None, None], tf.float32, name="x")])
     def forward(self, x):
         """Forward pass subgraph"""
         return self.model(x)
-    @tf.function(input_signature=[tf.TensorSpec([None, None], tf.float32, name="x")])
+    
     def jacobian(self, x):
         """Jacobian subgraph"""
         with tf.GradientTape(persistent=True) as tape:
@@ -23,7 +22,8 @@ class ModelExportWrapper(tf.Module):
 
 
     def save_func(self, func, fname):
-        forward_func = func.get_concrete_function()
+        tfunc = tf.function(func, input_signature=[tf.TensorSpec([None, None], tf.float32, name="x")])
+        forward_func = tfunc.get_concrete_function()
         forward_func2 = convert_variables_to_constants_v2(forward_func)
         graph_def = forward_func2.graph.as_graph_def()
 
@@ -48,12 +48,18 @@ class ModelExportWrapper(tf.Module):
         # https://github.com/GrahamDumpleton/wrapt/issues/231#issuecomment-1455800902
         tf.saved_model.save(self.model, fname)
         
-    def save_tflite(self, func, fname):
-        concrete_func = func.get_concrete_function()
+    def save_tflite(self, func, fname, sh):
+        tfunc = tf.function(func, input_signature=[tf.TensorSpec(sh, tf.float32, name="x")])
+
+        concrete_func = tfunc.get_concrete_function() #(tf.TensorSpec(shape=[1, 36], dtype=tf.float32, name="x"))
         converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter.optimizations = []#tf.lite.Optimize.]
         converter.allow_custom_ops = False
-        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        # converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        converter.target_spec.supported_ops = [
+            tf.lite.OpsSet.TFLITE_BUILTINS,
+            tf.lite.OpsSet.SELECT_TF_OPS 
+        ]
         converter._experimental_lower_tensor_list_ops = False
         tflite_model = converter.convert()
         

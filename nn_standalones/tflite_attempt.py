@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
-def load_and_test_tflite(model_path: str):
+def load_and_test_tflite(model_path: str, test_input=None):
     # Load the TFLite model
     interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
@@ -16,7 +16,12 @@ def load_and_test_tflite(model_path: str):
     print(f"Output details: {output_details}")
     
     # Test with sample input
-    test_input = np.random.randn(1, 36).astype(np.float32)
+    if test_input is None:
+        test_input = np.random.randn(1, 36).astype(np.float32)
+    interpreter.resize_tensor_input(
+        input_details[0]['index'], test_input.shape, strict=False
+    )
+    interpreter.allocate_tensors()
     
     # Set input
     interpreter.set_tensor(input_details[0]['index'], test_input)
@@ -29,7 +34,7 @@ def load_and_test_tflite(model_path: str):
     return output
     
 # Test the full workflow
-def test_tflite_export(model, tflite_path):
+def test_tflite_export(model, tflite_path, s):
 
     def test_loaded_model(model_path):
         try:
@@ -48,17 +53,19 @@ def test_tflite_export(model, tflite_path):
     def compare_models():
         try:
             # Create test data
-            test_input = np.random.randn(1, 36).astype(np.float32)
+            test_input = np.random.randn(*s).astype(np.float32)
             
             # Original model prediction
-            original_output = model(test_input, training=False)
+            original_output = model(tf.constant(test_input))#, training=False)
             print(f"Original model output shape: {original_output.shape}")
+            print(f"Original model output: {original_output}")
             
             # TFLite model prediction (if we can load it)
             try:
-                tflite_output = load_and_test_tflite(tflite_path)
+                tflite_output = load_and_test_tflite(tflite_path, test_input)
                 
                 print(f"TFLite model output shape: {tflite_output.shape}")
+                print(f"TFLite model output: {tflite_output}")
                 
                 # Compare outputs
                 diff = np.abs(original_output.numpy() - tflite_output).max()

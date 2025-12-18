@@ -617,7 +617,15 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Rows 1 through n_other_vec_kinds-1: compute dot products
         def loop_bod(i): #: _Try_Dot_Bod_Tup):
             # Compute tri_dots[i-1, :i] = dot products with all previous vectors
-            dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
+            # Conversion to TFLite converts einsum version of this into a
+            # batched matmul in an incorrect way, so I need to "manually" do it
+            # the correct way.
+            vecs_i = all_curr_vecs[i][..., tf.newaxis]
+            post_i = tf.transpose(all_curr_vecs[:i], [1, 0, 2])
+            muls = tf.matmul(post_i, vecs_i)
+            dots_i = tf.transpose(tf.reshape(muls, [-1, i]), [1, 0])
+            # dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
+
             # Pad with zeros for the rest of the row
             return tf.concat([
                 dots_i,  # Shape: (i, n_ins)

@@ -142,7 +142,11 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     disp = getVelFrameDisplacements(y_true, y_pred)
     # Convert local displacement into world displacement.
     local2worlds = tf.transpose(world2locals, perm=[0, 2, 1])
-    return tf.einsum('bij,bj->bi', local2worlds, disp)
+    # Conversion to TFLite converts einsum version of this into a batched matmul
+    # in an incorrect way, so I need to "manually" do it the correct way.
+    disp_mats = disp[..., tf.newaxis] #tf.reshape(disp, [-1, 3, 1])
+    mm = tf.matmul(local2worlds, disp_mats)
+    return tf.reshape(mm, [-1, 3])
 
 # Create a new layer that wraps getWorldFrameDisplacements
 class WorldFrameDisplacementsLayer(keras.layers.Layer):
@@ -165,7 +169,7 @@ class WorldFrameDisplacementsLayer(keras.layers.Layer):
         return tf.concat((ret_pos, ret_aas), axis=-1) 
 
 # Append the new layer to the combined model
-world_frame_displacements_layer = WorldFrameDisplacementsLayer()
+world_frame_displacements_layer = WorldFrameDisplacementsLayer(name="wfdl")
 combined_model_output = combined_model.output
 world_frame_displacements_output = world_frame_displacements_layer(
     [features[1], combined_model_output, features[2], window_input]
@@ -186,7 +190,7 @@ print("="*60)
 print("Final model setup complete")
 print("="*60 + "\n")
 
-test_out = final_model.predict(test_windows_flatter)
+test_out = final_model.predict(test_windows_flatter, batch_size=1024)
 out_pts = test_out[..., :3]
 out_aas = test_out[..., 3:]
 #%%
@@ -200,11 +204,11 @@ test_aa_errs = pm.poseLossAngle(test_gt_pts[:, 3:], out_aas)
 print("AA test score:", np.mean(test_aa_errs))
 
 # %%
-import datetime
-model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
-    "state_transition", datetime.datetime.now()
-)
-final_model.save(model_name)
+# import datetime
+# model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
+#     "state_transition", datetime.datetime.now()
+# )
+# final_model.save(model_name)
 
 # %%
 from nn_utilities.nn_export import ModelExportWrapper
@@ -215,4 +219,15 @@ wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
 wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
-print(final_model.predict(np.arange(36).reshape(1, 36).astype(np.float32)))
+arange_dat = np.arange(36).reshape(1, 36).astype(np.float32)
+print(final_model.predict(arange_dat))
+#%%
+j = wrapper.jacobian(tf.constant(arange_dat, dtype=tf.float32))
+#%%
+jac_fn = "./results/models/jac.tflite"
+wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite", (1, 36))
+wrapper.save_tflite(wrapper.jacobian, jac_fn, (1, 36))
+# %%
+import nn_standalones.tflite_attempt as nnt
+
+nnt.test_tflite_export(wrapper.jacobian, jac_fn, (1, 36))
