@@ -212,22 +212,22 @@ print("AA test score:", np.mean(test_aa_errs))
 
 # %%
 from nn_utilities.nn_export import ModelExportWrapper
-wrapper = ModelExportWrapper(final_model)
+wrapper = ModelExportWrapper(final_model, (1, 36))
 
 wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
 # wrapper.save_jacobian("D:\\jacobian_model.pb")
 wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
-arange_dat = np.arange(36).reshape(1, 36).astype(np.float32)
+arange_dat = np.arange(36).reshape(wrapper.input_shape).astype(np.float32)
 print(final_model.predict(arange_dat))
 #%%
 j = wrapper.jacobian(tf.constant(arange_dat, dtype=tf.float32))
 #%%
 jac_fn = "./results/models/jac.tflite"
-wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite", (1, 36))
-wrapper.save_tflite(wrapper.jacobian, jac_fn, (1, 36))
+wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite")
+wrapper.save_tflite(wrapper.jacobian, jac_fn)
 # %%
 import nn_standalones.tflite_attempt as nnt
 
-nnt.test_tflite_export(wrapper.jacobian, jac_fn, (1, 36))
+nnt.test_tflite_export(wrapper.jacobian, jac_fn, wrapper.input_shape)
