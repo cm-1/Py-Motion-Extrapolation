@@ -292,10 +292,9 @@ class DerivativeCollectionWithTimestampsTF:
     def __init__(self, displacements: tf.Tensor, max_derivative_order: int,
                  timestamps: tf.Tensor):
                 
-        self.velocities = typing.cast(tf.Tensor, tf.identity(displacements))
         
         # Reshape for broadcasting.
-        coeff_shape = self.velocities.shape[:-1] + tf.TensorShape(1)
+        coeff_shape = displacements.shape[:-1] + tf.TensorShape(1)
         self.unflat_timestamps = tf.reshape(timestamps, coeff_shape)
 
         time_deltas = keras.ops.diff(self.unflat_timestamps, 1, axis=0)

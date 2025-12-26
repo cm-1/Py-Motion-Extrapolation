@@ -1,4 +1,5 @@
 #%%
+import typing
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
@@ -10,27 +11,30 @@ class ModelExportWrapper(tf.Module):
     def __init__(self, model, input_shape):
         super().__init__()
         self.model = model
-        self.input_shape = input_shape
+        self.input_shape: typing.Tuple[int, ...] = input_shape
 
     def forward(self, x):
         """Forward pass subgraph"""
-        return self.model(x)
+        return self.model(x, training=False)
     
     def jacobian(self, x):
         """Jacobian subgraph"""
-        with tf.GradientTape(persistent=True) as tape:
+        with tf.GradientTape(watch_accessed_variables=False) as tape:
             tape.watch(x)
-            y = self.model(x)
-        unflat_jacobian = tape.jacobian(y, x)
+            y = self.model(x, training=False)
+        unflat_jacobian = tape.batch_jacobian(y, x)
+        # tf.print("unflat jacobian shape:", tf.shape(unflat_jacobian))
         return tf.reshape(unflat_jacobian, [-1, tf.shape(unflat_jacobian)[-1]])
 
 
-    def save_func(self, func, fname):
+    def get_frozen_func(self, func):
         tfunc = tf.function(func, input_signature=[tf.TensorSpec(self.input_shape, tf.float32, name="x")])
         concrete_func = tfunc.get_concrete_function()
         frozen_func = convert_variables_to_constants_v2(concrete_func)
-        graph_def = frozen_func.graph.as_graph_def()
+        return frozen_func
 
+    def save_func(self, func, fname):
+        graph_def = self.get_frozen_func(func).graph.as_graph_def()
         # https://github.com/opencv/opencv/wiki/TensorFlow-text-graphs
         for i in reversed(range(len(graph_def.node))):
             if graph_def.node[i].op == 'Const':
@@ -58,20 +62,20 @@ class ModelExportWrapper(tf.Module):
         # tf.compat.v1.train.write_graph(graph_def, "", fname, as_text=False)
         # tf.compat.v1.train.write_graph(graph_def, "", fname + "txt", as_text=True)
 
-        tf.io.write_graph(frozen_func.graph, "", fname, as_text=False)
-        tf.io.write_graph(frozen_func.graph, "", fname + "txt", as_text=True)
-        tf.compat.v1.train.Saver().save(frozen_func, fname + ".chkp")
+        tf.io.write_graph(graph_def, "", fname, as_text=False)
+        tf.io.write_graph(graph_def, "", fname + "txt", as_text=True)
+        # tf.compat.v1.train.Saver().save(frozen_func, fname + ".chkp")
 
-        freeze_graph.freeze_graph(
-            fname + "txt",
-            None, False,
-            fname + ".chkp",
-            "Identity",    # output node name
-            "save/restore_all",  # restore_op_name
-            "save/Const:0",      # filename_tensor_name
-            fname,
-            True, ""
-        )
+        # freeze_graph.freeze_graph(
+        #     fname + "txt",
+        #     None, False,
+        #     fname + ".chkp",
+        #     "Identity",    # output node name
+        #     "save/restore_all",  # restore_op_name
+        #     "save/Const:0",      # filename_tensor_name
+        #     fname,
+        #     True, ""
+        # )
 
 
         # Export frozen graph definition (.pbtxt)
@@ -84,7 +88,14 @@ class ModelExportWrapper(tf.Module):
         # - https://answers.opencv.org/question/204121/keras-densenet121-breaks-on-opencv-dnn/
         #   - https://www.reddit.com/r/Lobe/comments/jl9q8m/tensorflow_and_unity/
         #   - https://stackoverflow.com/questions/54757293/tensorflow-freeze-graph-unable-to-initialize-local-variables
-    
+        # - https://jeanvitor.com/tensorflow-object-detecion-opencv/
+        #  - https://github.com/opencv/opencv/wiki/TensorFlow-Object-Detection-API
+
+        # transform_graph:
+        # - https://github.com/tensorflow/tensorflow/tree/r2.0/tensorflow/tools/graph_transforms
+        # - https://pypi.org/project/tensorflow/1.15.5/#files
+        # - https://github.com/opencv/opencv/issues/11577
+
     def save_forward(self, fname):
         # Save the forward function
         self.save_func(self.forward, fname)

@@ -16,6 +16,9 @@ One of the newer 3D plots of neural net outputs needs Plotly.
 Code that requires sympy or that is meant to be used with Blender is currently
 separated into their own folders.
 
+## TensorFlow to TFLite conversion
+I've had best success with Python 3.10 and TensorFlow 2.19.0.
+
 ## TensorFlow to ONNX conversion
 It took a few tries to get a working venv for this. I finally got it working
 with python 3.12.12, tensorflow 2.16.1, and tf2onnx 1.16.0. The full pip freeze
