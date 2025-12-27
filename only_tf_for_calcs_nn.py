@@ -87,7 +87,7 @@ custom_layer = PointsToInputsConstStep(
     zero_angle_thresh=0.01
 )
 
-print(f"Creating combined model with custom layer...")
+print("Creating combined model with custom layer...")
 
 # Build new model: Input -> Custom Layer -> Original Model -> Output
 window_input = keras.layers.Input(
@@ -144,7 +144,7 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     local2worlds = tf.transpose(world2locals, perm=[0, 2, 1])
     # Conversion to TFLite converts einsum version of this into a batched matmul
     # in an incorrect way, so I need to "manually" do it the correct way.
-    disp_mats = disp[..., tf.newaxis] #tf.reshape(disp, [-1, 3, 1])
+    disp_mats = disp[..., tf.newaxis] # pyright:ignore
     mm = tf.matmul(local2worlds, disp_mats)
     return tf.reshape(mm, [-1, 3])
 

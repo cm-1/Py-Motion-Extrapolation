@@ -22,7 +22,7 @@ class ModelExportWrapper(tf.Module):
         with tf.GradientTape(watch_accessed_variables=False) as tape:
             tape.watch(x)
             y = self.model(x, training=False)
-        unflat_jacobian = tape.batch_jacobian(y, x)
+        unflat_jacobian = tape.jacobian(y, x)
         # tf.print("unflat jacobian shape:", tf.shape(unflat_jacobian))
         return tf.reshape(unflat_jacobian, [-1, tf.shape(unflat_jacobian)[-1]])
 
