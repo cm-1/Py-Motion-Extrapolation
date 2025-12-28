@@ -214,19 +214,26 @@ print("AA test score:", np.mean(test_aa_errs))
 from nn_utilities.nn_export import ModelExportWrapper
 wrapper = ModelExportWrapper(final_model, (1, 36))
 
+#%%
 wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
-# wrapper.save_jacobian("D:\\jacobian_model.pb")
+wrapper.save_jacobian("./results/models/jacobian_graph.pb")
 wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
 arange_dat = np.arange(36).reshape(wrapper.input_shape).astype(np.float32)
 print(final_model.predict(arange_dat))
 #%%
-j = wrapper.jacobian(tf.constant(arange_dat, dtype=tf.float32))
+x = tf.constant(np.random.uniform(-1, 1, (1, 36)).astype(np.float32))
+j = wrapper.jacobian_orig(x) #tf.constant(arange_dat, dtype=tf.float32))
+print("First Jacobian tested...")
+j2 = wrapper.jacobian(x)
+print("Jacobians same:", np.allclose(j.numpy(), j2[0].numpy()))
+print("Max difference:", np.max(np.abs(j.numpy() - j2[0].numpy())))
+
 #%%
 jac_fn = "./results/models/jac.tflite"
-wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite")
-wrapper.save_tflite(wrapper.jacobian, jac_fn)
+# wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite", False)
+wrapper.save_tflite(wrapper.jacobian, jac_fn, False)
 # %%
 import nn_standalones.tflite_attempt as nnt
 
