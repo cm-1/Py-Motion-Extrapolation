@@ -101,8 +101,8 @@ class ModelExportWrapper(tf.Module):
                 # Create the "Selector" as a constant vector, not a slice operation.
                 # Shape: (36, 1)
                 # We create this outside the tape so it's just a constant in the graph.
-                projection_vec = tf.constant(
-                    tf.one_hot(i, depth=output_dim, dtype=tf.float32).numpy().reshape(-1, 1)
+                projection_vec = tf.reshape(
+                    tf.one_hot(i, depth=output_dim, dtype=tf.float32), [output_dim, 1]
                 )
                 
                 # Project y to a scalar. 
