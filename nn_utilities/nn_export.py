@@ -17,7 +17,7 @@ class ModelExportWrapper(tf.Module):
         """Forward pass subgraph"""
         return self.model(x, training=False)
     
-    def jacobian_orig(self, x):
+    def jacobian(self, x):
         """Jacobian subgraph"""
         with tf.GradientTape(watch_accessed_variables=False) as tape:
             tape.watch(x)
@@ -82,7 +82,7 @@ class ModelExportWrapper(tf.Module):
         
         return jacobian
 
-    def jacobian(self, x):
+    def jacobian_split2(self, x):
         x.set_shape([1, 36])
         
         projected_scalars = []
@@ -102,7 +102,8 @@ class ModelExportWrapper(tf.Module):
                 # Shape: (36, 1)
                 # We create this outside the tape so it's just a constant in the graph.
                 projection_vec = tf.reshape(
-                    tf.one_hot(i, depth=output_dim, dtype=tf.float32), [output_dim, 1]
+                    tf.one_hot(i, depth=output_dim, dtype=tf.float32),
+                    [output_dim, 1]
                 )
                 
                 # Project y to a scalar. 

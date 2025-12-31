@@ -245,6 +245,126 @@ def _get_JAV_muls(step: typing.Union[int, float]):
         _jav_muls = tf.reshape(_jav_muls, [-1])
         return tf.constant(_jav_muls, dtype=tf.float32)
 
+@tf.custom_gradient
+def safe_slice_ax0(x: tf.Tensor, start_index: int, end_index: int):
+    """
+    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
+    
+    Forward Pass: Native Slicing (Zero overhead).
+    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
+    """
+    # 1. Forward Pass: Standard efficient slicing
+    # We cast to int just to be safe if passed as Tensors, though python ints are best.
+    y = x[start_index:end_index]
+        
+    # 2. Define the Gradient
+    def grad(dy):
+        # dy is the gradient coming back from the next layer.
+        # It has shape (Batch, end - start).
+        # We need to turn it into shape (Batch, Full_Width) (dx).
+        
+        # Get input dimensions (Static is best for TFLite)
+        # Using .shape handles static shapes; tf.shape handles dynamic.
+        input_shape = x.shape
+        full_width = input_shape[0] 
+
+        # Calculate padding amounts
+        # We want: [0, 0] padding on axis 0 (Batch)
+        # We want: [start, full_width - end] padding on axis 1 (Features)
+
+        pad_right = full_width - end_index
+
+        paddings = tf.convert_to_tensor([[start_index, pad_right]])
+        
+        # Use tf.pad to reconstruct the gradient
+        # TFLite supports Pad/PadV2 natively.
+        dx = tf.pad(dy, paddings)
+        
+        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
+        return dx, None, None
+
+    return y, grad
+
+@tf.custom_gradient
+def safe_slice_ax1(x: tf.Tensor, start_index: int, end_index: int):
+    """
+    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
+    
+    Forward Pass: Native Slicing (Zero overhead).
+    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
+    """
+    # 1. Forward Pass: Standard efficient slicing
+    # We cast to int just to be safe if passed as Tensors, though python ints are best.
+    y = x[:, start_index:end_index]
+        
+    # 2. Define the Gradient
+    def grad(dy):
+        # dy is the gradient coming back from the next layer.
+        # It has shape (Batch, end - start).
+        # We need to turn it into shape (Batch, Full_Width) (dx).
+        
+        # Get input dimensions (Static is best for TFLite)
+        # Using .shape handles static shapes; tf.shape handles dynamic.
+        input_shape = x.shape
+        full_width = input_shape[1] 
+
+        # Calculate padding amounts
+        # We want: [0, 0] padding on axis 0 (Batch)
+        # We want: [start, full_width - end] padding on axis 1 (Features)
+
+        pad_right = full_width - end_index
+
+        paddings = tf.convert_to_tensor([[0, 0], [start_index, pad_right]])
+        
+        # Use tf.pad to reconstruct the gradient
+        # TFLite supports Pad/PadV2 natively.
+        dx = tf.pad(dy, paddings)
+        
+        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
+        return dx, None, None
+
+    return y, grad
+
+@tf.custom_gradient
+def safe_slice_ax2(x: tf.Tensor, start_index: int, end_index: int):
+    """
+    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
+    
+    Forward Pass: Native Slicing (Zero overhead).
+    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
+    """
+    # 1. Forward Pass: Standard efficient slicing
+    # We cast to int just to be safe if passed as Tensors, though python ints are best.
+    y = x[:, :, start_index:end_index]
+        
+    # 2. Define the Gradient
+    def grad(dy):
+        # dy is the gradient coming back from the next layer.
+        # It has shape (Batch, end - start).
+        # We need to turn it into shape (Batch, Full_Width) (dx).
+        
+        # Get input dimensions (Static is best for TFLite)
+        # Using .shape handles static shapes; tf.shape handles dynamic.
+        input_shape = x.shape
+        full_width = input_shape[2] 
+
+        # Calculate padding amounts
+        # We want: [0, 0] padding on axis 0 (Batch)
+        # We want: [start, full_width - end] padding on axis 1 (Features)
+
+        pad_right = full_width - end_index
+
+        paddings = tf.convert_to_tensor([[0,0], [0,0], [start_index, pad_right]])
+        
+        # Use tf.pad to reconstruct the gradient
+        # TFLite supports Pad/PadV2 natively.
+        dx = tf.pad(dy, paddings)
+        
+        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
+        return dx, None, None
+
+    return y, grad
+
 class LayerPostOutJAV12(keras.layers.Layer):
     def __init__(self, step: int, **kwargs):
         super(LayerPostOutJAV12, self).__init__(**kwargs)
@@ -317,7 +437,12 @@ class DerivativeCollectionWithTimestampsTF:
         (for jerk)."""
         ret_val = keras.ops.diff(prev_vals, 1, axis=0)
 
-        time_div = self.unflat_timestamps[deriv_power:] - self.unflat_timestamps[:-deriv_power]
+        # time_div = self.unflat_timestamps[deriv_power:] - self.unflat_timestamps[:-deriv_power]
+        end = tf.shape(self.unflat_timestamps)[0]
+        next_times = safe_slice_ax0(self.unflat_timestamps, deriv_power, end)
+        prev_times = safe_slice_ax1(self.unflat_timestamps, 0, end - deriv_power)
+        time_div = next_times - prev_times
+
         # Do scalar math first for efficiency, as otherwise you perform
         # a division on vec3s and then a mul on vec3s, instead of doing
         # the division on "vec1s". Could use parentheses, but this is
@@ -419,6 +544,17 @@ class PointsToInputsConstStep(keras.layers.Layer):
     # hopefully it's not too bad but maybe it's not as optimized as it could be.
     @tf.function
     def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
+
+        n_ins = tf.shape(x0_through_5)[1]
+
+        test_concat = tf.concat((x0_through_5[0], aa0_through_5[0]), axis=-1)
+        num_remaining_zeros = 227 - tf.shape(test_concat)[1]
+        remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
+
+        ret0 = tf.concat((test_concat, remaining_zeros), axis=-1)
+        ret1 = safe_slice_ax1(ret0, 0, 15)
+        ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
+        return ret0, ret1, ret2
 
         scaled_disps = keras.ops.diff(x0_through_5, 1, axis=0)
         all_pds = DerivativeCollectionConstTimeTF(
@@ -773,8 +909,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
         inputs_rs = tf.reshape(inputs, [input_shape[0], 6, 6])
         inputs_swapax = tf.transpose(inputs_rs, [1, 0, 2])
         # Split inputs into positions and axis-angles
-        positions = inputs_swapax[..., :3]    # Shape: (batch_size, n_frames, 3)
-        axis_angles = inputs_swapax[..., 3:]  # Shape: (batch_size, n_frames, 3)
+        positions = safe_slice_ax2(inputs_swapax, 0, 3)    # Shape: (batch_size, n_frames, 3)
+        axis_angles = safe_slice_ax2(inputs_swapax, 3, 6)  # Shape: (batch_size, n_frames, 3)
         
         # # Process each batch item separately using map_fn
         # def process_single_window(single_input):
