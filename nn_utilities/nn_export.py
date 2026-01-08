@@ -201,12 +201,20 @@ class ModelExportWrapper(tf.Module):
         self.save_func(self.jacobian, fname)
 
     def save_as_savedmodel(self, fname):
+        opts = tf.saved_model.SaveOptions(experimental_debug_stripper=True)
         # Might fail unless WRAPT_DISABLE_EXTENSIONS=1 environment variable is
         # set. See the following for more info:
         # https://github.com/tensorflow/tensorflow/issues/63548#issuecomment-2008941537
         # https://github.com/GrahamDumpleton/wrapt/issues/231#issuecomment-1455800902
-        tf.saved_model.save(self.model, fname)
-        
+        fff = self.get_frozen_func(self.forward)
+        jff = self.get_frozen_func(self.jacobian)
+        sigs = {
+            tf.saved_model.DEFAULT_SERVING_SIGNATURE_DEF_KEY: fff,
+            "jacobian": jff
+        }
+        tf.saved_model.save(self, fname, sigs, opts)
+        return
+
     def save_tflite(self, func, fname, allow_select_tf_ops: bool):
         tfunc = tf.function(func, input_signature=[tf.TensorSpec(self.input_shape, tf.float32, name="x")])
 
