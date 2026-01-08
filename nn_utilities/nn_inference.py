@@ -545,16 +545,16 @@ class PointsToInputsConstStep(keras.layers.Layer):
     @tf.function
     def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
-        n_ins = tf.shape(x0_through_5)[1]
+        # n_ins = tf.shape(x0_through_5)[1]
 
-        test_concat = tf.concat((x0_through_5[0], aa0_through_5[0]), axis=-1)
-        num_remaining_zeros = 227 - tf.shape(test_concat)[1]
-        remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
+        # test_concat = tf.concat((x0_through_5[0], aa0_through_5[0]), axis=-1)
+        # num_remaining_zeros = 227 - tf.shape(test_concat)[1]
+        # remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
 
-        ret0 = tf.concat((test_concat, remaining_zeros), axis=-1)
-        ret1 = safe_slice_ax1(ret0, 0, 15)
-        ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
-        return ret0, ret1, ret2
+        # ret0 = tf.concat((test_concat, remaining_zeros), axis=-1)
+        # ret1 = safe_slice_ax1(ret0, 0, 15)
+        # ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
+        # return ret0, ret1, ret2
 
         scaled_disps = keras.ops.diff(x0_through_5, 1, axis=0)
         all_pds = DerivativeCollectionConstTimeTF(
