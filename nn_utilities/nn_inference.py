@@ -245,7 +245,7 @@ def _get_JAV_muls(step: typing.Union[int, float]):
         _jav_muls = tf.reshape(_jav_muls, [-1])
         return tf.constant(_jav_muls, dtype=tf.float32)
 
-@tf.custom_gradient
+# @tf.custom_gradient
 def safe_slice_ax0(x: tf.Tensor, start_index: int, end_index: int):
     """
     Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
@@ -283,9 +283,9 @@ def safe_slice_ax0(x: tf.Tensor, start_index: int, end_index: int):
         # Return gradient for 'x', and None for 'start'/'end' (they are integers)
         return dx, None, None
 
-    return y, grad
+    return y#, grad
 
-@tf.custom_gradient
+# @tf.custom_gradient
 def safe_slice_ax1(x: tf.Tensor, start_index: int, end_index: int):
     """
     Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
@@ -323,9 +323,9 @@ def safe_slice_ax1(x: tf.Tensor, start_index: int, end_index: int):
         # Return gradient for 'x', and None for 'start'/'end' (they are integers)
         return dx, None, None
 
-    return y, grad
+    return y#, grad
 
-@tf.custom_gradient
+# @tf.custom_gradient
 def safe_slice_ax2(x: tf.Tensor, start_index: int, end_index: int):
     """
     Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
@@ -363,7 +363,7 @@ def safe_slice_ax2(x: tf.Tensor, start_index: int, end_index: int):
         # Return gradient for 'x', and None for 'start'/'end' (they are integers)
         return dx, None, None
 
-    return y, grad
+    return y#, grad
 
 class LayerPostOutJAV12(keras.layers.Layer):
     def __init__(self, step: int, **kwargs):
