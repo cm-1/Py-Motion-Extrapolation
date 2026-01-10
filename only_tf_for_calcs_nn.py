@@ -166,7 +166,15 @@ class WorldFrameDisplacementsLayer(keras.layers.Layer):
         disp = getWorldFrameDisplacements(y_true, y_pred, world2locals)
         ret_pos = orig_pos + disp
         ret_aas = ang_vel_extrapolate(orig_aas_0, orig_aas_1)
-        return tf.concat((ret_pos, ret_aas), axis=-1) 
+        
+        last_pose = tf.concat((ret_pos, ret_aas), axis=-1) 
+
+        prev_pts = inputs[3][:, -30:]
+
+
+        full_new_state = tf.concat((prev_pts, last_pose), axis=1)
+
+        return full_new_state
 
 # Append the new layer to the combined model
 world_frame_displacements_layer = WorldFrameDisplacementsLayer(name="wfdl")
@@ -191,8 +199,8 @@ print("Final model setup complete")
 print("="*60 + "\n")
 
 test_out = final_model.predict(test_windows_flatter, batch_size=1024)
-out_pts = test_out[..., :3]
-out_aas = test_out[..., 3:]
+out_pts = test_out[..., -6:-3]
+out_aas = test_out[..., -3:]
 #%%
 test_errs = out_pts - test_gt_pts[:, :3]
 
@@ -224,9 +232,9 @@ arange_dat = np.arange(36).reshape(wrapper.input_shape).astype(np.float32)
 print(final_model.predict(arange_dat))
 #%%
 x = tf.constant(np.random.uniform(-1, 1, (1, 36)).astype(np.float32))
-j = wrapper.jacobian_orig(x) #tf.constant(arange_dat, dtype=tf.float32))
+j = wrapper.jacobian(x) #tf.constant(arange_dat, dtype=tf.float32))
 print("First Jacobian tested...")
-j2 = wrapper.jacobian(x)
+j2 = wrapper.jacobian_split(x)
 print("Jacobians same:", np.allclose(j.numpy(), j2[0].numpy()))
 print("Max difference:", np.max(np.abs(j.numpy() - j2[0].numpy())))
 
