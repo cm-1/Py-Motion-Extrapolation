@@ -21,7 +21,7 @@ from motiontools.dataorg import UnitAwareScaler
 from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 
 from nn_utilities.nn_loading import loadLatestModels
-
+from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
@@ -89,41 +89,11 @@ custom_layer = PointsToInputsConstStep(
 
 print("Creating combined model with custom layer...")
 
-# Build new model: Input -> Custom Layer -> Original Model -> Output
-window_input = keras.layers.Input(
-    shape=test_windows_flatter.shape[1:],
-    name='pose_window_input', dtype=tf.float32
-)
-
-# Apply custom preprocessing layer
-features = custom_layer(window_input)
 # %%
 # Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
 bcs_model = loadLatestModels((model_key, ))[model_key]
 
-# Apply loaded model
-predictions = bcs_model(features[0])
-if isinstance(predictions, list):
-    predictions = predictions[0]
-    # I should've commented this better; I think switching tf versions requires
-    # this workaround? I forget the exact reason now....
-    print("Loaded model prediction was a list for whatever reason?")
-
-# Create combined model
-combined_model = keras.Model(
-    inputs=window_input,
-    outputs=predictions,
-    name='model_with_preprocessing'
-)
-
-print("Combined model architecture:")
-combined_model.summary()
-print("="*60)
-print("Custom layer setup complete")
-print("="*60 + "\n")
-
-# %%
 # Define the getVelFrameDisplacements function as a TensorFlow operation
 def getVelFrameDisplacements(y_true, y_pred):
 
@@ -151,57 +121,121 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     mm = tf.matmul(local2worlds, disp_mats)
     return tf.reshape(mm, [-1, 3])
 
-# Create a new layer that wraps getWorldFrameDisplacements
-class WorldFrameDisplacementsLayer(keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super(WorldFrameDisplacementsLayer, self).__init__(**kwargs)
-
-    def call(self, inputs):
-        y_true = inputs[0] #tf.cast(inputs[0], tf.float32)
-        y_pred = inputs[1] #tf.cast(inputs[1], tf.float32)
-        world2locals = inputs[2] #tf.cast(inputs[2], tf.float32)
-        orig_inputs = tf.reshape(inputs[3], [-1, 6, 6])
+class ModularKalmanWrapper(AbstractModelWrapper):
+    def __init__(self, preproc_layer, fcnn_model, input_shape):
+        super().__init__(input_shape)
+        # Store components separately
+        self.preproc = preproc_layer
+        self.fcnn = fcnn_model
+        self.num_prev_cells: int = input_shape[-1] - 6
         
-        orig_aas_0 = orig_inputs[:, -2, 3:]
-        orig_aas_1 = orig_inputs[:, -1, 3:]
-        orig_pos = orig_inputs[:, -1, :3]
+
+    def predict_translation(self, x: tf.Tensor):
+        """
+        Reconstructs the full forward pass. 
+        """
+        
+        # 1. Preprocessing (PointsToInputsConstStep)
+        features = self.preproc(x)
+        
+        # 2. FCNN Inference (JAV_MULTIPLIERS)
+        # Apply loaded model
+        multiplier_predictions = self.fcnn(features[0])
+        if isinstance(multiplier_predictions, list):
+            multiplier_predictions = multiplier_predictions[0]
+            # I should've commented this better; I think switching tf versions
+            # requires this workaround? I forget the exact reason now....
+            print("Loaded model prediction was a list for whatever reason?")
+        
+        # Define the getVelFrameDisplacements function as a TensorFlow operation
+        y_true = features[1] #tf.cast(inputs[0], tf.float32)
+        y_pred = multiplier_predictions #tf.cast(inputs[1], tf.float32)
+        world2locals = features[2] #tf.cast(inputs[2], tf.float32)
+        
+        orig_pos = x[:, -6:-3]
 
         disp = getWorldFrameDisplacements(y_true, y_pred, world2locals)
         ret_pos = orig_pos + disp
+        return ret_pos
+
+    def predict_rotation(self, x: tf.Tensor):
+        orig_aas_0 = x[:, -9:-6]
+        orig_aas_1 = x[:, -3:]
         ret_aas = ang_vel_extrapolate(orig_aas_0, orig_aas_1)
+        return ret_aas
         
+    def forward(self, x: tf.Tensor):
+        x.set_shape(self.input_shape)
+
+        ret_pos = self.predict_translation(x)
+        ret_aas = self.predict_rotation(x)
         last_pose = tf.concat((ret_pos, ret_aas), axis=-1) 
 
-        prev_pts = inputs[3][:, -30:]
+        prev_pts = x[:, 6:]
 
 
         full_new_state = tf.concat((prev_pts, last_pose), axis=1)
 
         return full_new_state
 
-# Append the new layer to the combined model
-world_frame_displacements_layer = WorldFrameDisplacementsLayer(name="wfdl")
-combined_model_output = combined_model.output
-world_frame_displacements_output = world_frame_displacements_layer(
-    [features[1], combined_model_output, features[2], window_input]
-)
+    def jacobian_naive(self, x: tf.Tensor):
+        x.set_shape(self.input_shape)
+
+        """Jacobian subgraph"""
+        with tf.GradientTape(watch_accessed_variables=False) as tape:
+            tape.watch(x)
+            y = self.forward(x)
+        unflat_jacobian = tape.jacobian(y, x)
+        return tf.reshape(unflat_jacobian, [-1, tf.shape(unflat_jacobian)[-1]])
 
 
+    def jacobian(self, x: tf.Tensor):
+        """
+        Optimal Jacobian: Runs only what is needed for each block.
+        """
+        x.set_shape(self.input_shape)
 
-# Create the final model
-final_model = keras.Model(
-    inputs=combined_model.input,
-    outputs=world_frame_displacements_output, #features[0], features[1], features[2], combined_model_output], 
-    name='final_model_with_world_frame_displacements'
-)
+        # The part that comes from shifting the five most recent poses within
+        # the state vector.
+        eye_block = tf.eye(
+            self.num_prev_cells, dtype=tf.float32
+        )
+        zeros_block = tf.zeros((self.num_prev_cells, 6), dtype=tf.float32)
+        j_shift = tf.concat([zeros_block, eye_block], axis=-1)
 
-print("Final model architecture:")
-final_model.summary()
+        # The part that comes from the new translation prediction.
+        with tf.GradientTape(persistent=True) as tape_f:
+            tape_f.watch(x)
+            y_t = self.predict_translation(x)
+        unflat_jac_t = tape_f.jacobian(y_t, x)
+        j_t = tf.reshape(unflat_jac_t, [-1, tf.shape(unflat_jac_t)[-1]])
+
+        # The part that comes from the new rotation prediction.
+        with tf.GradientTape(persistent=True) as tape_j:
+            tape_j.watch(x)
+            y_r = self.predict_rotation(x)
+        unflat_jac_r = tape_j.jacobian(y_r, x)
+        j_r = tf.reshape(unflat_jac_r, [-1, tf.shape(unflat_jac_r)[-1]])
+
+        # Clean up
+        del tape_f
+        del tape_j
+
+        # Concatenate into square matrix.
+        return tf.concat([j_shift, j_t, j_r], axis=0)
+
+# %%
+
+wrapper = ModularKalmanWrapper(custom_layer, bcs_model, None, (1, 36))
+wrapper_batch = ModularKalmanWrapper(custom_layer, bcs_model, None, (None, 36))
+
 print("="*60)
 print("Final model setup complete")
 print("="*60 + "\n")
 
-test_out = final_model.predict(test_windows_flatter, batch_size=1024)
+tf_const_input = tf.constant(test_windows_flatter.astype(np.float32)) 
+final_model_forward = wrapper_batch.get_frozen_func(wrapper_batch.forward)
+test_out = final_model_forward(tf_const_input)[0]
 out_pts = test_out[..., -6:-3]
 out_aas = test_out[..., -3:]
 #%%
@@ -221,10 +255,6 @@ print("AA test score:", np.mean(test_aa_errs))
 # )
 # final_model.save(model_name)
 
-# %%
-from nn_utilities.nn_export import SingleModelExportWrapper
-wrapper = SingleModelExportWrapper(final_model, (1, 36))
-
 #%%
 wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
 wrapper.save_jacobian("./results/models/jacobian_graph.pb")
@@ -232,19 +262,19 @@ wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
 arange_dat = np.arange(36).reshape(wrapper.input_shape).astype(np.float32)
-print(final_model.predict(arange_dat))
+print(final_model_forward(arange_dat))
 #%%
 x = tf.constant(np.random.uniform(-1, 1, (1, 36)).astype(np.float32))
 j = wrapper.jacobian(x) #tf.constant(arange_dat, dtype=tf.float32))
 print("First Jacobian tested...")
-j2 = wrapper.jacobian_split(x)
-print("Jacobians same:", np.allclose(j.numpy(), j2[0].numpy()))
-print("Max difference:", np.max(np.abs(j.numpy() - j2[0].numpy())))
+j2 = wrapper.jacobian_naive(x)
+print("Jacobians same:", np.allclose(j.numpy(), j2.numpy()))
+print("Max difference:", np.max(np.abs(j.numpy() - j2.numpy())))
 
 #%%
 jac_fn = "./results/models/jac.tflite"
 # wrapper.save_tflite(wrapper.forward, "./results/models/f.tflite", False)
-wrapper.save_tflite(wrapper.jacobian, jac_fn, False)
+wrapper.save_tflite(wrapper.jacobian, jac_fn, True)
 # %%
 import nn_standalones.tflite_attempt as nnt
 

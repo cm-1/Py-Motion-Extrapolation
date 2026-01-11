@@ -12,12 +12,12 @@ from tensorflow.python.tools import optimize_for_inference_lib
 class AbstractModelWrapper(tf.Module):
     def __init__(self, input_shape):
         super().__init__()
-        self.input_shape: typing.Tuple[int, ...] = input_shape
+        self.input_shape: typing.Tuple[typing.Optional[int], ...] = input_shape
 
-    def forward(self, x):
+    def forward(self, x: tf.Tensor):
         raise NotImplementedError("Subclasses must implement forward")
 
-    def jacobian(self, x):
+    def jacobian(self, x: tf.Tensor):
         raise NotImplementedError("Subclasses must implement jacobian")
 
     def get_frozen_func(self, func):
@@ -114,11 +114,11 @@ class SingleModelExportWrapper(AbstractModelWrapper):
         super().__init__(input_shape)
         self.model = model
 
-    def forward(self, x):
+    def forward(self, x: tf.Tensor):
         """Forward pass subgraph"""
         return self.model(x, training=False)
     
-    def jacobian(self, x):
+    def jacobian(self, x: tf.Tensor):
         """Jacobian subgraph"""
         with tf.GradientTape(watch_accessed_variables=False) as tape:
             tape.watch(x)
