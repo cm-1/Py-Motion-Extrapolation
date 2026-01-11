@@ -79,7 +79,7 @@ permutation_np = np.asarray([_orig_key_order.index(k) for k in ref_keys])
 
 
 
-# Create custom layer
+# Create custom layer that, from last poses, creates columns for FCNN.
 custom_layer = PointsToInputsConstStep(
     step=custom_step,
     scale_means=loaded_scaler.mean_, scale_scales=loaded_scaler.scale_,
@@ -98,6 +98,7 @@ window_input = keras.layers.Input(
 # Apply custom preprocessing layer
 features = custom_layer(window_input)
 # %%
+# Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
 bcs_model = loadLatestModels((model_key, ))[model_key]
 
@@ -105,6 +106,8 @@ bcs_model = loadLatestModels((model_key, ))[model_key]
 predictions = bcs_model(features[0])
 if isinstance(predictions, list):
     predictions = predictions[0]
+    # I should've commented this better; I think switching tf versions requires
+    # this workaround? I forget the exact reason now....
     print("Loaded model prediction was a list for whatever reason?")
 
 # Create combined model
@@ -219,8 +222,8 @@ print("AA test score:", np.mean(test_aa_errs))
 # final_model.save(model_name)
 
 # %%
-from nn_utilities.nn_export import ModelExportWrapper
-wrapper = ModelExportWrapper(final_model, (1, 36))
+from nn_utilities.nn_export import SingleModelExportWrapper
+wrapper = SingleModelExportWrapper(final_model, (1, 36))
 
 #%%
 wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
