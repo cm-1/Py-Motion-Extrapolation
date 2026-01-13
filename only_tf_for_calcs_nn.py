@@ -25,7 +25,7 @@ from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
-CUSTOM_LAYER_SKIP = 0          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+CUSTOM_LAYER_SKIP = 2          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
 
 # Custom Layer Mode: Attach preprocessing layer to model
 print("\n" + "="*60)
@@ -226,8 +226,8 @@ class ModularKalmanWrapper(AbstractModelWrapper):
 
 # %%
 
-wrapper = ModularKalmanWrapper(custom_layer, bcs_model, None, (1, 36))
-wrapper_batch = ModularKalmanWrapper(custom_layer, bcs_model, None, (None, 36))
+wrapper = ModularKalmanWrapper(custom_layer, bcs_model, (1, 36))
+wrapper_batch = ModularKalmanWrapper(custom_layer, bcs_model, (None, 36))
 
 print("="*60)
 print("Final model setup complete")
@@ -256,7 +256,7 @@ print("AA test score:", np.mean(test_aa_errs))
 # final_model.save(model_name)
 
 #%%
-wrapper.save_as_savedmodel("./results/models/e2e_saved_models/")
+wrapper.save_as_savedmodel("./results/models/e2e_saved_models_skip{}/".format(CUSTOM_LAYER_SKIP))
 wrapper.save_jacobian("./results/models/jacobian_graph.pb")
 wrapper.save_forward("./results/models/forward_graph.pb")
 
