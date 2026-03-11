@@ -25,12 +25,14 @@ import gtCommon as gtc
 from posefeatures import MOTION_DATA, MOTION_MODEL # Enums
 from posefeatures import MOTION_DATA_KEY_TYPE, CalcsForCombo
 
+TRAIN_NEW = False
+
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
 CIRC_ERR_RADIUS_RATIO_THRESH = 0.10 # Threshold for if motion's circular.
-MAX_MIN_JERK_OPT_ITERS = 33 # Max iters for min jerk optimization calcs.
-MAX_SPLIT_MIN_JERK_OPT_ITERS = 33
+MAX_MIN_JERK_OPT_ITERS = 0# 33 # Max iters for min jerk optimization calcs.
+MAX_SPLIT_MIN_JERK_OPT_ITERS = 0# 33
 ERR_NA_VAL = np.finfo(np.float32).max # A non-inf but inf-like value.
 
 # Video categories; currently not *really* used in this file, but that might 
@@ -375,7 +377,8 @@ print("Auto-sklearn fit started at {} and will last {} seconds!".format(
     auto_start_str, automl.time_left_for_this_task
 ))
 
-automl.fit(concat_train_data, concat_train_labels)
+if TRAIN_NEW:
+    automl.fit(concat_train_data, concat_train_labels)
 
 print("Done auto-sklearn fit!")
 
@@ -393,11 +396,11 @@ auto_fname = "auto-{:%Y-%m-%d_%H-%M-%S}.pickle".format(datetime.datetime.now())
 #%%
 import pickle
 
-# with open('./auto-2025-04-03_20-18-32.pickle', 'rb') as f:
-#     automl = pickle.load(f)
-#%%
-
-pickle.dump(automl, open(auto_fname, "wb"))
+if not TRAIN_NEW:
+    with open('./auto-2025-04-23_08-10-46.pickle', 'rb') as f:
+        automl = pickle.load(f)
+else:
+    pickle.dump(automl, open(auto_fname, "wb"))
 
 
 asklabs = automl.predict(concat_test_data)
