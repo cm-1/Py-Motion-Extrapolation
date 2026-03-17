@@ -20,9 +20,9 @@ import gtCommon as gtc
 
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.key_and_vec_specs import MOTION_MODEL
+from motiontools.key_and_vec_specs import MOTION_MODEL, MOTION_DATA
 
-from motiontools.dataorg import DataOrganizer, SkipSubsetKind
+from motiontools.dataorg import DataOrganizer, SkipSubsetKind, UnitAwareScaler
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -108,6 +108,14 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
     class_errs_shape[0], 1, class_errs_shape[1]
 ))
 mc.set_y_errs(y_errs_reshape)
+nonco_cols = np.asarray([
+    (not isinstance(k, MOTION_DATA)) or k == MOTION_DATA.TIMESTEP
+    for k in dog.motion_data_keys
+])
+nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
+
+bcs_scaler = UnitAwareScaler(nonco_col_ks)
+dog.setPickAndTransform(nonco_cols, bcs_scaler)
 
 #%% Training decision tree at max depth.
 # ---
@@ -147,7 +155,9 @@ else:
         "careful that I am not duplicating any data by mistake for when I work "
         "with huge datasets. So take care if implementing a fix here!"
     ))
-big_tree = big_tree.fit(dog.concat_train_data, all_possible_labels)
+
+
+big_tree = big_tree.fit(dog.col_subset_train, all_possible_labels)
 print("Done!")
 print("Time spent:", time.time() - start_time)
 #%%
@@ -195,7 +205,7 @@ for d in depths:
     #         clf = sk_tree.DecisionTreeClassifier(max_depth=d, criterion=mc)
     #         clf = clf.fit(concat_train_data, concat_train_labels)
     trimmed_tree = trim_to_depth(big_tree, d)
-    graph_pred = trimmed_tree.predict(dog.concat_test_data)
+    graph_pred = trimmed_tree.predict(dog.col_subset_test)
     scores_for_depth = dog.getClassScoresTest(graph_pred)
     for k, score_for_depth in scores_for_depth.items():
         scores[k][d-1] = score_for_depth
