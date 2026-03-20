@@ -30,7 +30,7 @@ from datatools.data_splitting import DataSubsetKind
 # End of imports
 # ==============================================================================
 
-
+USE_WEIGHTED_CRIT = True
 
 dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
 
@@ -126,7 +126,8 @@ dog.setPickAndTransform(nonco_cols, bcs_scaler)
 # individual trees below as a comment, for reference.
 
 # Initialize the decision tree classifier with the custom criterion.
-big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=mc)
+tree_crit = mc if USE_WEIGHTED_CRIT else "gini"
+big_tree = sk_tree.DecisionTreeClassifier(max_depth=max_depth, criterion=tree_crit)
 
 print("Starting decision tree training!")
 start_time = time.time()
@@ -134,13 +135,13 @@ start_time = time.time()
 # Create an array to hold all possible labels. This is required by sklearn
 # even though our custom criterion does not use these labels for impurity
 # calculations.
-all_possible_labels = np.zeros_like(dog.concat_train_labels)
+all_possible_labels = dog.concat_train_labels.copy()
 
 # Check if there are enough data rows to represent all classes.
-if len(all_possible_labels) >= motion_mod_len:
+if USE_WEIGHTED_CRIT and len(all_possible_labels) >= motion_mod_len:
     # Fill the first `motion_mod_len` elements with all possible class labels.
     all_possible_labels[:motion_mod_len] = np.arange(motion_mod_len)
-else:
+elif USE_WEIGHTED_CRIT:
     # Raise an exception if there are fewer data rows than classes because
     # sklearn needs an input array of labels containing every possible class or
     # else my custom criterion crashes. This is a limitation due to how sklearn
