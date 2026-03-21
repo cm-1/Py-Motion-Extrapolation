@@ -25,7 +25,22 @@ from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
-CUSTOM_LAYER_SKIP = 2          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+
+def create_hardcoded_model(refModel):
+    shp = refModel.get_config()['layers'][0]['config']['batch_shape'][1:]
+    oshp = refModel.compute_output_shape(shp)
+    inputs = tf.keras.Input(shape=shp)
+    
+    const_func = lambda x: (x * 0.0)[..., :12] + tf.constant([[
+        1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    ]])
+
+    outputs = tf.keras.layers.Lambda(const_func, output_shape=oshp)(inputs)
+    
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    return model
 
 # Custom Layer Mode: Attach preprocessing layer to model
 print("\n" + "="*60)
@@ -93,6 +108,7 @@ print("Creating combined model with custom layer...")
 # Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
 bcs_model = loadLatestModels((model_key, ))[model_key]
+hardcoded_model = create_hardcoded_model(bcs_model)
 
 # Define the getVelFrameDisplacements function as a TensorFlow operation
 def getVelFrameDisplacements(y_true, y_pred):

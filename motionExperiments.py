@@ -911,6 +911,13 @@ for i, combo in enumerate(combos):
     t_jerk_preds = t_quadratic_preds.copy()
     t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
 
+    t_ja_preds = t_quadratic_preds.copy()
+    t_ja_preds[2:] = (23 * translations[3:-1] - 33 * translations[2:-2] + 21 * translations[1:-3] - 5 * translations[:-4])/6.0
+
+    
+    t_jv_preds = t_quadratic_preds.copy()
+    t_jv_preds[2:] = (17 * translations[3:-1] - 18 * translations[2:-2] + 9 * translations[1:-3] - 2 * translations[:-4])/6.0
+
     complete_vel_sq_lens = pm.einsumDot(
         translation_diffs, translation_diffs
     ) # (1-0)^2, (2-1)^2, ...

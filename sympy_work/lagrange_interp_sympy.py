@@ -8,6 +8,7 @@ from IPython.display import display
 sp.init_printing()
 
 ys = sp.IndexedBase("y") # Sampled positions.
+ts = sp.IndexedBase("t") # Sample times
 yps = sp.IndexedBase("y'") # y primes, for velocities I guess.
 # Var not named "i" so I can still use "i" in for loops:
 sp_i = sp.symbols('i', cls=sp.Idx) 
@@ -24,6 +25,26 @@ def LagrangePoly(deg, data_vars = ys, shift = 0):
         res += part
     return simplify(res)
 
+def LagrangePolyUneven(deg, time_vars = ts, data_vars = ys, shift = 0):
+    res = 0
+    for i in range(deg + 1):
+        part = data_vars[i + shift]
+        for j in range(deg + 1):
+            if i != j:
+                part *= (x - time_vars[j])/(time_vars[i] - time_vars[j])
+        res += part
+    return simplify(res)
+
+def dividedDiff(xVals, yVals):
+    if len(xVals) == 2:
+        return (yVals[1] - yVals[0])/(xVals[1] - xVals[0])
+    if len(xVals) < 2 or len(xVals) != len(yVals):
+        raise ValueError("Wrong lengths!")
+    d0 = dividedDiff(xVals[:-1], yVals[:-1])
+    d1 = dividedDiff(xVals[1:], yVals[1:])
+    return (d1 - d0)/(xVals[-1] - xVals[0])
+
+# dd[0, k] = f^(k)
 
 lag2 = LagrangePoly(2)
 lag2_d = Derivative(lag2, x)

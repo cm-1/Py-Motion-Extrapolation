@@ -2846,8 +2846,8 @@ node {
   input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/ones_like"
 }
 node {
-  name: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/SelectV2"
-  op: "SelectV2"
+  name: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/Select"
+  op: "Select"
   input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/GreaterEqual"
   input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/ones_like"
   input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/Neg"
@@ -2855,7 +2855,7 @@ node {
 node {
   name: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/mul_1"
   op: "Mul"
-  input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/SelectV2"
+  input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/nonzero_sign/Select"
   input: "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/axis_angle_from_quaternion/split"
 }
 node {
@@ -4731,7 +4731,7 @@ node {
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/input/_5"
   op: "Identity"
-  input: "points_to_inputs_const_step_1/133904"
+  input: "points_to_inputs_const_step_1/133759"
 }
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/input/_15"
@@ -6794,7 +6794,7 @@ node {
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/input/_1"
   op: "Identity"
-  input: "points_to_inputs_const_step_1/133896"
+  input: "points_to_inputs_const_step_1/133751"
 }
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/input/_11"
@@ -7905,7 +7905,7 @@ node {
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/input/_2"
   op: "Identity"
-  input: "points_to_inputs_const_step_1/133898"
+  input: "points_to_inputs_const_step_1/133753"
 }
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/input/_12"
@@ -7946,7 +7946,7 @@ node {
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/input/_3"
   op: "Identity"
-  input: "points_to_inputs_const_step_1/133900"
+  input: "points_to_inputs_const_step_1/133755"
 }
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/input/_13"
@@ -7962,7 +7962,7 @@ node {
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/input/_4"
   op: "Identity"
-  input: "points_to_inputs_const_step_1/133902"
+  input: "points_to_inputs_const_step_1/133757"
 }
 node {
   name: "Func/points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/input/_14"
@@ -10047,8 +10047,8 @@ node {
   input: "axis_angle_from_quaternion/nonzero_sign/ones_like"
 }
 node {
-  name: "axis_angle_from_quaternion/nonzero_sign/SelectV2"
-  op: "SelectV2"
+  name: "axis_angle_from_quaternion/nonzero_sign/Select"
+  op: "Select"
   input: "axis_angle_from_quaternion/nonzero_sign/GreaterEqual"
   input: "axis_angle_from_quaternion/nonzero_sign/ones_like"
   input: "axis_angle_from_quaternion/nonzero_sign/Neg"
@@ -10056,7 +10056,7 @@ node {
 node {
   name: "axis_angle_from_quaternion/mul_1"
   op: "Mul"
-  input: "axis_angle_from_quaternion/nonzero_sign/SelectV2"
+  input: "axis_angle_from_quaternion/nonzero_sign/Select"
   input: "axis_angle_from_quaternion/split"
 }
 node {
@@ -10158,5 +10158,5 @@ node {
 library {
 }
 versions {
-  producer: 2129
+  producer: 2288
 }
