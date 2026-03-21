@@ -25,7 +25,7 @@ from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
-CUSTOM_LAYER_SKIP = 2          # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
 
 def create_hardcoded_model(refModel):
     shp = refModel.get_config()['layers'][0]['config']['batch_shape'][1:]
