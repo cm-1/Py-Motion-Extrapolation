@@ -217,7 +217,7 @@ def min_jerk_lsq(prev_translations: NDArray, is_static_bools: NDArray,
     x0s = np.repeat(x0_ig, x0_repeat_lens, axis=0)
 
     
-    # TODO: The below does get repeated each call... is there a good Pythonic
+    # Speed-TODO: The below gets repeated each call... is there a good Pythonic
     # way to remove the redundancy? Probably put this in a class and store this
     # as a variable upon init I guess.
     max_t_vals_len = np.max(x0_repeat_lens) + 2

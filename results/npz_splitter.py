@@ -4,7 +4,7 @@ import numpy as np
 
 def split_npz_file(original_file, keys_for_first, output_file1, output_file2):
     # Load original .npz file
-    data = np.load(original_file)
+    data = np.load(original_file, allow_pickle=False)
     
     # Split data into two dictionaries
     data1 = {key: data[key] for key in keys_for_first if key in data}
@@ -18,8 +18,8 @@ def split_npz_file(original_file, keys_for_first, output_file1, output_file2):
     np.savez_compressed(output_file2, **data2)
     
     # Reload to verify integrity
-    data1_loaded = np.load(output_file1)
-    data2_loaded = np.load(output_file2)
+    data1_loaded = np.load(output_file1, allow_pickle=False)
+    data2_loaded = np.load(output_file2, allow_pickle=False)
     
     # Check that the data matches the original
     for key in data.files:

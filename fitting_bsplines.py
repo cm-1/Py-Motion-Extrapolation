@@ -1,5 +1,3 @@
-# TODO: Look at https://matplotlib.org/stable/gallery/widgets/menu.html#sphx-glr-gallery-widgets-menu-py
-
 from dataclasses import dataclass, field
 import typing
 
@@ -72,11 +70,9 @@ class ObjSeqData:
         self.seqID = seqID
         self.hasData = False
         self.calculator = None
-        if gtCommon.BCOT_Data_Calculator.isBodySeqPairValid(bodID, seqID):
+        if gtCommon.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self.hasData = True
-            self.calculator = gtCommon.BCOT_Data_Calculator(
-                bodID, seqID, FRAME_SKIP_AMT
-            )
+            self.calculator = gtCommon.PoseLoaderBCOT(bodID, seqID)
         self.lastKnownPtIndex = 40# SPLINE_DEGREE
         self.plot_data = PlotData([], getEmptyYData())
         self.pred_data = PredictionData()
@@ -92,7 +88,7 @@ class ObjSeqData:
             self.y_window[0], self.y_window[1]
         ]
     # data_col_keys: typing.Any = field(default_factory=list)
-    # needs_reset: bool = True # TODO: Make "False" have an affect.
+    # needs_reset: bool = True # Refactor-TODO: Make "False" have an affect.
 
 
 axLinesDict = dict()
@@ -236,7 +232,7 @@ slider_ax1 = plt.axes([0.6, 0.2, 0.35, 0.03])#, facecolor='lightgoldenrodyellow'
 slider_ax2 = plt.axes([0.6, 0.15, 0.35, 0.03])#, facecolor='lightgoldenrodyellow')
 
 slider1 = Slider(
-    slider_ax1, gtCommon.shortBodyNameBCOT(gtCommon.BCOT_BODY_NAMES[0]), 
+    slider_ax1, gtCommon.truncateName(gtCommon.BCOT_BODY_NAMES[0]), 
     0, len(gtCommon.BCOT_BODY_NAMES) - 1, valstep=1
 )
 numSeqs = len(gtCommon.BCOT_SEQ_NAMES)
@@ -256,12 +252,12 @@ def updatePredictionData(objSeqDataInfo):
     selectedCalc = objSeqDataInfo.calculator
 
     # Flatten needed here or else array looks like [[0], [2], ...]
-    originData = selectedCalc.getTranslationsGTNP(True)
+    originData = selectedCalc.getTranslationsGTNP()[::(FRAME_SKIP_AMT + 1)]
 
     # IGNORE MIDDLE BUTTON COLUMNS FOR NOW!
 
     # Flatten needed here for same reason as before.
-    aaData = selectedCalc.getRotationsGTNP(True)
+    aaData = selectedCalc.getRotationsGTNP()[::(FRAME_SKIP_AMT + 1)]
 
     # Points stored such that each row is a timestamp and each column is a
     # component of either the origin, the axis-angle rotation, or another pt
@@ -276,8 +272,9 @@ def updatePredictionData(objSeqDataInfo):
     lastKnownSplineIndex = max(lastKnownSplineIndex, SPLINE_DEGREE)
 
     lastKnownVelIndex = min(objSeqDataInfo.lastKnownPtIndex, len(ptsData) - 2)
-    lastKnownVelIndex = max(lastKnownVelIndex, 2) # TODO: Make diff for accel.
-    # TODO: Might need to change this if using different limits for accel index:
+    lastKnownVelIndex = max(lastKnownVelIndex, 2)
+    # TODO: ^ Make diff for accel.
+    #       v Might need to change this if using different limits for acc index:
     objSeqDataInfo.lastKnownPtIndex = lastKnownVelIndex 
 
     startInd = max(0, lastKnownSplineIndex - PTS_USED_TO_CALC_LAST + 1)
@@ -376,7 +373,7 @@ def clearAndRedraw(objSeqDataInfo):
 def update(val):
     bInd = int(slider1.val + 0.001)
     sInd = int(slider2.val + 0.001)
-    slider1.label.set_text(gtCommon.shortBodyNameBCOT(gtCommon.BCOT_BODY_NAMES[bInd]))
+    slider1.label.set_text(gtCommon.truncateName(gtCommon.BCOT_BODY_NAMES[bInd]))
     slider2.label.set_text(gtCommon.shortSeqNameBCOT(gtCommon.BCOT_SEQ_NAMES[sInd]))
 
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
@@ -401,8 +398,8 @@ def update(val):
             else:
                 axLineK.true_line.set_ydata(objPts.y_vals[:, i])
 
-            # TODO: Is it worth checking if an x_shift occurred, and if not,
-            # then only shifting the y_data?
+            # Speed-TODO: Is it worth checking if an x_shift occurred, and if
+            # not, then only shifting the y_data?
             axLineK.spline_line.set_data([
                 objPreds.x_spline, objPreds.y_spline[:, i]
             ])

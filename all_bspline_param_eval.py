@@ -9,7 +9,7 @@ from spline_approximation import BSplineFitCalculator, SplinePredictionMode
 import gtCommon as gtc
 import posemath as pm
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 
 TRANSLATION_THRESH_5 = 50.0#50.0
 TRANSLATION_THRESH_2 = 20.0
@@ -34,15 +34,16 @@ skipAmount = 2
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 poseDataDict: typing.Dict[typing.Tuple[int,int], PoseData] = dict()
 
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
-    translations_gt = calculator.getTranslationsGTNP(True)
-    rotations_gt_aa = calculator.getRotationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    step = skipAmount + 1
+    translations_gt = calculator.getTranslationsGTNP()[::step]
+    rotations_gt_aa = calculator.getRotationsGTNP()[::step]
     #rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
     rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_gt_aa)
 
@@ -66,20 +67,8 @@ for combo in combos:
 
     
     # Converts quaternions to axis-angle, then corrects jumps.
-    # TODO: Document better, maybe find way to combine with mat->AA code?
-    unitAxes, angles = pm.axisAnglesFromQuats(r_slerp_preds)
-    angles = angles.flatten()
-
-    angle_dots = pm.einsumDot(unitAxes[1:], unitAxes[:-1]) 
-    needs_flip = np.logical_xor.accumulate(angle_dots < 0, axis = -1)
-    angles[1:][needs_flip] = -angles[1:][needs_flip]
-    unitAxes[1:][needs_flip] = -unitAxes[1:][needs_flip]
-    np_tau = 2.0 * np.pi
-    tau_facs = np.round(np.diff(angles) / np_tau)
-    angle_corrections = np_tau * np.cumsum(tau_facs, axis = -1)
-    angles[1:] -= angle_corrections
-    r_slerp_preds_aa = pm.scalarsVecsMul(angles, unitAxes)
-    
+    # Cleanup-TODO: Document, maybe find way to combine with mat->AA code?
+    r_slerp_preds_aa = pm.axisAngleVec3sFromQuats(r_slerp_preds, True)    
     r_slerp_preds_aa = np.vstack((rotations[:1], r_slerp_preds_aa))
     
     t_quad_preds = 3 * translations[2:-1] - 3 * translations[1:-2] + translations[:-3]
@@ -110,7 +99,7 @@ results_5deg = np.zeros(out_shape)
 results_mean_dist = np.zeros(out_shape)
 results_mean_angle = np.zeros(out_shape)
 
-mode = SplinePredictionMode.EXTRAPOLATE
+mode = SplinePredictionMode.CONST_ACCEL
 
 smooth_and_accel = (mode == SplinePredictionMode.SMOOTH_AND_ACCEL)
 for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
@@ -142,8 +131,8 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 t_spline_preds = all_spline_preds[:, :3]
                 r_aa_spline_preds = all_spline_preds[:, 3:]
 
-                # TODO: Remove this; for now, it's just to verify results
-                # against code that (as far as I can tell) works.
+                # Cleanup-TODO: Remove this; for now, it's just to verify
+                # results against code that (as far as I can tell) works.
                 if mode == SplinePredictionMode.EXTRAPOLATE and (deg == 2):
                     t_diff = pd.translations[deg - 1] - pd.translations[deg - 2]
                     t_vel_pred = pd.translations[deg - 1] + t_diff
@@ -201,7 +190,7 @@ for deg in range(deg_range_inclusive[0], deg_range_inclusive[1] + 1):
                 ] = r_a
             
             # Print out current progress, as this can take a long time.
-            progress_str = "\rdeg {}, ctrl {}, num_in {}".format(
+            progress_str = "\rdeg {:>2}, ctrl {:>2}, num_in {:>2}".format(
                 deg, num_ctrl_pts, num_input_pts
             )
             print(progress_str, end = '', flush=True)
@@ -219,14 +208,18 @@ np.savez_compressed(
 #%% 
 load_target = "./default_filename.npz"
 if mode == SplinePredictionMode.EXTRAPOLATE:
-    load_target = "./results/bspline_param_evals2_c.npz"
+    # Old: load_target = "./results/bspline_param_evals2_c.npz"
+    load_target = "./results/bspline_param_evals_extrap.npz"
 elif mode == SplinePredictionMode.SMOOTH:
-    load_target = "./results/bspline_param_evals_quad_c.npz"
+    # Old: load_target = "./results/bspline_param_evals_quad_c.npz"
+    load_target = "./results/bspline_param_evals_smooth.npz"
 elif mode == SplinePredictionMode.SMOOTH_AND_ACCEL:
-    load_target = "./results/bspline_param_evals_smoothderiv_c.npz"
+    # Old: load_target = "./results/bspline_param_evals_smoothderiv_c.npz"
+    load_target = "./results/bspline_param_evals_smoothacc.npz"
 elif mode == SplinePredictionMode.CONST_ACCEL:
-    load_target = "./results/bspline_param_evals_deriv_c.npz"
-load_result = np.load(load_target)
+    # Old: load_target = "./results/bspline_param_evals_deriv_c.npz"
+    load_target = "./results/bspline_param_evals_constacc.npz"
+load_result = np.load(load_target, allow_pickle=False)
 # load_result.close()
 
 #%%
@@ -236,7 +229,7 @@ load_result = np.load(load_target)
 data_2cm = load_result['res_2cm'].mean(axis = -1)
 
 #%% 
-lr2 = np.load("./bspline_param_evals_latest.npz")
+lr2 = np.load("./bspline_param_evals_latest.npz", allow_pickle=False)
 # data_latest = lr2['res_2cm'].mean(axis = -1)
 # ds = data_2cm[:data_latest.shape[0], :data_latest.shape[1], :data_latest.shape[2]]
 data = lr2['res_mean_dist'].mean(axis = -1)

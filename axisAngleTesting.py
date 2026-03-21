@@ -186,14 +186,27 @@ def randomQuats(num):
     return pm.normalizeAll(np.random.uniform(-1, 1, (num, 4)))
 
 qs_to_reconstruct = randomQuats(100)
-q_to_ax, q_to_ang = pm.axisAnglesFromQuats(qs_to_reconstruct)
-aas_to_qs_test = pm.quatsFromAxisAngles(q_to_ax, q_to_ang)
-aa_quat_diffs = np.abs(np.stack([
-    aas_to_qs_test - qs_to_reconstruct, -aas_to_qs_test - qs_to_reconstruct
-], axis = 0))
-quat_diffs_per_q = np.sum(aa_quat_diffs, axis = -1)
-if np.max(np.min(quat_diffs_per_q), axis = 0) > 0.0001:
-    raise Exception("Quaternion reconstruction failed!")
+for jumpCorrection in (False, True):
+    q_to_ax, q_to_ang = pm.axisAnglesFromQuats(
+        qs_to_reconstruct, jumpCorrection
+    )
+    aas_to_qs_test = pm.quatsFromAxisAngles(q_to_ax, q_to_ang)
+    q_to_ax_vec3 = pm.axisAngleVec3sFromQuats(qs_to_reconstruct, jumpCorrection)
+    aas_to_qs_vec3_test = pm.quatsFromAxisAngleVec3s(q_to_ax_vec3)
+    aas_to_qs_by_vec3_usage = {False: aas_to_qs_test, True: aas_to_qs_vec3_test}
+    for vec3s_used, aas_to_qs_version in aas_to_qs_by_vec3_usage.items():
+        aa_quat_diffs = np.abs(np.stack([
+            aas_to_qs_version - qs_to_reconstruct,
+            -aas_to_qs_version - qs_to_reconstruct
+        ], axis = 0))
+        quat_diffs_per_q = np.sum(aa_quat_diffs, axis = -1)
+        if np.max(np.min(quat_diffs_per_q, axis = 0)) > 0.0001:
+            print("Vec3 usage: {}, jump correction used: {}".format(
+                vec3s_used, jumpCorrection
+            ))
+            raise Exception(
+                "Quaternion reconstruction failed!"
+            )
 
 #%% Testing the Runge-Kutta quaternion integration.
 

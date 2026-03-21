@@ -1,7 +1,7 @@
 import numpy as np
 from bayes_opt import BayesianOptimization
 
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 import posemath as pm
 
@@ -11,13 +11,13 @@ import matplotlib.pyplot as plt
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 combo_translations = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], 0)
-    translations = calculator.getTranslationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    translations = calculator.getTranslationsGTNP()[::1]
     combo_translations[combo] = translations
 #%%
 def getBounceScore(thresh: float, skip_amt: int):

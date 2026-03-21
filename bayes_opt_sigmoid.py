@@ -8,7 +8,7 @@ from bayes_opt import BayesianOptimization
 import matplotlib.pyplot as plt
 
 import posemath as pm
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
 
 @dataclass
@@ -34,18 +34,18 @@ def angWahbaFunc(x: np.ndarray, scale: float):
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
             combos.append((b,s))
 
 
 
 combo_rotations: typing.Dict[typing.Tuple[int, int], RotationInfo] = dict()
 for combo in combos:
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], SKIP_AMT)
-    aa_rotations = calculator.getRotationsGTNP(True)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    aa_rotations = calculator.getRotationsGTNP()[::(SKIP_AMT + 1)]
     qs = pm.quatsFromAxisAngleVec3s(aa_rotations)
     quatDiffs = pm.multiplyQuatLists(qs[1:], pm.conjugateQuats(qs[:-1]))
-    axes, angles = pm.axisAnglesFromQuats(quatDiffs)
+    axes, angles = pm.axisAnglesFromQuats(quatDiffs, True)
     combo_rotations[combo] = RotationInfo(qs, axes, angles)
 
 
@@ -70,7 +70,7 @@ def getSigmoidScore(scale: float, k: float, use_median: bool = False):
             # in my other files, which includes the prediction for the first 
             # non-init pose as just copying the init pose, would be to avoid 
             # numpy appends, slices, etc. and just do this:
-            r_err_sum += rotInfo.angles[0]
+            r_err_sum += abs(rotInfo.angles[0])
             mean_r_err_norm = r_err_sum / (len(r_err_angs) + 1)
 
             all_err_means.append(mean_r_err_norm)
@@ -103,7 +103,7 @@ def getLinScore(scale: float, use_median: bool = False):
             # in my other files, which includes the prediction for the first 
             # non-init pose as just copying the init pose, would be to avoid 
             # numpy appends, slices, etc. and just do this:
-            r_err_sum += rotInfo.angles[0]
+            r_err_sum += abs(rotInfo.angles[0])
             mean_r_err_norm = r_err_sum / (len(r_err_angs) + 1)
 
             all_err_means.append(mean_r_err_norm)
@@ -136,7 +136,7 @@ def getWahbaScore(scale: float, use_median: bool = False):
             # in my other files, which includes the prediction for the first 
             # non-init pose as just copying the init pose, would be to avoid 
             # numpy appends, slices, etc. and just do this:
-            r_err_sum += rotInfo.angles[0]
+            r_err_sum += abs(rotInfo.angles[0])
             mean_r_err_norm = r_err_sum / (len(r_err_angs) + 1)
 
             all_err_means.append(mean_r_err_norm)

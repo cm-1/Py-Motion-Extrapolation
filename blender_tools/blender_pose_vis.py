@@ -1,6 +1,7 @@
 import bpy
 import numpy as np
-
+from numpy.typing import NDArray
+import mathutils
 
 # NOTE: The below code assumes poses are object-to-world and in row-order.
 # It also assumes there is only one scene, and the keyframe-replacing function
@@ -17,7 +18,21 @@ poses[:,0,3] = np.arange(len(poses))
 
 # poses[:,3,:3] *= 0.1
 
-def setAsKeyframesForObj(obj, matrices):
+def createMatrixWorld(matrix: NDArray, rotCorrect: bool):
+    # Matrix needs to be converted into a mathutils matrix or else Blender
+    # interprets it as transposed. Which is confusing, because both numpy
+    # and mathutils seem to use row major? Anyway, one could also just
+    # transpose the numpy matrix but this seems "cleaner" and less likely
+    # to break with future updates.
+    matToSet = mathutils.Matrix(matrix)
+    if rotCorrect:
+        # Because Blender uses an "unconventional" Z-is-up coordinate
+        # system, we might need to rotate our objects by -90 on X before
+        # applying our transofmrations.
+        matToSet = matToSet @ mathutils.Matrix.Rotation(-np.pi / 2, 4, 'X')
+    return matToSet
+
+def setAsKeyframesForObj(obj, matrices: NDArray, rotCorrect: bool = False):
     scene0 = bpy.data.scenes[0]
 
     # Clear all existing animations from the object
@@ -30,20 +45,18 @@ def setAsKeyframesForObj(obj, matrices):
             break
         bpy.context.scene.frame_set(frameNum)
 
-        # We transpose first, since we're assuming that the poses passed in are
-        # object-to-world matrices in row-major form.
-        matToSet = np.copy(frameMat.T)
-
-        obj.matrix_world = matToSet
-        obj.keyframe_insert(data_path="rotation_euler", index = -1)
-        obj.keyframe_insert(data_path="location", index = -1)
+        obj.matrix_world = createMatrixWorld(frameMat, rotCorrect)
+        # In previous versions of Blender, using "rotation_euler" here seemed
+        # to work, but now that doesn't work properly? Easy fix, at least... 
+        obj.keyframe_insert(data_path="rotation_quaternion", frame=frameNum)
+        obj.keyframe_insert(data_path="location", frame=frameNum)
         frameNum += 1
 
     # Return Blender to 1st frame
     bpy.context.scene.frame_set(scene0.frame_start) 
     return
 
-def duplicateObjects(obj, matrices):
+def duplicateObjects(obj, matrices: NDArray, rotCorrect: bool = False):
     all_copies = []
     for i, mat in enumerate(matrices):
         objCopy = obj.copy()
@@ -52,7 +65,7 @@ def duplicateObjects(obj, matrices):
         
         # We transpose first, since we're assuming that the poses passed in are
         # object-to-world matrices in row-major form.
-        objCopy.matrix_world = np.copy(mat.T)
+        objCopy.matrix_world = createMatrixWorld(mat, rotCorrect)
         all_copies.append(objCopy)
 
         bpy.context.scene.collection.objects.link(objCopy)
@@ -74,5 +87,5 @@ def duplicateObjects(obj, matrices):
     print("Done joining objects!")
     return
 
-#setAsKeyframesForObj(bpy.context.selected_objects[0], poses)
-duplicateObjects(bpy.context.selected_objects[0], poses[:35])
+setAsKeyframesForObj(bpy.context.selected_objects[0], poses, True)
+#duplicateObjects(bpy.context.selected_objects[0], poses)

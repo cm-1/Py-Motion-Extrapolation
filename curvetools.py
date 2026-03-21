@@ -17,8 +17,8 @@ def convolveFilter(filter, data: np.ndarray):
     """
     # Note: Function was originally generated with ChatGPT but was verified
     # (and heavily modified/documented) manually.
-    # TODO: Uncomment this once slight efficiency difference is known to no
-    # longer be worth it!
+    # Reusability-TODO: Uncomment this once slight efficiency difference is
+    # known to no longer be worth it!
     # assert len(data) >= len(filter) and len(filter) > 0, \
     #     "Must have len(data) >= len(filter) > 0!"
 

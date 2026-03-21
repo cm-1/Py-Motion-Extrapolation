@@ -8,7 +8,7 @@ derivative work and the original.
 
 # Building
 
-Run `python .\setup.py build_ext --inplace`.
+Run `python ./setup.py build_ext --inplace`.
 
 # Notes on using this code:
 

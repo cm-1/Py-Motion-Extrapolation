@@ -303,9 +303,9 @@ def specifiedPtsFromNURBS(ctrlPtCoords, weights, m, k, uList, muList, paramVals,
             # We stop when delta >= m since, standard or regular knot sequence,
             # that's as far as is reasonable to do.
             #
-            # TODO: This would probably break if we increased the multiplicity
-            # at the very end of the curve. Will have to make larger fix if we
-            # want to accomodate that!!! 
+            # Reusability-TODO: This would probably break if we increased the
+            # multiplicity at the very end of the curve. Will have to make
+            # larger fix if we want to accomodate that!!! 
             while (delta < m and u >= uList[delta + 1]):
                 delta = delta + muList[delta + 1]
 

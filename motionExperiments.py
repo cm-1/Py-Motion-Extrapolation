@@ -14,7 +14,7 @@ from spline_approximation import SplinePredictionMode, BSplineFitCalculator
 from cinpact import CinpactAccelExtrapolater
 
 import gtCommon as gtc
-from gtCommon import BCOT_Data_Calculator
+from gtCommon import PoseLoaderBCOT
 
 import posemath as pm
 import poseextrapolation as pex
@@ -22,6 +22,9 @@ import poseextrapolation as pex
 TRANSLATION_THRESH = 20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
+
+skipAmount = 2
+WEIGHT_SCORES_BY_LEN = True
 
 ADD_NUMERICAL_TESTS = False
 
@@ -89,7 +92,7 @@ def getRandomQuatError(shape, max_err_rads):
 # - Only use (RK4, fa-acc) when acc is within some sort of time-based limit.
 # -   dot-mag fixed-axis.
 # - O(3)
-def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats):
+def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations_quats, abs_angles):
     # Stuff that's needed for all of the predictions below:
     ang_vel_vecs = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
     ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
@@ -103,7 +106,7 @@ def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations
 
 
     constspeed_extrap_vecs = pm.scalarsVecsMul(
-        angles[1:-1], pm.normalizeAll(extrap_ang_vel_vecs)
+        abs_angles[1:-1], pm.normalizeAll(extrap_ang_vel_vecs)
     )
 
     interp_ang_vels2 = np.linspace(ang_vel_vecs[1:], constspeed_extrap_vecs, 33, axis=1)
@@ -159,7 +162,7 @@ def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations
 
     # Non-numerical fixed-axis dot thing.
     parallel_ang_acc_scalars = pm.einsumDot(ang_acc_vecs, fixed_axes[1:-1])
-    parallel_angs = angles[1:-1] + parallel_ang_acc_scalars**2
+    parallel_angs = angles[1:-1] + parallel_ang_acc_scalars
     accproj_diffs = pm.quatsFromAxisAngles(fixed_axes[1:-1], parallel_angs)
     accproj_preds = pm.multiplyQuatLists(accproj_diffs, rotations_quats[2:-1])
 
@@ -190,20 +193,30 @@ class PredictionResult:
                  errors: typing.Dict[typing.Tuple[int, int], np.ndarray],
                  scores: typing.Dict[typing.Tuple[int, int], float]
                  ):
-        self.name: str = name
+        self.name = name
         # predictions: np.ndarray
-        self.errors: typing.Dict[typing.Tuple[int, int], np.ndarray] = errors
-        self.scores: typing.Dict[typing.Tuple[int, int], float] = scores
-        self.scores2D: np.ndarray = np.full(
-            (len(gtc.BCOT_BODY_NAMES), len(gtc.BCOT_SEQ_NAMES)), np.nan
-        )
-        for k, v in scores.items():
-            self.scores2D[k[0], k[1]] = v
-        
-    def addScore(self, bodSeqIDTuple: typing.Tuple[int, int], score: float):
-        self.scores[bodSeqIDTuple] = score
-        self.scores2D[bodSeqIDTuple[0], bodSeqIDTuple[1]] = score
+        self.errors = errors
+        self.scores = scores
+        shape_2D = (len(gtc.BCOT_BODY_NAMES), len(gtc.BCOT_SEQ_NAMES))
+        self.scores2D = np.full(shape_2D, np.nan)
+        self.weighted_scores_2D = np.full(shape_2D, np.nan)
+        self.num_errors_2D = np.zeros(shape_2D, dtype=np.int32)
+        for k, k_errs in errors.items():
+            self._updateResult(k, scores[k], k_errs)
 
+    def _updateResult(self, bodSeqIDTuple: typing.Tuple[int, int], score: float,
+                      errs: np.ndarray):
+        self.scores2D[bodSeqIDTuple] = score
+        n_errs = len(errs)
+        self.weighted_scores_2D[bodSeqIDTuple] = score * n_errs
+        self.num_errors_2D[bodSeqIDTuple] = n_errs
+        
+    def addResult(self, bodSeqIDTuple: typing.Tuple[int, int], score: float,
+                  errs: np.ndarray):
+        self.scores[bodSeqIDTuple] = score
+        self.errors[bodSeqIDTuple] = errs
+        self._updateResult(bodSeqIDTuple, score, errs)
+        
 class POSE_COMPONENT(Enum):
     TRANSLATION = 1
     ROTATION = 2
@@ -230,9 +243,10 @@ class ConsolidatedResults:
 
         # self.body_seq_to_row = dict() # (bodyID: int , seqID: int) -> int
 
-        self._translations_gt = None
-        self._axisangles_gt = None
-        self._quaternions_gt = None
+        self._translations_gt = np.empty((0, 3))
+        self._axisangles_gt = np.empty((0, 3))
+        self._angvels_gt = np.empty((0, 3))
+        self._quaternions_gt = np.empty((0, 4))
 
         self._currentKey = None # Current (body, sequence) key.
         self._allBodSeqKeys = set()
@@ -240,23 +254,27 @@ class ConsolidatedResults:
     # Predictions that require multiple prior points may lack a prediction for
     # the 2nd point, 3rd point, etc. In this case, the CV version of the code
     # would use a different prediction method (including assuming no motion).
-    def prependMissingPredictions(backup_predictions, predictions):
+    @staticmethod
+    def prependMissingPredictions(backup_predictions: NDArray, predictions):
         numMissing = (len(backup_predictions) - 1) - len(predictions)
         return np.vstack((backup_predictions[0:numMissing], predictions))
 
     # Note: returns errors in radians!
-    def getQuatError(values, predictions):
+    @staticmethod
+    def getQuatError(values: NDArray, predictions: NDArray):
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
         )
         return pm.anglesBetweenQuats(values[1:], full_predictions)
 
     # Note: returns errors in radians!
+    @staticmethod
     def getAxisAngleError(values, predictions): 
         v_qs = pm.quatsFromAxisAngleVec3s(values)
         p_qs = pm.quatsFromAxisAngleVec3s(predictions)
         return ConsolidatedResults.getQuatError(v_qs, p_qs)
 
+    @staticmethod
     def getTranslationError(values, predictions):
         full_predictions = ConsolidatedResults.prependMissingPredictions(
             values, predictions
@@ -264,11 +282,16 @@ class ConsolidatedResults:
 
         return values[1:] - full_predictions
     
-    def updateGroundTruth(self, translations, axisangles, quats, bod_ID, seq_ID):
+    def updateGroundTruth(self, translations, axisangles, quats, angvels,
+                          bod_ID: int, seq_ID: int):
         self._currentKey = (bod_ID, seq_ID)
         self._allBodSeqKeys.add(self._currentKey)
         self._translations_gt = translations
         self._axisangles_gt = axisangles
+        # We need a prediction for every possible "next frame".
+        # So for the first frame where no angular velocity exists, we'll give it
+        # a value of zero.
+        self._angvels_gt = np.pad(angvels, ((1,0), (0,0)))
         self._quaternions_gt = quats
         t_perfect_errs = ConsolidatedResults.getTranslationError(
             translations, translations[1:]
@@ -312,6 +335,15 @@ class ConsolidatedResults:
         self._addPredictionResult(
             self.rotation_results, self._ordered_rotation_result_names,
             name, errs, score)
+        
+    def addAngVelResult(self, name, predictions):
+        errs = ConsolidatedResults.getAxisAngleError(
+            self._angvels_gt, predictions
+        )
+        score = ConsolidatedResults.applyThreshold(errs, ROTATION_THRESH_RAD)
+        self._addPredictionResult(
+            self.rotation_results, self._ordered_rotation_result_names,
+            name, errs, score)
 
     def addQuaternionResult(self, name, predictions):
         errs = ConsolidatedResults.getQuatError(
@@ -335,6 +367,7 @@ class ConsolidatedResults:
             names, agg_name, ROTATION_THRESH_RAD, True, use_shift
         )
 
+    @staticmethod
     def applyThreshold(errs, thresh):
         score = None
         if thresh is None:
@@ -343,6 +376,7 @@ class ConsolidatedResults:
             score = (errs <= thresh).mean()
         return score
 
+    @staticmethod
     def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
         bodSeqKeys = results_dict[names[0]].errors.keys()
         errs = dict()
@@ -378,14 +412,16 @@ class ConsolidatedResults:
 
     def _addPredictionResult(self, all_results_dict, name_order_list, name, errs, score):
         if name in all_results_dict.keys():
-            all_results_dict[name].errors[self._currentKey] = errs
-            all_results_dict[name].addScore(self._currentKey, score)
+            all_results_dict[name].addResult(self._currentKey, score, errs)
         else:
+            if self._currentKey is None:
+                raise Exception("No current video key!")
             errs_dict = {self._currentKey: errs}
             score_dict = {self._currentKey: score}
             all_results_dict[name] = PredictionResult(name, errs_dict, score_dict)
             name_order_list.append(name)
-
+    
+    @staticmethod
     def printLatexTable(table_info: TableInfo, num_to_highlight = 0,
                         max_is_better = True, dec_round = 2, data_func = None):
         print_str = "\\begin{table}[h]\n\\centering\n\\caption{...}\n"
@@ -451,12 +487,13 @@ class ConsolidatedResults:
         print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table}"
         print(print_str)
 
-
+    @staticmethod
     def printTable(results_for_names, col_names, row_names = None, annotations = None):
         name_lens = []
         row_name_col_width = 0
-        no_row_names_given = (row_names is None) or (len(row_names) == 0)
-        if no_row_names_given:
+        no_row_names_given = False
+        if (row_names is None) or (len(row_names) == 0):
+            no_row_names_given = True
             row_names = [""]
         else:
             row_name_col_width = np.max([len(rn) for rn in row_names]) + 1
@@ -498,10 +535,17 @@ class ConsolidatedResults:
                 print("{v:>{w}} ".format(v=val_str, w=width), end = "")
             print() # Newline after row.
 
+    @staticmethod
+    def weightedScoreAvg(result_obj: PredictionResult, mean_ax):
+        score_sum = np.nansum(result_obj.weighted_scores_2D, axis=mean_ax)
+        score_count = np.sum(result_obj.num_errors_2D, axis=mean_ax)
+        return score_sum / score_count
 
     def prepareDataForPrint(self, group_mode: DisplayGrouping,
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None):
+                            weight_scores_by_len: bool,
+                            pose_component: POSE_COMPONENT,
+                            thresh_name: str = "", 
+                            cols_to_exclude: typing.Optional[typing.Sequence[str]] = None):
         mean_ax = None
         row_names = []
         # If we split up by rows, we need a different axis for the mean calc
@@ -510,7 +554,7 @@ class ConsolidatedResults:
             if group_mode == DisplayGrouping.BY_OBJECT:
                 mean_ax = 1
                 row_names = [
-                    gtc.shortBodyNameBCOT(n, 7) for n in gtc.BCOT_BODY_NAMES
+                    gtc.truncateName(n, 7) for n in gtc.BCOT_BODY_NAMES
                 ]
             elif group_mode == DisplayGrouping.BY_SEQUENCE:
                 mean_ax = 0
@@ -527,10 +571,19 @@ class ConsolidatedResults:
             results = self.rotation_results
 
         # Calculate the averages along the chosen axis.
-        ordered_score_means = [
-            np.nanmean(results[n].scores2D, axis=mean_ax)
-            for n in ordered_names
-        ]
+
+        ordered_score_means: typing.List[np.ndarray] = []
+        if weight_scores_by_len:
+            ordered_score_means = [
+                self.weightedScoreAvg(results[n], mean_ax)
+                for n in ordered_names
+            ]
+        else:
+            ordered_score_means = [
+                np.nanmean(results[n].scores2D, axis=mean_ax)
+                for n in ordered_names
+            ]
+
         # Filter out nan values, because the easiest temporary way to skip the 
         # "duplicate" 2nd camera sequences was to leave their values as nan 
         # rather than work with skipped indices.
@@ -570,9 +623,13 @@ class ConsolidatedResults:
             means_names_zip = zip(ordered_score_means, ordered_names)
             for c, (means, name) in enumerate(means_names_zip):
                 if include_bools[c]:
-                    overall_avg = np.fromiter(
-                        results[name].scores.values(), dtype=float
-                    ).mean()
+                    overall_avg = np.inf # Placeholder
+                    if weight_scores_by_len:
+                        overall_avg = self.weightedScoreAvg(results[name], None)
+                    else:
+                        overall_avg = np.fromiter(
+                            results[name].scores.values(), dtype=float
+                        ).mean()
                     means = np.append(means, overall_avg)
                     selected_means.append(means)
         else:
@@ -609,11 +666,13 @@ class ConsolidatedResults:
         )
     
     def printResults(self, group_mode: DisplayGrouping,
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None):
+                     weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
+                     thresh_name: str = "", 
+                     cols_to_exclude: typing.Optional[typing.Sequence[str]] = None):
         
         ti = self.prepareDataForPrint(
-            group_mode, pose_component, thresh_name, cols_to_exclude
+            group_mode, weight_scores_by_len, pose_component, thresh_name,
+            cols_to_exclude
         )
 
         annotations = None
@@ -665,13 +724,15 @@ class ConsolidatedResults:
             print("Excluded columns:", excluded_str)
         return
     
-    def latexResults(self, group_mode: DisplayGrouping, 
-                     pose_component: POSE_COMPONENT, thresh_name: str = "", 
-                     cols_to_exclude: typing.List[str] = None,
+    def latexResults(self, group_mode: DisplayGrouping,
+                     weight_scores_by_len: bool, pose_component: POSE_COMPONENT,
+                     thresh_name: str = "", 
+                     cols_to_exclude: typing.Optional[typing.Sequence[str]] = None,
                      num_to_highlight = 0, max_is_better = True, dec_round = 2,
                      data_func = None):
         ti = self.prepareDataForPrint(
-            group_mode, pose_component, thresh_name, cols_to_exclude
+            group_mode, weight_scores_by_len, pose_component, thresh_name,
+            cols_to_exclude
         )
         ConsolidatedResults.printLatexTable(
             ti, num_to_highlight, max_is_better, dec_round, data_func
@@ -681,10 +742,9 @@ class ConsolidatedResults:
 combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if BCOT_Data_Calculator.isBodySeqPairValid(b, s, True):
+        if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
             combos.append((b,s))
 
-skipAmount = 2
 
 fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
@@ -728,10 +788,10 @@ maxTimestamps = 0
 maxTimestampsWhenSkipped = 0
 max_angle = 0
 for i, combo in enumerate(combos):
-    calculator = BCOT_Data_Calculator(combo[0], combo[1], skipAmount)
+    calculator = PoseLoaderBCOT(combo[0], combo[1])
 
-    translations_gt = calculator.getTranslationsGTNP(True)
-    rotations_aa_gt = calculator.getRotationsGTNP(True)
+    translations_gt = calculator.getTranslationsGTNP()[::(skipAmount + 1)]
+    rotations_aa_gt = calculator.getRotationsGTNP()[::(skipAmount + 1)]
     rotations_gt_quats = pm.quatsFromAxisAngleVec3s(rotations_aa_gt)
 
 
@@ -742,10 +802,23 @@ for i, combo in enumerate(combos):
     #     rotations_gt_quats
     # )
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
+    
+    rev_rotations_quats = pm.conjugateQuats(rotations_quats)
+
+    rotation_quat_diffs = pm.multiplyQuatLists(
+        rotations_quats[1:], rev_rotations_quats[:-1]
+    )
+
+    
+    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs, True)
+    angles = angles.flatten()
+    abs_angles = np.abs(angles)
+    scaled_axes = pm.scalarsVecsMul(angles, fixed_axes)
 
     allResultsObj.updateGroundTruth(
-        translations_gt, rotations_aa_gt, rotations_gt_quats, combo[0], combo[1]
+        translations_gt, rotations_aa_gt, rotations_gt_quats, scaled_axes, combo[0], combo[1]
     )
+
     maxTimestampsWhenSkipped = max(maxTimestampsWhenSkipped, len(translations))
 
 
@@ -753,14 +826,6 @@ for i, combo in enumerate(combos):
     rotation_aa_diffs = np.diff(rotations, axis=0)
 
     
-    
-    rev_rotations_quats = pm.conjugateQuats(rotations_quats)
-
-
-
-    rotation_quat_diffs = pm.multiplyQuatLists(
-        rotations_quats[1:], rev_rotations_quats[:-1]
-    )
 
     # At this time, logging the finite difference acceleration at the last
     # timestep isn't required, as there's no further prediction to make with it.
@@ -842,13 +907,6 @@ for i, combo in enumerate(combos):
     # if np.abs(c_cosines_1 - c_cosines_2).max() > 0.0001:
     #     raise Exception("Made an angle mistake!")
 
-    print("TODO: Try veld1 and acc ang preds here too!")
-    circle_rot_quats = np.empty(cma.circle_plane_info.normals.shape[:-1] + (4,))
-    half_c_pred_angles = cma.disp_angles_vel_deg2 / 2.0
-    circle_rot_quats[:, 0] = np.cos(half_c_pred_angles)
-    circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
-        np.sin(half_c_pred_angles), cma.circle_plane_info.normals
-    )
 
 
     # I guess I'm thinking that F2 = V(0>1)*F1*R1
@@ -871,9 +929,23 @@ for i, combo in enumerate(combos):
         return r_arm_preds
 
     r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
-    r_c_arm_preds = getArmRotPreds(circle_rot_quats)
-    r_c_arm_preds[1:][cma.invalid_circ_indices] = r_vel_preds[1:][cma.invalid_circ_indices]
-
+    r_c_arm_preds_d1d2a = []
+    cma_disp_angles = [
+        cma.disp_angles_vel_deg1, cma.disp_angles_vel_deg2, cma.disp_angles_acc
+    ]
+    for _disp_angles in cma_disp_angles:
+        circle_rot_quats = np.empty(
+            cma.circle_plane_info.normals.shape[:-1] + (4,)
+        )
+        _half_c_pred_angles = _disp_angles / 2.0
+        circle_rot_quats[:, 0] = np.cos(_half_c_pred_angles)
+        circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
+            np.sin(_half_c_pred_angles), cma.circle_plane_info.normals
+        )
+        _r_c_arm_preds = getArmRotPreds(circle_rot_quats)
+        _r_c_arm_preds[1:][cma.invalid_circ_indices] = \
+            r_vel_preds[1:][cma.invalid_circ_indices]
+        r_c_arm_preds_d1d2a.append(_r_c_arm_preds)
     # unit_vel_test = pm.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
     #     raise Exception("Made a mistake!")
@@ -896,9 +968,8 @@ for i, combo in enumerate(combos):
 
     # num_spline_preds = (len(translations) - 1) - (SPLINE_DEGREE) 
 
-    r_mats = calculator.getRotationMatsGTNP(True)
-    fixed_axes, angles = pm.axisAnglesFromQuats(rotation_quat_diffs)
-    angles = angles.flatten()
+    r_mats = calculator.getRotationMatsGTNP()[::(skipAmount + 1)]
+
     #rotation_quat_diffs[:, 1:] / np.linalg.norm(rotation_quat_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
     r_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[1:-1], r_mats[2:], fixed_axes[:-1])
     r_next_fixed_axis_closest_angs = pm.closestAnglesAboutAxis(r_mats[:-2], r_mats[1:-1], fixed_axes[1:])
@@ -919,13 +990,13 @@ for i, combo in enumerate(combos):
     wahba_outputs = wahba(wahba_inputs)
     wahba_pred = np.empty_like(r_aa_vel_preds)
     wahba_pred[1:] = pm.axisAngleFromMatArray(wahba_outputs) 
-    first_vel_ax, first_vel_ang = pm.axisAnglesFromQuats(r_vel_preds[:1])
+    first_vel_ax, first_vel_ang = pm.axisAnglesFromQuats(r_vel_preds[:1], False)
     wahba_pred[0] = pm.scalarsVecsMul(first_vel_ang.flatten(), first_vel_ax)[0]
 
 
 
     # angles = pm.anglesBetweenQuats(rotations_quats[1:], rotations_quats[:-1]).flatten()
-    max_angle = max(max_angle, angles.max())
+    max_angle = max(max_angle, abs_angles.max())
 
 
     angle_diffs = np.diff(angles, 1, axis=0)
@@ -937,7 +1008,7 @@ for i, combo in enumerate(combos):
 
     next_axis_angs = pm.closestAnglesAboutAxis(r_mats[:-3], r_mats[1:-2], fixed_axes[1:-1])
     angle_diffs2 = angles[1:-1] - next_axis_angs
-    angle_ratios2 = 2 + (np.clip(angle_diffs2, a_min = None, a_max = 0)/angles[1:-1])
+    angle_ratios2 = np.clip(2 + (angle_diffs2/angles[1:-1]), a_min = None, a_max = 2)
 
     r_fixed_axis_preds = np.empty((len(rotations) - 2, 4))
     r_fixed_axis_preds[1:] = pm.quatSlerp(rotations_quats[1:-2], rotations_quats[2:-1], angle_ratios)
@@ -974,11 +1045,10 @@ for i, combo in enumerate(combos):
     r_movaxis_preds[0] = r_vel_preds[0]
     r_movaxis_preds[1:] = pm.multiplyQuatLists(r_movaxis_diffs, rotations_quats[2:-1])
 
-    scaled_axes = pm.scalarsVecsMul(angles[:-1], fixed_axes[:-1])
     # test_quats = pm.quatsFromAxisAngleVec3s(scaled_axes)
     # max_scaledax_diff = np.abs(test_quats - rotation_quat_diffs[:-1]).max()
-    ang_accels = np.diff(scaled_axes, 1, axis=0)
-    naive_lin_axes = pm.replaceAtEnd(scaled_axes, scaled_axes[1:] + ang_accels, 1)
+    ang_accels = np.diff(scaled_axes[:-1], 1, axis=0)
+    naive_lin_axes = pm.replaceAtEnd(scaled_axes[:-1], scaled_axes[1:-1] + ang_accels, 1)
     naive_lin_q_diffs = pm.quatsFromAxisAngleVec3s(naive_lin_axes)
     r_naive_lin_preds = pm.multiplyQuatLists(
         naive_lin_q_diffs, rotations_quats[1:-1]
@@ -1130,7 +1200,7 @@ for i, combo in enumerate(combos):
     if ADD_NUMERICAL_TESTS:
         numerical_res_dict = numericalIdeas(
             angles, fixed_axes, angle_diffs, r_fixed_axis_closest_angs,
-            r_next_fixed_axis_closest_angs, rotations_quats
+            r_next_fixed_axis_closest_angs, rotations_quats, abs_angles
         )
         for numerical_k, numerical_r in numerical_res_dict.items():
             if numerical_r.shape[1] != 4:
@@ -1140,7 +1210,8 @@ for i, combo in enumerate(combos):
             allResultsObj.addQuaternionResult(numerical_k, numerical_r_full)
 
         rk_dec_only = r_vel_preds.copy()
-        ang_dec_inds = angle_diffs[:-1] < 0.0
+        diffs_of_abs_angles = np.diff(abs_angles, 1, axis=0)
+        ang_dec_inds = diffs_of_abs_angles[:-1] < 0.0
         rk_dec_only[1:][ang_dec_inds] = numerical_res_dict["RK"][ang_dec_inds]
 
 
@@ -1149,7 +1220,9 @@ for i, combo in enumerate(combos):
 
     allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
-    allResultsObj.addQuaternionResult("Arm c", r_c_arm_preds)
+    allResultsObj.addQuaternionResult("Arm c d1", r_c_arm_preds_d1d2a[0])
+    allResultsObj.addQuaternionResult("Arm c d1", r_c_arm_preds_d1d2a[1])
+    allResultsObj.addQuaternionResult("Arm c acc", r_c_arm_preds_d1d2a[2])
     allResultsObj.addQuaternionResult("camobj", camobj_preds)
     allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
 
@@ -1182,7 +1255,7 @@ for i, combo in enumerate(combos):
     ))
 
     maxTimestamps = max(
-        maxTimestamps, len(calculator.getTranslationsGTNP(False))
+        maxTimestamps, len(calculator.getTranslationsGTNP())
     )
     if (not egFound):
         allLastLerpScores = allResultsObj.translation_results["AccLERP"].scores
@@ -1219,9 +1292,13 @@ disp_groupings = (
 for disp_grouping in disp_groupings:
     for pose_comp, thresh_col in zip(pose_comps, thresh_cols):
         if disp_grouping == DisplayGrouping.TOTAL_ONLY:
-            allResultsObj.printResults(disp_grouping, pose_comp)
+            allResultsObj.printResults(
+                disp_grouping, WEIGHT_SCORES_BY_LEN, pose_comp
+            )
         else:
-            allResultsObj.printResults(disp_grouping, pose_comp, thresh_col)
+            allResultsObj.printResults(
+                disp_grouping, WEIGHT_SCORES_BY_LEN, pose_comp, thresh_col
+            )
         print()
 stat_headers = ["Mean", "Min", "Max", "Median", "std"]
 def stat_results(vals: np.ndarray):
@@ -1392,7 +1469,7 @@ best_fit_plot, = ax2.plot(*best_fit_coords)
 p2_p1_bcs_lims = np.stack([
     np.min(p2_p1_bcs_stack, axis=0), np.max(p2_p1_bcs_stack, axis=0)
 ], axis=-1)
-ax2.axis([-0.5, 2, -0.5, 2])
+ax2.axis((-0.5, 2, -0.5, 2))
 
 ax.set_xlim(*p2_p1_bcs_lims[0])
 ax.set_ylim(*p2_p1_bcs_lims[1])
@@ -1422,7 +1499,7 @@ def move_plane(val):
     best_fit_plot.set_data(*best_fit_coordvals)
     fig.canvas.draw_idle()
 
-slider_ax = plt.axes([0.6, 0.15, 0.35, 0.03])#, facecolor='lightgoldenrodyellow')
+slider_ax = plt.axes((0.6, 0.15, 0.35, 0.03))#, facecolor='lightgoldenrodyellow')
 slider = Slider(slider_ax, "prev2", 0.0, half_pi, valinit=0.0)
 slider.on_changed(move_plane)
 
@@ -1449,7 +1526,7 @@ acc_err_y[negate_mask] *= -1
 # Create line segments from (0, 0) to each (x, y).
 points = np.column_stack((acc_err_x, acc_err_y))
 origin = np.array([0, 0])
-segments = np.array([[origin, point] for point in points])
+segments = [np.array([origin, point]) for point in points]
 
 # Create the LineCollection with a colormap that encodes the frame numbers.
 colors = (skipAmount + 1) * np.arange(len(acc_err_x))

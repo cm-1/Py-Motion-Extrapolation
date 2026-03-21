@@ -19,7 +19,8 @@ class CircularMotionAnalysis:
                  translation_diffs: np.ndarray = None,
                  backup_preds: np.ndarray = None,
                  max_circ_angle: float = DEFAULT_MAX_CIRC_ANGLE,
-                 max_sq_radii: float = DEFAULT_MAX_CIRC_SQ_RADIUS):
+                 max_sq_radii: float = DEFAULT_MAX_CIRC_SQ_RADIUS,
+                 na_value = np.inf):
         
         self.backup_preds = backup_preds
         self.max_circ_angle = max_circ_angle
@@ -38,7 +39,7 @@ class CircularMotionAnalysis:
                 translations[j:(-3 + j)], *circle_axes
             ))
             
-        self.c_centres_2D = pm.circleCentres2D(*circle_pts_2D)
+        self.c_centres_2D = pm.circleCentres2D(*circle_pts_2D, na_value)
 
         self.diffs_from_centres: typing.List[np.ndarray] = []
         for j in range(3):
@@ -50,22 +51,24 @@ class CircularMotionAnalysis:
         radii_too_long = self._sq_radii > max_sq_radii 
 
         self._angle_arr_pair: typing.List[np.ndarray] = []
-        c_cosines = []
+        # c_cosines = []
         for j in range(2):
             c_diff_dot = pm.einsumDot(
                 self.diffs_from_centres[j], self.diffs_from_centres[j + 1]
             )
-            c_cosines.append(
-                c_diff_dot/self._sq_radii
-            )
-            curr_angs = np.arccos(c_cosines[-1])
+            # If the radius is zero, then our angle should be zero, because our
+            # object isn't moving. So we want 1.0 to be our NaN replacement.
+            # Note: np.ones() is a lot slower than np.empty(), so there's no
+            # benefit to writing a function like safeDivideElseZero() for ones.
+            c_cosines_curr = pm.safeDivide(c_diff_dot, self._sq_radii, 1.0)
+            # c_cosines.append(c_cosines_curr)
+            
+            curr_angs = np.arccos(np.clip(c_cosines_curr, -1, 1))
 
             # Numpy cross products of 2D vecs treat them like 3D vecs and return 
             # only the z-coordinate of the result (since the rest are 0). We'll look
             # at the sign to determine rotation direction about the circle axis.
-            # TODO: Because np.cross of 2D vecs is deprecated, do the cross
-            # product myself.
-            c_crosses = np.cross(
+            c_crosses = pm.cross2D(
                 self.diffs_from_centres[j], self.diffs_from_centres[j + 1]
             )
             flips = (c_crosses < 0.0)
@@ -178,7 +181,6 @@ class CircularMotionAnalysis:
         dist_from_circ = np.linalg.norm(vecs_from_circ, axis=-1)
 
         ratio_from_circ = dist_from_circ/prev_radii
-        print("TODO: prop circ params from prev when successful if new is too dissimilar?")
 
 
         c_over_thresh = ratio_from_circ > err_radius_ratio_thresh
@@ -251,9 +253,11 @@ def camObjConstAngularVelPreds(known_rotations_qs: np.ndarray, backup_prediction
         rotation_q_diffs[1:], rotation_q_diffs[:-1]
     )
 
-    step1_diff_aas = pm.axisAnglesFromQuats(rotation_q_diffs)
+    step1_diff_aas = pm.axisAnglesFromQuats(rotation_q_diffs, False)
     step1_diff_unit_axes, step1_diff_angles = step1_diff_aas
-    step2_diff_unit_axes, _ = pm.axisAnglesFromQuats(rotation_q_step2_diffs)
+    step2_diff_unit_axes, _ = pm.axisAnglesFromQuats(
+        rotation_q_step2_diffs, False
+    )
     unnormed_plane_axes = np.cross(
         step1_diff_unit_axes[1:], step2_diff_unit_axes
     )

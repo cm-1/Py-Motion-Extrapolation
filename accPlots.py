@@ -1,4 +1,3 @@
-# TODO: Look at https://matplotlib.org/stable/gallery/widgets/menu.html#sphx-glr-gallery-widgets-menu-py
 
 from dataclasses import dataclass, field
 import typing
@@ -21,11 +20,9 @@ class ObjSeqData:
         self._seqID = seqID
         self._hasData = False
         self._calculator = None
-        if gtc.BCOT_Data_Calculator.isBodySeqPairValid(bodID, seqID):
+        if gtc.PoseLoaderBCOT.isBodySeqPairValid(bodID, seqID):
             self._hasData = True
-            self._calculator = gtc.BCOT_Data_Calculator(
-                bodID, seqID, FRAME_SKIP_AMT
-            )
+            self._calculator = gtc.PoseLoaderBCOT(bodID, seqID)
         self.numDataToShow = -0
         self._initialized = False
         self._accelData = None
@@ -37,7 +34,8 @@ class ObjSeqData:
     def initialize(self):
         if self._hasData and not self._initialized:
             self._initialized = True
-            translations = self._calculator.getTranslationsGTNP(True)
+            step = (FRAME_SKIP_AMT + 1)
+            translations = self._calculator.getTranslationsGTNP()[::step]
             self._accelData = np.diff(translations, 2, axis = 0)
             reps = np.full(len(self._accelData), 2)
             reps[0] = 1
@@ -132,7 +130,7 @@ def switchObjects():
     bInd = combos[selectedComboInd][1]
     objSeqDataInfo = objSeqDataGrid[sInd][bInd]
 
-    bName = gtc.shortBodyNameBCOT(gtc.BCOT_BODY_NAMES[bInd])
+    bName = gtc.truncateName(gtc.BCOT_BODY_NAMES[bInd])
     sName = gtc.shortSeqNameBCOT(gtc.BCOT_SEQ_NAMES[sInd])
 
     noDataTextAxis.set_visible(not objSeqDataInfo.hasData)

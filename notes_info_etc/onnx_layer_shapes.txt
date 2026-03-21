@@ -1,0 +1,575 @@
+
+Starting on layer "world_frame_displacements_layer_1/Reshape".
+- input 0: ndim=2, val=0,36,,
+- output 0: ndim=3, values=-1,6,6,
+Starting on layer "world_frame_displacements_layer_1/strided_slice_2".
+- input: ndim=3, values=-1,6,6,
+- output 0: ndim=3, values=-1,1,3,
+Starting on layer "world_frame_displacements_layer_1/strided_slice_2__273".
+- input 0: ndim=3, val=-1,1,3,
+- output 0: ndim=2, values=-1,3,,
+Starting on layer "world_frame_displacements_layer_1/strided_slice_1".
+- input: ndim=3, values=-1,6,6,
+- output 0: ndim=3, values=-1,1,3,
+Starting on layer "world_frame_displacements_layer_1/strided_slice_1__279".
+- input 0: ndim=3, val=-1,1,3,
+- output 0: ndim=2, values=-1,3,,
+Starting on layer "world_frame_displacements_layer_1/norm_1/mul".
+-input a: ndim=2, values=-1,3,,
+-input a: ndim=2, values=-1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "world_frame_displacements_layer_1/norm_1/Sum".
+Starting on layer "world_frame_displacements_layer_1/norm_1/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle_1/mul/x:0".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle_1/mul".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle_1/Sin".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle_1/Cos".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/div_no_nan_1".
+-input a: ndim=2, values=-1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "world_frame_displacements_layer_1/strided_slice".
+- input: ndim=3, values=-1,6,6,
+- output 0: ndim=3, values=-1,1,3,
+Starting on layer "world_frame_displacements_layer_1/strided_slice__308".
+- input 0: ndim=3, val=-1,1,3,
+- output 0: ndim=2, values=-1,3,,
+Starting on layer "world_frame_displacements_layer_1/norm/mul".
+-input a: ndim=2, values=-1,3,,
+-input a: ndim=2, values=-1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "world_frame_displacements_layer_1/norm/Sum".
+Starting on layer "world_frame_displacements_layer_1/norm/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle/mul".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle/Sin".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/quaternion_from_axis_angle/Cos".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "world_frame_displacements_layer_1/div_no_nan".
+-input a: ndim=2, values=-1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "transpose".
+- input 0: ndim=3, val=-1,6,6,
+- output 0: ndim=3, val=6,-1,6,
+Starting on layer "strided_slice_2".
+- input: ndim=3, values=6,-1,6,
+- output 0: ndim=3, values=6,-1,3,
+Starting on layer "strided_slice_1".
+- input: ndim=3, values=6,-1,6,
+- output 0: ndim=3, values=6,-1,3,
+Starting on layer "PartitionedCall/strided_slice_11".
+- input: ndim=3, values=6,-1,3,
+- output 0: ndim=3, values=5,-1,3,
+Starting on layer "PartitionedCall/strided_slice_10".
+- input: ndim=3, values=6,-1,3,
+- output 0: ndim=3, values=5,-1,3,
+Starting on layer "PartitionedCall/strided_slice_1".
+- input: ndim=3, values=6,-1,3,
+- output 0: ndim=3, values=5,-1,3,
+Starting on layer "PartitionedCall/strided_slice".
+- input: ndim=3, values=6,-1,3,
+- output 0: ndim=3, values=5,-1,3,
+Starting on layer "PartitionedCall/norm_1/mul".
+-input a: ndim=3, values=5,-1,3,
+-input a: ndim=3, values=5,-1,3,
+- output: ndim=3, values=5,1,3,
+Starting on layer "PartitionedCall/norm_1/Sum".
+Starting on layer "PartitionedCall/norm_1/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle_1/mul".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=3, values=5,1,1,
+- output: ndim=3, values=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle_1/Sin".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle_1/Cos".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/norm/mul".
+-input a: ndim=3, values=5,-1,3,
+-input a: ndim=3, values=5,-1,3,
+- output: ndim=3, values=5,1,3,
+Starting on layer "PartitionedCall/norm/Sum".
+Starting on layer "PartitionedCall/norm/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle/mul".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=3, values=5,1,1,
+- output: ndim=3, values=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle/Sin".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/quaternion_from_axis_angle/Cos".
+- inputs.size(): 1
+- input 0: ndim=3, val=5,1,1,
+- output rep=1, val=5,1,1,
+Starting on layer "PartitionedCall/div_no_nan_1".
+-input a: ndim=3, values=5,-1,3,
+-input a: ndim=3, values=5,1,1,
+- output: ndim=3, values=5,1,3,
+Starting on layer "PartitionedCall/div_no_nan".
+-input a: ndim=3, values=5,-1,3,
+-input a: ndim=3, values=5,1,1,
+- output: ndim=3, values=5,1,3,
+Starting on layer "PartitionedCall/Sub".
+-input a: ndim=3, values=5,-1,3,
+-input a: ndim=3, values=5,-1,3,
+- output: ndim=3, values=5,1,3,
+Starting on layer "PartitionedCall/strided_slice_3".
+- input: ndim=3, values=5,1,3,
+- output 0: ndim=3, values=4,1,3,
+Starting on layer "PartitionedCall/strided_slice_21".
+- input: ndim=3, values=5,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_21__604".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_3_Unsqueeze__708".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/norm_2/mul".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/norm_2/Sum".
+Starting on layer "PartitionedCall/norm_2/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/div_no_nan_4".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/strided_slice_2".
+- input: ndim=3, values=5,1,3,
+- output 0: ndim=3, values=4,1,3,
+Starting on layer "PartitionedCall/Sub_1".
+-input a: ndim=3, values=4,1,3,
+-input a: ndim=3, values=4,1,3,
+- output: ndim=3, values=4,1,3,
+Starting on layer "PartitionedCall/strided_slice_5".
+- input: ndim=3, values=4,1,3,
+- output 0: ndim=3, values=3,1,3,
+Starting on layer "PartitionedCall/strided_slice_4".
+- input: ndim=3, values=4,1,3,
+- output 0: ndim=3, values=3,1,3,
+Starting on layer "PartitionedCall/Sub_2".
+-input a: ndim=3, values=3,1,3,
+-input a: ndim=3, values=3,1,3,
+- output: ndim=3, values=3,1,3,
+Starting on layer "PartitionedCall/strided_slice_7".
+- input: ndim=3, values=3,1,3,
+- output 0: ndim=3, values=2,1,3,
+Starting on layer "PartitionedCall/strided_slice_6".
+- input: ndim=3, values=3,1,3,
+- output 0: ndim=3, values=2,1,3,
+Starting on layer "PartitionedCall/Sub_3".
+-input a: ndim=3, values=2,1,3,
+-input a: ndim=3, values=2,1,3,
+- output: ndim=3, values=2,1,3,
+Starting on layer "PartitionedCall/strided_slice_9".
+- input: ndim=3, values=2,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_8".
+- input: ndim=3, values=2,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/Sub_4".
+-input a: ndim=3, values=1,1,3,
+-input a: ndim=3, values=1,1,3,
+- output: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_25".
+- input: ndim=3, values=1,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_24".
+- input: ndim=3, values=2,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_20".
+- input: ndim=3, values=2,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_23".
+- input: ndim=3, values=3,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_23__692".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_3_Unsqueeze__712".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_19".
+- input: ndim=3, values=3,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_19__698".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_2_Unsqueeze__1232".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_22".
+- input: ndim=3, values=4,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_22__704".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_3_Unsqueeze__710".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_18".
+- input: ndim=3, values=4,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_18__743".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_2_Unsqueeze__1230".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_16".
+- input: ndim=3, values=5,1,3,
+- output 0: ndim=3, values=4,1,3,
+Starting on layer "PartitionedCall/strided_slice_17".
+- input: ndim=3, values=4,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_17__752".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_2_Unsqueeze__1228".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/norm_4/mul".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/norm_4/Sum".
+Starting on layer "PartitionedCall/norm_4/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/div_no_nan_2".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/norm_3/mul".
+-input a: ndim=3, values=4,1,3,
+-input a: ndim=3, values=4,1,3,
+- output: ndim=3, values=4,1,3,
+Starting on layer "PartitionedCall/norm_3/Sum".
+Starting on layer "PartitionedCall/norm_3/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=3, val=4,1,1,
+- output rep=1, val=4,1,1,
+Starting on layer "PartitionedCall/norm_3/Squeeze".
+- input 0: ndim=3, val=4,1,1,
+- output 0: ndim=2, values=4,1,,
+Starting on layer "PartitionedCall/strided_slice_49".
+- input: ndim=2, values=4,1,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_49__812".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=1,,,
+- input: ndim=1, values=3,,,
+- output 0: ndim=1, values=1,,,
+Starting on layer "PartitionedCall/Reshape_5".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=-1,,,
+Starting on layer "PartitionedCall/Reshape_12".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=2, values=-1,1,,
+Starting on layer "PartitionedCall/Reshape".
+- input 0: ndim=1, val=1,,,
+- output 0: ndim=2, values=1,-1,,
+Starting on layer "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/Less_1/y:0".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "PartitionedCall/Less_1".
+-input a: ndim=1, values=-1,,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/SelectV2_2__1010".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/SelectV2_2__1012".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/SelectV2_2__1008".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/Reshape_9".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=2, values=1,-1,,
+Starting on layer "const_zero__1254".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "onnx_node!Equal__757".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "onnx_node!Where__759".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/strided_slice_46".
+- input: ndim=2, values=1,3,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_35__795".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=1,,,
+Starting on layer "PartitionedCall/strided_slice_42".
+- input: ndim=2, values=1,3,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_42__777".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=1,,,
+Starting on layer "PartitionedCall/strided_slice_39".
+- input: ndim=2, values=1,3,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_38__789".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=1,,,
+Starting on layer "PartitionedCall/mul_1".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/Sum".
+Starting on layer "onnx_node!Unsqueeze__802".
+- input 0: ndim=1, val=1,,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_32".
+- input: ndim=2, values=1,1,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "const_fold_opt__1927".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "PartitionedCall/pow".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/add_4/y:0".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "PartitionedCall/add".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_1_Unsqueeze__1089".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/Mul_2".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/sub_7".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/norm_5/mul".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/norm_5/Sum".
+Starting on layer "PartitionedCall/norm_5/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/norm_5/Squeeze".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=1, values=1,,,
+Starting on layer "onnx_node!Unsqueeze__902".
+- input 0: ndim=1, val=1,,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/strided_slice_33".
+- input: ndim=2, values=1,1,,
+- output 0: ndim=2, values=1,1,,
+Starting on layer "onnx_node!Equal__909".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/pow_1".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/add_3".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/Sqrt".
+- inputs.size(): 1
+- input 0: ndim=2, val=1,1,,
+- output rep=1, val=1,1,,
+Starting on layer "PartitionedCall/Reshape_1".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=2, values=1,-1,,
+Starting on layer "PartitionedCall/Less".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "onnx_node!Unsqueeze__1027".
+- input 0: ndim=2, val=1,1,,
+- output 0: ndim=3, values=1,1,1,
+Starting on layer "PartitionedCall/strided_slice_34".
+- input: ndim=3, values=1,1,1,
+- output 0: ndim=3, values=1,1,1,
+Starting on layer "PartitionedCall/SelectV2__1034".
+- inputs.size(): 1
+- input 0: ndim=3, val=1,1,1,
+- output rep=1, val=1,1,1,
+Starting on layer "PartitionedCall/SelectV2__1036".
+- inputs.size(): 1
+- input 0: ndim=3, val=1,1,1,
+- output rep=1, val=1,1,1,
+Starting on layer "PartitionedCall/SelectV2__1032".
+- inputs.size(): 1
+- input 0: ndim=3, val=1,1,1,
+- output rep=1, val=1,1,1,
+Starting on layer "PartitionedCall/Equal".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,1,,
+Starting on layer "PartitionedCall/div_no_nan_3".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,1,,
+- output: ndim=2, values=1,3,,
+Starting on layer "onnx_node!Where__911".
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,1,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/SelectV2__1042".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=3, values=1,1,1,
+- output: ndim=3, values=1,1,3,
+Starting on layer "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/zeros_like:0".
+inputs=[]
+- output 0: ndim=2, val=1,3,,
+Starting on layer "PartitionedCall/SelectV2__1038".
+-input a: ndim=3, values=1,1,1,
+-input a: ndim=2, values=1,3,,
+- output: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/SelectV2".
+-input a: ndim=3, values=1,1,3,
+-input a: ndim=3, values=1,1,3,
+- output: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_45".
+- input: ndim=3, values=1,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_40__1066".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/mul_8".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=1, values=1,,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/mul_5".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/strided_slice_41".
+- input: ndim=3, values=1,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_36__1078".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/mul_6".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=1, values=1,,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/sub_9".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_Unsqueeze__1084".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/mul_3".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/strided_slice_37".
+- input: ndim=3, values=1,1,3,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/strided_slice_44__1054".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/mul_7".
+-input a: ndim=1, values=1,,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/sub_10".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_Unsqueeze__1086".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/mul_4".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=1, values=1,,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/sub_8".
+-input a: ndim=2, values=1,3,,
+-input a: ndim=2, values=1,3,,
+- output: ndim=2, values=1,3,,
+Starting on layer "PartitionedCall/stack_Unsqueeze__1082".
+- input 0: ndim=2, val=1,3,,
+- output 0: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/stack_Concat__1087".
+Starting on layer "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/add_2/y:0".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "PartitionedCall/add_2".
+-input a: ndim=3, values=1,3,3,
+-input a: ndim=2, values=1,1,,
+- output: ndim=3, values=1,3,3,
+Starting on layer "PartitionedCall/stack_1_Unsqueeze__1093".
+- input 0: ndim=3, val=1,3,3,
+- output 0: ndim=4, values=1,1,3,3
+Starting on layer "points_to_inputs_const_step_1/PartitionedCall/PartitionedCall/add_1/y:0".
+inputs=[]
+- output 0: ndim=2, val=1,1,,
+Starting on layer "PartitionedCall/add_1".
+-input a: ndim=3, values=1,1,3,
+-input a: ndim=2, values=1,1,,
+- output: ndim=3, values=1,1,3,
+Starting on layer "PartitionedCall/stack_1_Unsqueeze__1091".
+- input 0: ndim=3, val=1,1,3,
+- output 0: ndim=4, values=1,1,1,3
+Starting on layer "PartitionedCall/stack_1_Concat__1094".
+Exception thrown at 0x00007FFDCE2380DA in tf_model_import_test.exe: Microsoft C++ exception: cv::Exception at memory location 0x000000E43432BDC0.
+Exception thrown at 0x00007FFDCE2380DA in tf_model_import_test.exe: Microsoft C++ exception: cv::Exception at memory location 0x000000E434329760.
+Unhandled exception at 0x00007FFDCE2380DA in tf_model_import_test.exe: Microsoft C++ exception: cv::Exception at memory location 0x000000E434329760.
+
