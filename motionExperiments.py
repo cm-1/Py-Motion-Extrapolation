@@ -23,10 +23,16 @@ TRANSLATION_THRESH = 20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
+TEST_BODIES = [1, 8, 18, 19]
+
 skipAmount = 2
 WEIGHT_SCORES_BY_LEN = True
+CUT_FOR_JERK = True
+
 
 ADD_NUMERICAL_TESTS = False
+
+AVG_ROW_NAME = "Avg"
 
 SPLINE_DEGREE = 1
 PTS_USED_TO_CALC_LAST = 5 # Must be at least spline's degree + 1.
@@ -280,7 +286,11 @@ class ConsolidatedResults:
             values, predictions
         )
 
-        return values[1:] - full_predictions
+        diffs = values[1:] - full_predictions
+        diffStart = 0
+        if CUT_FOR_JERK:
+            diffStart = 3
+        return diffs[diffStart:]
     
     def updateGroundTruth(self, translations, axisangles, quats, angvels,
                           bod_ID: int, seq_ID: int):
@@ -423,12 +433,27 @@ class ConsolidatedResults:
     
     @staticmethod
     def printLatexTable(table_info: TableInfo, num_to_highlight = 0,
-                        max_is_better = True, dec_round = 2, data_func = None):
+                        max_is_better = True, dec_round = 2,
+                        name_mapping: typing.Optional[typing.List[typing.Tuple[str, str]]] = None,
+                        data_func = None):
+        num_row_names = 0 if table_info.row_names is None else len(table_info.row_names)
+        # The "-1" option is because it's fine if the avg is not there.
+        cols_for_row_names = int(num_row_names > 0) 
+        if name_mapping is not None:
+            if len(name_mapping) not in (num_row_names, num_row_names - 1):
+                raise ValueError("Incomplete name mapping provided!")
+            all_ampers = np.asarray([s[1].count("&") for s in name_mapping])
+            ignore_ampers = np.asarray([
+                s[1].count("\\&") + s[1].count("\&") for s in name_mapping
+            ])
+            ampers = all_ampers - ignore_ampers
+            if np.any(ampers != ampers[0]):
+                raise ValueError("Ampersand issue in name mapping")
+            cols_for_row_names += ampers[0]
+
         print_str = "\\begin{table}[h]\n\\centering\n\\caption{...}\n"
         print_str += "\\begin{tabular}"
-        num_cs = len(table_info.col_names)
-        if table_info.row_names is not None:
-            num_cs += 1
+        num_cs = len(table_info.col_names) + cols_for_row_names
         cs = ' '.join(['c' for _ in range(num_cs)])
         print_str += "{" + cs + "}\n\\hline\n"
         if table_info.row_names is not None:
@@ -436,7 +461,7 @@ class ConsolidatedResults:
         print_str += " & ".join(table_info.col_names) + "\\\\\n"
         print_str += "\\hline\n"
 
-        best_wraps = ["\\textbf{{{}}}", "\\underline{{{}}}"]
+        best_wraps = ["\\textbf{{{}}}", "\\underline{{{}}}", "\\textit{{{}}}"]
         num_wraps = len(best_wraps)
         if num_to_highlight > len(best_wraps):
             msg = "Only able to highlight " + str(num_wraps) + " best items!"
@@ -448,17 +473,17 @@ class ConsolidatedResults:
         # possibility that the argsort reesult is None and skip the reversal.
         if not max_is_better and num_to_highlight > 0:
             sort_inds = sort_inds[::-1]
+
+        row_strings: typing.Dict[str, str] = dict()
         for r in range(num_rows):
-            if table_info.row_names is not None:
-                curr_row_name = table_info.row_names[r]
-                curr_row_name = curr_row_name.replace("_", "\\_")
-                print_str += curr_row_name + " & "
+            row_str = ""
+                
             row_data = table_info.column_major_data[:, r]
             # row_data = [c[r] for c in table_info.column_major_data]
             if data_func is not None:
                 row_data = data_func(row_data)
             
-            row_strings = [
+            cell_strings = [
                 "{val:.{prec}f}".format(val=d, prec=dec_round)
                 for d in row_data
             ]
@@ -479,11 +504,26 @@ class ConsolidatedResults:
                 # best_inds.append(curr_best_ind)
                 # best_results.append(curr_best_res)
                 curr_best_ind = sort_inds[n, r]
-                row_strings[curr_best_ind] = best_wraps[n].format(
-                    row_strings[curr_best_ind]
+                cell_strings[curr_best_ind] = best_wraps[n].format(
+                    cell_strings[curr_best_ind]
                 )
                            
-            print_str += " & ".join(row_strings) + "\\\\\n"
+            row_str += " & ".join(cell_strings) + "\\\\\n"
+
+            if name_mapping is not None and table_info.row_names is not None:
+                row_strings[table_info.row_names[r]] = row_str
+            else:
+                row_start = ""
+                if table_info.row_names is not None:
+                    curr_row_name = table_info.row_names[r]
+                    curr_row_name = curr_row_name.replace("_", "\\_")
+                    row_start = curr_row_name + " & "
+                print_str += row_start + row_str
+        if name_mapping is not None and table_info.row_names is not None:
+            for row_key, sub_name in name_mapping:
+                print_str += sub_name + " & " + row_strings[row_key]
+            print_str += AVG_ROW_NAME + " & " + row_strings[AVG_ROW_NAME]
+
         print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table}"
         print(print_str)
 
@@ -554,7 +594,9 @@ class ConsolidatedResults:
             if group_mode == DisplayGrouping.BY_OBJECT:
                 mean_ax = 1
                 row_names = [
-                    gtc.truncateName(n, 7) for n in gtc.BCOT_BODY_NAMES
+                    gtc.truncateName(n, 7)
+                    for i, n in enumerate(gtc.BCOT_BODY_NAMES)
+                    if i in TEST_BODIES
                 ]
             elif group_mode == DisplayGrouping.BY_SEQUENCE:
                 mean_ax = 0
@@ -562,7 +604,7 @@ class ConsolidatedResults:
                     gtc.shortSeqNameBCOT(n) for n in gtc.BCOT_SEQ_NAMES
                     if "cam2" not in n
                 ]
-            row_names.append("Avg")
+            row_names.append(AVG_ROW_NAME)
 
         ordered_names = self._ordered_translation_result_names
         results = self.translation_results
@@ -729,13 +771,15 @@ class ConsolidatedResults:
                      thresh_name: str = "", 
                      cols_to_exclude: typing.Optional[typing.Sequence[str]] = None,
                      num_to_highlight = 0, max_is_better = True, dec_round = 2,
+                     name_mapping: typing.Optional[typing.List[typing.Tuple[str, str]]] = None,
                      data_func = None):
         ti = self.prepareDataForPrint(
             group_mode, weight_scores_by_len, pose_component, thresh_name,
             cols_to_exclude
         )
         ConsolidatedResults.printLatexTable(
-            ti, num_to_highlight, max_is_better, dec_round, data_func
+            ti, num_to_highlight, max_is_better, dec_round, name_mapping,
+            data_func
         )
 
 #%%
@@ -743,7 +787,8 @@ combos = []
 for b in range(len(gtc.BCOT_BODY_NAMES)):
     for s in range(len(gtc.BCOT_SEQ_NAMES)):
         if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
-            combos.append((b,s))
+            if b in TEST_BODIES:
+                combos.append((b,s))
 
 
 fit_modes = [SplinePredictionMode.EXTRAPOLATE]
@@ -834,7 +879,7 @@ for i, combo in enumerate(combos):
 
     t_vel_preds = translations[1:-1] + translation_diffs[:-1]
     t_screw_preds = translations[1:-1] + pm.rotateVecsByQuats(rotation_quat_diffs[:-1], translation_diffs[:-1])
-    # t_velLERP_preds = translations[1:-1] + 0.91 * translation_diffs[:-1]
+    t_velLERP_preds = translations[1:-1] + 0.9 * translation_diffs[:-1]
     r_vel_preds = pm.multiplyQuatLists(
         rotation_quat_diffs[:-1], rotations_quats[1:-1]
     )
@@ -865,6 +910,13 @@ for i, combo in enumerate(combos):
     t_deg4_preds[3:] = (17/24) * translations[:-5] - (11/3) * translations[1:-4] + (31/4) * translations[2:-3] - (25/3)*translations[3:-2] + (109/24)*translations[4:-1]
     t_jerk_preds = t_quadratic_preds.copy()
     t_jerk_preds[2:] = 4 * translations[3:-1] - 6 * translations[2:-2] + 4 * translations[1:-3] - translations[:-4]
+
+    t_ja_preds = t_quadratic_preds.copy()
+    t_ja_preds[2:] = (23 * translations[3:-1] - 33 * translations[2:-2] + 21 * translations[1:-3] - 5 * translations[:-4])/6.0
+
+    
+    t_jv_preds = t_quadratic_preds.copy()
+    t_jv_preds[2:] = (17 * translations[3:-1] - 18 * translations[2:-2] + 9 * translations[1:-3] - 2 * translations[:-4])/6.0
 
     complete_vel_sq_lens = pm.einsumDot(
         translation_diffs, translation_diffs
@@ -1243,7 +1295,8 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Circ vd1", t_c_vel_deg1_preds)
     allResultsObj.addTranslationResult("Circ vd2", t_c_vel_deg2_preds)
     allResultsObj.addTranslationResult("Circ acc", t_c_acc_preds)
-    allResultsObj.addTranslationResult("Screw", t_screw_preds)
+    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
+    # allResultsObj.addTranslationResult("Screw", t_screw_preds)
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
     # ))
@@ -1325,6 +1378,34 @@ fig.clear() # Good to do for iPython running, if running a plot cell again.
 ax = fig.subplots()
 ax.hist(all_vel_ratios, bins = 25,  range=(-2,3))
 plt.show()
+
+# %%
+bcot_seq_map = [
+    ("e_s_t", r"No & T & E "),
+    ("c_s_t", r"&  & C "),
+    ("l_s_t", r"&  & L "),
+    ("e_s_h", r" & H & E "),
+    ("c_s_h", r" &  & C "),
+    ("l_s_h", r" &  & L "),
+    ("e_s_s", r" & S & E "),
+    ("c_s_s", r" &  & C "),
+    ("l_s_s", r" &  & L "),
+    ("c_m_s", r"Yes & S & C "),
+    ("l_m_s", r" &  & L "),
+    ("o_m_s", r" &  & OC "),
+    ("o_s1_m_s_c1", r" &  & $\text{OS}_1$ "),
+    ("o_s2_m_s_c1", r" &  & $\text{OS}_2$ "),
+    ("c_m_h", r" & H & C "),
+    ("l_m_h", r" &  & L "),
+    ("o_s1_m_h_c1", r" &  & $\text{OS}_1$ "),
+    ("o_s2_m_h_c1", r" &  & $\text{OS}_2$ "),
+]
+
+allResultsObj.latexResults(
+    DisplayGrouping.BY_SEQUENCE, WEIGHT_SCORES_BY_LEN, POSE_COMPONENT.TRANSLATION,
+    cols_to_exclude=["Perfect"], num_to_highlight=3, name_mapping=bcot_seq_map,
+    data_func=(lambda x: -x), dec_round = 2
+)
 
 #%%
 fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
