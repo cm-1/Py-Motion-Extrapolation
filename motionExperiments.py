@@ -19,13 +19,13 @@ from gtCommon import PoseLoaderBCOT
 import posemath as pm
 import poseextrapolation as pex
 
-TRANSLATION_THRESH = 20.0#50.0
+TRANSLATION_THRESH = None #20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
 TEST_BODIES = [1, 8, 18, 19]
 
-skipAmount = 2
+skipAmount = 0
 WEIGHT_SCORES_BY_LEN = True
 CUT_FOR_JERK = True
 
@@ -365,16 +365,16 @@ class ConsolidatedResults:
             name, errs, score
         )
 
-    def applyBestTranslationResult(self, names, agg_name, use_shift = False):
+    def applyBestTranslationResult(self, names, agg_name, default_key, use_shift = False):
         ConsolidatedResults._applyBestResult(
             self.translation_results, self._ordered_translation_result_names,
-            names, agg_name, TRANSLATION_THRESH, False, use_shift
+            names, agg_name, TRANSLATION_THRESH, False, default_key, use_shift
         )
 
-    def applyBestRotationResult(self, names, agg_name, use_shift = False):
+    def applyBestRotationResult(self, names, agg_name, default_key, use_shift = False):
         ConsolidatedResults._applyBestResult(
             self.rotation_results, self._ordered_rotation_result_names,
-            names, agg_name, ROTATION_THRESH_RAD, True, use_shift
+            names, agg_name, ROTATION_THRESH_RAD, True, default_key, use_shift
         )
 
     @staticmethod
@@ -387,7 +387,7 @@ class ConsolidatedResults:
         return score
 
     @staticmethod
-    def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, use_shift):
+    def _applyBestResult(results_dict, name_order_list, names, agg_name, thresh, errs_are_1D, default_key, use_shift):
         bodSeqKeys = results_dict[names[0]].errors.keys()
         errs = dict()
         scores = dict()
@@ -408,7 +408,7 @@ class ConsolidatedResults:
             min_norms = np.take_along_axis(stacked_norms, min_inds_1D, axis = 0)
             min_norms = min_norms.flatten()
             if use_shift:
-                default_err = results_dict["Static"].errors[k][0]
+                default_err = results_dict[default_key].errors[k][0]
                 default_norm = default_err
                 if not errs_are_1D:
                     default_norm = np.linalg.norm(default_err)
@@ -1282,30 +1282,29 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Static", translations[:-1])
     allResultsObj.addTranslationResult("Vel", t_vel_preds)
     # allResultsObj.addTranslationResult("VelLERP", t_velLERP_preds)
-    allResultsObj.addTranslationResult("Vel (bcs)", best_vel_preds)
-    allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
+    # allResultsObj.addTranslationResult("Vel (bcs)", best_vel_preds)
+    # allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
     allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
-    allResultsObj.addTranslationResult("2D (bcs)", best_2d)
+    # allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Quadratic", t_quadratic_preds)
-    allResultsObj.addTranslationResult("deg4", t_deg4_preds)
+    # allResultsObj.addTranslationResult("deg4", t_deg4_preds)
     allResultsObj.addTranslationResult("Jerk", t_jerk_preds)
-    allResultsObj.addTranslationResult("Spline", t_spline_preds)
-    allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
+    # allResultsObj.addTranslationResult("Spline", t_spline_preds)
+    # allResultsObj.addTranslationResult("Spline2", t_spline2_preds)
     allResultsObj.addTranslationResult("Circ vd1", t_c_vel_deg1_preds)
     allResultsObj.addTranslationResult("Circ vd2", t_c_vel_deg2_preds)
     allResultsObj.addTranslationResult("Circ acc", t_c_acc_preds)
-    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     # allResultsObj.addTranslationResult("Screw", t_screw_preds)
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
     # ))
-    allResultsObj.addTranslationResult("B-Acc4", b_acc_calc_4.constantAccelPreds(
-        translations, False
-    ))
-    allResultsObj.addTranslationResult("B-Acc5", b_acc_calc_5.constantAccelPreds(
-        translations, False
-    ))
+    # allResultsObj.addTranslationResult("B-Acc4", b_acc_calc_4.constantAccelPreds(
+    #     translations, False
+    # ))
+    # allResultsObj.addTranslationResult("B-Acc5", b_acc_calc_5.constantAccelPreds(
+    #     translations, False
+    # ))
 
     maxTimestamps = max(
         maxTimestamps, len(calculator.getTranslationsGTNP())
@@ -1323,14 +1322,18 @@ for i, combo in enumerate(combos):
             t_deltas_n = np.linalg.norm(t_acc_delta, axis=-1, keepdims=True)
             sampleDeltas = t_acc_delta / t_deltas_n
 
-allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
+# allResultsObj.applyBestRotationResult(["QuatVel", "Fixed axis acc", "Static"], "agg", True)
 # allResultsObj.applyBestRotationResult(["Wahba", "Static"], "aggw", True)
-allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
+# allResultsObj.applyBestRotationResult(["Fixed axis acc2", "Arm v"], "aggv", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Screw"], "agg", True)
 # allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk"], "jagg", True)
-allResultsObj.applyBestTranslationResult(["Spline2", "Circ vd2"], "cagg", True)
-allResultsObj.applyBestTranslationResult(["Acc", "Jerk", "Circ vd2", "Quadratic"], "sagg", True)
-allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk", "B-Acc4", "B-Acc5"], "opt-switch", False)
+# allResultsObj.applyBestTranslationResult(["Spline2", "Circ vd2"], "cagg", True)
+# allResultsObj.applyBestTranslationResult(["Acc", "Jerk", "Circ vd2", "Quadratic"], "sagg", True)
+# allResultsObj.applyBestTranslationResult(["Static", "Vel", "Quadratic", "Jerk", "B-Acc4", "B-Acc5"], "opt-switch", False)
+allResultsObj.applyBestTranslationResult(
+    ["Static", "Vel", "Acc", "Quadratic", "Jerk", "Circ vd1", "Circ vd2", "Circ acc"],
+    "opt-switch", "Quadratic", True
+)
 
 print("Max angle:", max_angle)
 print("maxTimestampsWhenSkipped:", maxTimestampsWhenSkipped)
