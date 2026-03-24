@@ -754,44 +754,44 @@ class CalcsForVideo:
             d_under_thresh = deg1_speeds_full_flat < self.obj_static_thresh_mm
             a_over_thresh = t_diff_angs > self.straight_angle_thresh_rad
         
-            mj_preds = None
-            acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
-            if self.min_jerk_opt_iter_lim > 0:
-                mj_preds = mj.min_jerk_lsq(
-                    prev_translations, d_under_thresh, 
-                    a_over_thresh.flatten(),
-                    max_opt_iters=self.min_jerk_opt_iter_lim,
-                    vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks[1:]
-                )
-                mj_preds = mj_preds[-len(acc_preds):]
-                mj_na = np.isnan(mj_preds)[:, 0]
-                mj_preds[mj_na] = acc_preds[mj_na]
+            # mj_preds = None
+            # acc_preds = temp_preds[MOTION_MODEL.ACC_DEG2]
+            # if self.min_jerk_opt_iter_lim > 0:
+            #     mj_preds = mj.min_jerk_lsq(
+            #         prev_translations, d_under_thresh, 
+            #         a_over_thresh.flatten(),
+            #         max_opt_iters=self.min_jerk_opt_iter_lim,
+            #         vels = deg1_vels, accs = deg2_accs, jerks = scaled_jerks[1:]
+            #     )
+            #     mj_preds = mj_preds[-len(acc_preds):]
+            #     mj_na = np.isnan(mj_preds)[:, 0]
+            #     mj_preds[mj_na] = acc_preds[mj_na]
 
-            temp_preds[MOTION_MODEL.MIN_JERK] = mj_preds
+            # temp_preds[MOTION_MODEL.MIN_JERK] = mj_preds
 
 
-            mj_split_preds = None
-            if self.split_min_jerk_opt_iter_lim > 0:
-                _ds_under_thresh = deg1_vels < self.obj_static_thresh_mm
-                _vel_deg1_signs = np.sign(deg1_vels)
-                _as_over_thresh = _vel_deg1_signs[1:] != _vel_deg1_signs[:-1]
+            # mj_split_preds = None
+            # if self.split_min_jerk_opt_iter_lim > 0:
+            #     _ds_under_thresh = deg1_vels < self.obj_static_thresh_mm
+            #     _vel_deg1_signs = np.sign(deg1_vels)
+            #     _as_over_thresh = _vel_deg1_signs[1:] != _vel_deg1_signs[:-1]
 
-                split_mj_pred_list = []
-                for mjsi in range(3):
-                    split_mj_preds_i = mj.min_jerk_lsq(
-                        prev_translations[:, mjsi:(mjsi + 1)], 
-                        _ds_under_thresh[:, mjsi], _as_over_thresh[:, mjsi],
-                        max_opt_iters = self.split_min_jerk_opt_iter_lim
-                    )
-                    split_mj_pred_list.append(split_mj_preds_i)
-                mj_split_preds = np.concatenate(split_mj_pred_list, axis=-1)
-                mj_split_preds = mj_split_preds[-len(acc_preds):]
+            #     split_mj_pred_list = []
+            #     for mjsi in range(3):
+            #         split_mj_preds_i = mj.min_jerk_lsq(
+            #             prev_translations[:, mjsi:(mjsi + 1)], 
+            #             _ds_under_thresh[:, mjsi], _as_over_thresh[:, mjsi],
+            #             max_opt_iters = self.split_min_jerk_opt_iter_lim
+            #         )
+            #         split_mj_pred_list.append(split_mj_preds_i)
+            #     mj_split_preds = np.concatenate(split_mj_pred_list, axis=-1)
+            #     mj_split_preds = mj_split_preds[-len(acc_preds):]
 
-                for mjsi in range(3):
-                    mj_split_na = np.isnan(mj_split_preds[:, mjsi])
-                    mj_split_preds[mj_split_na, mjsi] = acc_preds[mj_split_na, mjsi]
+            #     for mjsi in range(3):
+            #         mj_split_na = np.isnan(mj_split_preds[:, mjsi])
+            #         mj_split_preds[mj_split_na, mjsi] = acc_preds[mj_split_na, mjsi]
 
-            temp_preds[MOTION_MODEL.MIN_JERK_SPLIT] = mj_split_preds
+            # temp_preds[MOTION_MODEL.MIN_JERK_SPLIT] = mj_split_preds
 
             _, time_since_static, _ = pm.since_calc(
                 d_under_thresh, n_input_frames, [], 0

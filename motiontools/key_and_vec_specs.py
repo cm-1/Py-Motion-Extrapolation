@@ -10,8 +10,8 @@ class MOTION_MODEL(Enum):
     CIRC_VEL_DEG1 = 6
     CIRC_VEL_DEG2 = 7
     CIRC_ACC = 8
-    MIN_JERK = 9
-    MIN_JERK_SPLIT = 10
+    # MIN_JERK = 9
+    # MIN_JERK_SPLIT = 10
 
 
 class MOTION_DATA(Enum):
