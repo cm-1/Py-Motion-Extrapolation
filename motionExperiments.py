@@ -899,8 +899,9 @@ for i, combo in enumerate(combos):
     # i.e. x_2 + velocity + (5/6) acceleration. 
     t_spline2_preds = translations[2:-1] + translation_diffs[1:-1] + (5/6) * translations_acc
     
-    t_accLERP_preds = translations[2:-1] + 0.9 * t_acc_delta
-    t_quadratic_preds = 3*translations[2:-1] - 3*translations[1:-2] + translations[:-3]
+    t_quadratic_delta = 2*translations[2:-1] - 3*translations[1:-2] + translations[:-3]
+    t_quadratic_preds = translations[2:-1] + t_quadratic_delta
+    t_accLERP_preds = translations[2:-1] + 0.95 * t_quadratic_delta
     t_acc_preds = np.vstack((t_vel_preds[:1], t_acc_preds))
     t_spline2_preds = np.vstack((t_vel_preds[:1], t_spline2_preds))
     t_accLERP_preds = np.vstack((t_vel_preds[:1], t_accLERP_preds))
@@ -1285,7 +1286,6 @@ for i, combo in enumerate(combos):
     # allResultsObj.addTranslationResult("Vel (bcs)", best_vel_preds)
     # allResultsObj.addTranslationResult("Vel (ang)", acc_angle_preds)
     allResultsObj.addTranslationResult("Acc", t_acc_preds)
-    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     # allResultsObj.addTranslationResult("2D (bcs)", best_2d)
     allResultsObj.addTranslationResult("Quadratic", t_quadratic_preds)
     # allResultsObj.addTranslationResult("deg4", t_deg4_preds)
@@ -1295,6 +1295,7 @@ for i, combo in enumerate(combos):
     allResultsObj.addTranslationResult("Circ vd1", t_c_vel_deg1_preds)
     allResultsObj.addTranslationResult("Circ vd2", t_c_vel_deg2_preds)
     allResultsObj.addTranslationResult("Circ acc", t_c_acc_preds)
+    allResultsObj.addTranslationResult("AccLERP", t_accLERP_preds)
     # allResultsObj.addTranslationResult("Screw", t_screw_preds)
     # allResultsObj.addTranslationResult("CINPACT", cinpact_extrapolator.apply(
     #     translations[:-1]
@@ -1406,7 +1407,7 @@ bcot_seq_map = [
 
 allResultsObj.latexResults(
     DisplayGrouping.BY_SEQUENCE, WEIGHT_SCORES_BY_LEN, POSE_COMPONENT.TRANSLATION,
-    cols_to_exclude=["Perfect"], num_to_highlight=3, name_mapping=bcot_seq_map,
+    cols_to_exclude=["Perfect", "opt-switch"], num_to_highlight=3, name_mapping=bcot_seq_map,
     data_func=(lambda x: -x), dec_round = 2
 )
 

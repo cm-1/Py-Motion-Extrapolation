@@ -862,6 +862,39 @@ print("Reference method:", bcotjav.ref_prediction_name)
 print("Reference scores:")
 bcotjav.getScoresSubset(DataSubsetKind.WHOLE, bcotjav.ref_predictions[DataSubsetKind.WHOLE], True)
 
+
+#%%
+# import tikzplotlib
+# import matplotlib.pyplot as plt
+# acc_ratios = np.linspace(0, 1, 101)
+# res = np.zeros((3, 101))
+# for ir, r in enumerate(acc_ratios):
+#     ratio_errs = bcotjav.getScoresSubset(
+#         DataSubsetKind.TEST,
+#         r * np.array([[1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
+#     )
+#     for i in range(3):
+#         res[i, ir] = ratio_errs[i]
+
+# # Source: https://stackoverflow.com/questions/75900239/attributeerror-occurs-with-tikzplotlib-when-legend-is-plotted
+# def tikzplotlib_fix_ncols(obj):
+#     """
+#     workaround for matplotlib 3.6 renamed legend's _ncol to _ncols, which breaks tikzplotlib
+#     """
+#     if hasattr(obj, "_ncols"):
+#         obj._ncol = obj._ncols
+#     for child in obj.get_children():
+#         tikzplotlib_fix_ncols(child)
+
+# start_ratio = 70
+# fig = plt.figure()
+# plt.plot(acc_ratios[start_ratio:], res[0, start_ratio:], label="skip 0")
+# plt.plot(acc_ratios[start_ratio:], res[1, start_ratio:], label="skip 1")
+# plt.plot(acc_ratios[start_ratio:], res[2, start_ratio:], label="skip 2")
+# plt.legend()
+# tikzplotlib_fix_ncols(fig)
+# tikzplotlib.save("mytikz.tex")
+
 #%%
 import pickle
 with open("./results/models/scaler.pickle", "wb") as f:
