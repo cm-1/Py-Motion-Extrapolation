@@ -23,8 +23,6 @@ TRANSLATION_THRESH = None #20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
-TEST_BODIES = [1, 8, 18, 19]
-
 skipAmount = 0
 WEIGHT_SCORES_BY_LEN = True
 CUT_FOR_JERK = True
@@ -593,10 +591,11 @@ class ConsolidatedResults:
         if group_mode != DisplayGrouping.TOTAL_ONLY:
             if group_mode == DisplayGrouping.BY_OBJECT:
                 mean_ax = 1
+                selected_bodies = sorted(set([k[0] for k in self._allBodSeqKeys]))
                 row_names = [
                     gtc.truncateName(n, 7)
                     for i, n in enumerate(gtc.BCOT_BODY_NAMES)
-                    if i in TEST_BODIES
+                    if i in selected_bodies
                 ]
             elif group_mode == DisplayGrouping.BY_SEQUENCE:
                 mean_ax = 0
@@ -783,13 +782,8 @@ class ConsolidatedResults:
         )
 
 #%%
-combos = []
-for b in range(len(gtc.BCOT_BODY_NAMES)):
-    for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if PoseLoaderBCOT.isBodySeqPairValid(b, s, True):
-            if b in TEST_BODIES:
-                combos.append((b,s))
-
+_, combos_with_mk = PoseLoaderBCOT.trainTestByBody(0.2)
+combos = [c[:2] for c in combos_with_mk]
 
 fit_modes = [SplinePredictionMode.EXTRAPOLATE]
 spline_pred_calculator = BSplineFitCalculator(
