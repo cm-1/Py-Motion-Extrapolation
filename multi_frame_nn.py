@@ -40,10 +40,7 @@ from datatools.data_splitting import DataSubsetKind
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.key_and_vec_specs import (
-    MOTION_DATA, MOTION_MODEL, ANG_OR_MAG,          # Enums
-    SpecifiedMotionData, OneHotMotionData,          # Other "labels" for columns
-)
+from motiontools.key_and_vec_specs import MOTION_MODEL
 
 from motiontools.posefeatures import (
     JAV,                                            # Enum
@@ -55,7 +52,7 @@ from motiontools.posefeatures import (
 
 from motiontools.dataorg import (
     DataOrganizer, RowsAndColsHandler, UnitAwareScaler, SkipSubsetKind,
-    concatForComboSubset
+    concatForComboSubset, SUBSET_PRESET
 )
 
 # End of imports
@@ -79,115 +76,12 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
 
 #%%
-# A lot of the features we calculated might be collinear (especially since a lot 
-# of very similar features were tried for the decision tree) we'll remove the
-# collinear ones before training.
-colin_thresh = 0.7 # Threshold for collinearity.
 
-nonco_cols, co_mat = pm.non_collinear_features(
-    dog.concat_train_data, colin_thresh
-)
-def indsForKeysMD(keysMD: typing.List[MOTION_DATA]):
-    ret = []
-    for k in keysMD:
-        f = -1
-        try:
-            f = dog.motion_data_keys.index(k)
-        except ValueError:
-            print("Key", k.name, "not found.")
-        if f >= 0:
-            ret.append(f)
-    return ret
-
-timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
-framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
-onehot_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, OneHotMotionData)
-]
-GT_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if len(k.name) == 3 and k.name[:2] == "GT"
-]
-ang_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.ang_or_mag == ANG_OR_MAG.ANG
-]
-bidir_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.bidirectional
-]
-circ_vec3_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.base_cat.name[:4].upper() == "CIRC"
-]
-veld_ra_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
-]
-veld2_dot_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if "DEG2_DOT" in k.name.upper()
-]
-# plane_ra_inds = [
-#     i for i, k in enumerate(dog.motion_data_keys)
-#     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
-# ]
-all_circ_inds = [
-    i for i, k in enumerate(dog.motion_data_keys) if "CIRC" in k.name.upper()
-]
-all_timescaled_inds = [
-    i for i, k in enumerate(dog.motion_data_keys) if "TIMESCALED" in k.name.upper()
-]
-misc_rem_inds = indsForKeysMD([
-    MOTION_DATA.INV_VEL_BCS_RATIOS, MOTION_DATA.RAD_DIFF,
-    MOTION_DATA.SPEED_ACC_RATIO, MOTION_DATA.DISP_MAG_DIFF,
-    MOTION_DATA.PLANE_NORMAL_DOT, MOTION_DATA.SPEED_ORTHO_ACC_RATIO
-])
-
-nonco_cols[:] = True
-nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
-nonco_cols[framenum_ind] = False
-
-broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
-broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
-broad_exclusions += veld_ra_inds + veld2_dot_inds
-
-nonco_cols[broad_exclusions] = False
-nonco_cols[misc_rem_inds] = False
-nonco_cols[[
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, MOTION_DATA) and k != MOTION_DATA.TIMESTEP
-]] = False
-# nonco_cols[plane_ra_inds] = False
-
-
-AVD2_KEY = SpecifiedMotionData(
-    MOTION_DATA.ACC_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG, False, True
-)
-
-bounce_ang_key = SpecifiedMotionData(
-    MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
-    False, True
-)
-
-col_sub_keys = [
-    AVD2_KEY, bounce_ang_key, MOTION_DATA.VEL_BCS_RATIOS,
-    MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
-    MOTION_DATA.DISP_MAG_RATIO
-]
-# col_indices = indsForKeysMD(col_sub_keys)
-# nonco_cols[col_indices] = True
-
-nonco_col_nums = np.where(nonco_cols)[0]
-# Get the column names for each of the kept columns.
-nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
-nonco_featnames = np.array([k.name for k in nonco_col_ks])
+col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.NONCIRC_VEC3S_ONLY)
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
 # nonco_cols[list(select_cols)] = True
-
 
 # Custom importance weighting layer suggested/described "in theory" by a friend.
 # Then, I had the class written by ChatGPT and manually verified.
@@ -270,7 +164,7 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
-bcs_scaler = UnitAwareScaler(nonco_col_ks) #, False)
+bcs_scaler = UnitAwareScaler(key_subset) #, False)
 
 class DataForJAV:
     class _CacheHelper(typing.NamedTuple):
@@ -282,7 +176,7 @@ class DataForJAV:
         prev_vel_axes: NumpyForSkipAndID
 
     def __init__(self, data_organizer: DataOrganizer, bcs_scaler, 
-                 col_inds: NDArray, JAV_order: OrderForJAV,
+                 col_mask: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
                  *, save_data_for_conf: bool = False,
@@ -290,7 +184,7 @@ class DataForJAV:
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(
-            col_inds, bcs_scaler, free_orig_mem=True
+            col_mask, bcs_scaler, free_orig_mem=True
         )
         _dog = self.data_organizer
         self._val_start = len(_dog.col_subset_train)
@@ -853,7 +747,7 @@ class DataForJAV:
         return scores
     
 bcotjav = DataForJAV(
-    dog, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
+    dog, bcs_scaler, col_subset_mask, JAV_order, chosen_mode,
     save_data_for_conf=True, #skip=2
 )
 #%%
@@ -975,7 +869,6 @@ np.savez_compressed(
 # print(bcs_test_scores)
 #%%
 import errorstats as es
-motion_data_key_subset = [dog.motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in dog.getAllIDs():
@@ -1129,6 +1022,7 @@ head_num = 10 # How many "best" to print.
 head_best = scramble_rank[:head_num]
 print("Most important feature inds:", head_best, sep='\n')
 
+nonco_featnames = [k.name for k in key_subset]
 print("Names:")
 for hb in head_best:
     print([nonco_featnames[i] for i in hb])
@@ -1193,8 +1087,8 @@ import matplotlib.pyplot as plt
 
 scramble_for_bars = scramble_scores - np.min(scramble_scores, axis=0)
 scramble_for_bars /= (np.mean(scramble_for_bars, axis=0) + np.std(scramble_for_bars, axis=0))
-num_features = len(nonco_col_nums)
-nonco_arange = np.arange(num_features)
+num_subset_cols = dog.col_subset_train.shape[1]
+nonco_arange = np.arange(num_subset_cols)
 for skip in range(4):
     plt.bar(
         nonco_arange + skip / 4, scramble_for_bars[:, skip],
@@ -1355,7 +1249,7 @@ tdog = DataOrganizer.FromCalcs(
     tudl_train, tudl_test, dog.motion_data_keys
 )
 #
-tjav = DataForJAV(tdog, bcs_scaler, nonco_cols, JAV_order)
+tjav = DataForJAV(tdog, bcs_scaler, col_subset_mask, JAV_order)
 #%%
 
 tjavps = bcs_model.predict(tdog.col_subset_test)
@@ -1417,7 +1311,7 @@ def getUntrainedNNC():
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid'
 
-    input_layer = keras.Input(shape=(len(nonco_col_nums),))
+    input_layer = keras.Input(shape=(num_subset_cols,))
 
     def build_branch():
         x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(input_layer)
@@ -1480,7 +1374,7 @@ def getUntrainedNNSplit(input_shape1, input_shape2, input_shape3):
     model.summary()
     return model
 
-lnccn = len(nonco_col_nums)
+lnccn = num_subset_cols
 split_nn = getUntrainedNNSplit(lnccn, lnccn - 1, lnccn - 2)
 split_nn.fit([dog.col_subset_test, dog.col_subset_test[:, :-1], dog.col_subset_test[:, :-2]], bcotjav.jav_test, epochs=33, batch_size=128, shuffle=True)
 

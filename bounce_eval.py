@@ -69,11 +69,13 @@ def getBounceScore(thresh: float, skip_amt: int):
 
 PLOTTING_SKIP = 2
 thresholds = np.linspace(-1, 1, 100)
-scores = np.array([getBounceScore(th, PLOTTING_SKIP) for th in thresholds])
+scores = np.array([getBounceScore(th, PLOTTING_SKIP) for th in thresholds])[::-1]
 
-plt.plot(thresholds, scores[:, 2], label="using bounce")
-plt.plot(thresholds[[0, -1]], scores[:, 1][[0, -1]], label="just acc")
-plt.plot(thresholds[[0, -1]], scores[:, 3][[0, -1]], label="opt vel")
+angs = (1.0 - thresholds[::-1]) * np.pi/2
+
+plt.plot(angs, -scores[:, 2], label="using bounce")
+plt.plot(angs[[0, -1]], -scores[:, 1][[0, -1]], label="just acc")
+plt.plot(angs[[0, -1]], -scores[:, 3][[0, -1]], label="opt vel")
 plt.legend()
 plt.show()
 #%%

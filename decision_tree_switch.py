@@ -20,9 +20,11 @@ import gtCommon as gtc
 
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.key_and_vec_specs import MOTION_MODEL, MOTION_DATA
+from motiontools.key_and_vec_specs import MOTION_MODEL
 
-from motiontools.dataorg import DataOrganizer, SkipSubsetKind, UnitAwareScaler
+from motiontools.dataorg import (
+    DataOrganizer, SkipSubsetKind, UnitAwareScaler, SUBSET_PRESET
+)
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -108,11 +110,8 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
     class_errs_shape[0], 1, class_errs_shape[1]
 ))
 mc.set_y_errs(y_errs_reshape)
-nonco_cols = np.asarray([
-    (not isinstance(k, MOTION_DATA)) or k == MOTION_DATA.TIMESTEP
-    for k in dog.motion_data_keys
-])
-nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
+
+nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.EVERYTHING)
 
 bcs_scaler = UnitAwareScaler(nonco_col_ks)
 dog.setPickAndTransform(nonco_cols, bcs_scaler)
