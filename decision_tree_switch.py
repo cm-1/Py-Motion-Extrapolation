@@ -111,7 +111,7 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
 ))
 mc.set_y_errs(y_errs_reshape)
 
-nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.EVERYTHING)
+nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.FAST_TO_EXPLAIN)
 
 bcs_scaler = UnitAwareScaler(nonco_col_ks)
 dog.setPickAndTransform(nonco_cols, bcs_scaler)

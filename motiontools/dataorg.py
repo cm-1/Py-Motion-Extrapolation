@@ -889,11 +889,7 @@ class DataOrganizer(RowsAndColsHandler):
         ]
         vd2_inds = [
             i for i, k in enumerate(self.motion_data_keys)
-            if isinstance(k, SpecifiedMotionData) and (
-                k.base_cat == MOTION_DATA.VEL_DEG2_VEC3 or (
-                    isinstance(k.axis, MOTION_DATA) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
-                )
-            )
+            if "deg2" in k.name.lower()
         ]
         
         bounce_ang_key = SpecifiedMotionData(
@@ -916,6 +912,7 @@ class DataOrganizer(RowsAndColsHandler):
             if isinstance(k, SpecifiedMotionData) and isMinimal(k)
         ]
 
+        nonco_cols[vd2_inds] = False
         if preset != SUBSET_PRESET.NONCIRC_VEC3S_ONLY:
             nonco_cols[[
                 i for i, k in enumerate(self.motion_data_keys)
