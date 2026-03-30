@@ -459,7 +459,7 @@ class CalcsForVideo:
             if not self.exclude_bidir:
                 dict_to_update[kmdbidir] = np.abs(dot_products)
         
-        if not self.exclude_axis_angs:
+        if not self.exclude_axis_angs and not duplicate_dot:
             curr_angs = np.arccos(
                 np.clip(dots_with_unit_axis / vec_norms, -1, 1)
             )
@@ -550,13 +550,11 @@ class CalcsForVideo:
             # TODO: handle better!
             scaled_snaps = pderivs.snaps / (step**4)
             snap_mags = np.linalg.norm(scaled_snaps, axis=-1)
-            # Why pad the snaps and crackles both by 2? The snaps need to be a
-            # bit longer because they're used as a relative axis but the
-            # crackles do not.
+
             prev_jerk_errs = np.pad(scaled_snaps, ((2, 0), (0, 0)))
             prev_jerk_err_mags = np.pad(snap_mags, ((2, 0)))
 
-            crackles = np.pad(pderivs.crackles / (step**5), ((2, 0), (0, 0)))
+            crackles = np.pad(pderivs.crackles / (step**5), ((3, 0), (0, 0)))
 
             half_deg1_vel_diffs = 0.5 * pderivs.accelerations
             deg2_vels = deg1_vels[1:] + half_deg1_vel_diffs
