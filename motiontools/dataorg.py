@@ -904,6 +904,7 @@ class DataOrganizer(RowsAndColsHandler):
         def isMinimal(smdk: SpecifiedMotionData):
             retVal = True
             # retVal &= smdk.ang_or_mag == ANG_OR_MAG.MAG_PROJ
+            retVal &= (smdk.ang_or_mag != ANG_OR_MAG.MAG_DOT)
             retVal &= not smdk.bidirectional and not smdk.is_timestep_shifted
             return retVal
 

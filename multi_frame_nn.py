@@ -77,7 +77,7 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
 #%%
 
-col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.NONCIRC_VEC3S_ONLY)
+col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.MINIMAL)
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
