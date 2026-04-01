@@ -911,6 +911,7 @@ class DataOrganizer(RowsAndColsHandler):
             MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
             False, True
         )
+        bounce_ang_ind = self.motion_data_keys.index(bounce_ang_key)
         skip_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTEP)
 
         long_explanation_inds = self.indsForKeysMD(LONG_EXPLANATION_KEYS)
@@ -954,6 +955,7 @@ class DataOrganizer(RowsAndColsHandler):
         elif preset == SUBSET_PRESET.FAST_TO_EXPLAIN:
             nonco_cols[long_explanation_inds] = False
             nonco_cols[slight_explanation_inds] = False
+            nonco_cols[bounce_ang_ind] = True
         elif preset == SUBSET_PRESET.LESS_FAST_TO_EXPLAIN:
             nonco_cols[long_explanation_inds] = False
         elif preset == SUBSET_PRESET.NN_ORIG_CUSTOM_SUBSET:
