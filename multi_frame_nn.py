@@ -27,7 +27,7 @@ import motiontools.shared_constants
 from nn_utilities.nn_modes import OutVecMode
 
 from nn_utilities.nn_losses import (
-    poseLossJAV, poseLossVec3
+    poseLossJAV, poseLossVec3, poseLossLagrange
 )
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.data_cache import (
@@ -61,6 +61,7 @@ from motiontools.dataorg import (
 # Global parameters.
 TRAIN_NEW_MODEL = False
 
+NO_LAGRANGE_MEM_SAVE = False
 
 print("Starting to load data!")
 dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
@@ -153,6 +154,13 @@ if chosen_mode != OutVecMode.JAV_MULTIPLIERS:
     if chosen_mode == OutVecMode.ROT_FIXED_AX:
         sel_dim = 1
         sel_loss = 'mae'
+    elif chosen_mode == OutVecMode.LAGRANGE_POLY:
+        if NO_LAGRANGE_MEM_SAVE:
+            raise Exception(
+                "Memory saving turned on, and LAGRANGE mode uses more mem for its GT values!"
+            )
+        sel_dim = 6
+        sel_loss = poseLossLagrange
     else:
         sel_dim = 3
         sel_loss = 'mse' if chosen_mode in ROT_VEC_MODES else poseLossVec3 
@@ -350,6 +358,8 @@ class DataForJAV:
                     continue
                 if m == OutVecMode.VEL_ALIGNED_VEC3:
                     continue
+                if m == OutVecMode.LAGRANGE_POLY:
+                    continue # We'll calculate this after the for loop.
 
                 m_rot_align = m == OutVecMode.ROT_ALIGNED_VEC3 
                 m_rot_output = m in ROT_VEC_MODES
@@ -392,6 +402,16 @@ class DataForJAV:
                 
                 all_gt_data[m] = gt_for_m
 
+            if not NO_LAGRANGE_MEM_SAVE:
+                prev_poses = [all_gt_data[OutVecMode.WORLD_VEC3]] + [
+                    self._worldvec_helper(
+                        i_p, use_translation=True, pad_missing_with_1st=True
+                    )
+                    for i_p in range(1, 7)
+                ]
+                all_gt_data[OutVecMode.LAGRANGE_POLY] = np.concatenate(
+                    prev_poses, axis=-1
+                )
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             # The actual saving of cached data would go here, I guess.
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -438,7 +458,6 @@ class DataForJAV:
             del all_gt_data
             
             full_gt /= self.pos_scale
-
         else:
             full_gt = all_gt_data[self.outVecMode]
             del all_gt_data
@@ -469,6 +488,11 @@ class DataForJAV:
             # self.ref_predictions[subset_kind] = \
             #     self._prev_ang_concat[subset_kind]
             self.ref_predictions = {k: np.ones((1, 1)) for k in DataSubsetKind}
+        elif self.outVecMode == OutVecMode.LAGRANGE_POLY:
+            self.ref_predictions = { # Quadratic acc coefficients
+                k: np.array([[0.0, 0.0, 0.0, 1.0, -3.0, 3.0][::-1]])
+                for k in DataSubsetKind
+            }
         elif self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
             if extra_cols is None:
                 raise Exception("Should have set extra_cols in this case!")
@@ -525,7 +549,9 @@ class DataForJAV:
         self.score_fn = poseLossJAV
         if self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
             if self.outVecMode in ROT_VEC_MODES:
-                self.score_fn = pm.poseLossAngle 
+                self.score_fn = pm.poseLossAngle
+            elif self.outVecMode == OutVecMode.LAGRANGE_POLY:
+                self.score_fn = poseLossLagrange 
             else:
                 self.score_fn = poseLossVec3
 
@@ -651,7 +677,8 @@ class DataForJAV:
     def _worldvec_helper(self, shift_from_gt: int,
                          diff_order: int = 0, current_diff_order: int = 0,
                          scale: float = 0.0, use_translation: bool = False,
-                         vecs: typing.Optional[typing.List[typing.Dict[typing.Any, NDArray]]] = None):
+                         vecs: typing.Optional[typing.List[typing.Dict[typing.Any, NDArray]]] = None,
+                         *, pad_missing_with_1st: bool = False):
         start = 4 - diff_order - current_diff_order - shift_from_gt
         if use_translation:
             vecs = self._cache_help.translations_JAV
@@ -659,7 +686,7 @@ class DataForJAV:
             raise ValueError("No vectors specified!")
         concat = self._concat_per_id_data_by_dsk(
             vecs, front_trim=start, end_trim=shift_from_gt,
-            diff_order = diff_order
+            diff_order = diff_order, pad_missing_with_1st = pad_missing_with_1st
         )
         if use_translation and scale == 0.0:
             concat = typing.cast(

@@ -9,3 +9,5 @@ class OutVecMode(Enum):
     ROT_AA = 6
     ROT_VEL_AA = 7
     ROT_FIXED_AX = 8
+    LAGRANGE_POLY = 9
+    

@@ -45,12 +45,27 @@ class SUBSET_PRESET(Enum):
 # Motivation: We may want to quickly filter out a skip amount for training.
 def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
                          diff_order: int = 0, del_original_data: bool = False,
-                         return_indices: bool = False):
+                         return_indices: bool = False,
+                         *, pad_missing_with_1st: bool = False):
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
     num_vids = len(vid_ids)
     id_index_maps = []
     single_vid_bounds: typing.Dict[SkipSubsetKind, NDArray] = {}
+    orig_start = front_trim
+    needs_pad = (front_trim < 0)
+    if needs_pad:
+        front_trim = 0
 
+    def perComboTrimming(untrimmed):
+        trimmed = untrimmed[front_trim:end]
+        if needs_pad:
+            if pad_missing_with_1st:
+                pad = np.repeat(trimmed[:1], -orig_start, axis=0)
+                trimmed = np.concatenate((pad, trimmed), axis=0)
+            else:
+                raise NotImplementedError("No other paddings supported yet!")
+        return trimmed
+    
     # process skips in reverse order
     for skip_ind in range(len(data) - 1, -1, -1):
         els_for_skip = data[skip_ind]
@@ -69,14 +84,14 @@ def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
             if diff_order > 0:
                 concated = {
                     k: np.concatenate([
-                        np.diff(s[k][front_trim:end], diff_order, axis=0)
+                        np.diff(perComboTrimming(s[k]), diff_order, axis=0)
                         for s in subset_via_ids
                     ]) for k in subset_via_ids[0].keys()
                 }
             else:
                 concated = {
                     k: np.concatenate([
-                        s[k][front_trim:end] for s in subset_via_ids
+                        perComboTrimming(s[k]) for s in subset_via_ids
                     ]) for k in subset_via_ids[0].keys()
                 }
 
@@ -87,12 +102,12 @@ def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
         else:
             if diff_order > 0:
                 concated = np.concatenate([
-                    np.diff(svc[front_trim:end], diff_order, axis=0)
+                    np.diff(perComboTrimming(svc), diff_order, axis=0)
                     for svc in subset_via_ids
                 ])
             else:
                 concated = np.concatenate([
-                    svc[front_trim:end] for svc in subset_via_ids
+                    perComboTrimming(svc) for svc in subset_via_ids
                 ]) 
             
             if return_indices:
