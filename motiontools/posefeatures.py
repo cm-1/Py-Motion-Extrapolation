@@ -195,7 +195,8 @@ class CalcsForVideo:
                  split_min_jerk_opt_iter_lim: int = DEFAULT_SPLIT_MIN_JERK_OPT_ITER_LIM,
                  err_radius_ratio_thresh: float = DEFAULT_ERR_RADIUS_RATIO_THRESH,
                  exclude_onehots: bool = True, exclude_past_muls: bool = True,
-                 exclude_bidir: bool = True, exclude_axis_angs: bool = True,
+                 exclude_bidir: bool = True, exclude_axis_angs: bool = False,
+                 exclude_axis_dots: bool = True,
                  exclude_circ_data: bool = True, exclude_vel_deg2: bool = True,
                  exclude_timescaled: bool = True,
                  other_exclusions: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]] = None
@@ -211,6 +212,7 @@ class CalcsForVideo:
         self.exclude_past_muls = exclude_past_muls
         self.exclude_bidir = exclude_bidir
         self.exclude_axis_angs = exclude_axis_angs
+        self.exclude_axis_dots = exclude_axis_dots
         self.exclude_circ_data = exclude_circ_data
         self.exclude_vel_deg2 = exclude_vel_deg2
         self.exclude_timescaled = exclude_timescaled
@@ -454,7 +456,7 @@ class CalcsForVideo:
             and motion_data_base_key.value < relative_axis.value
             and motion_data_base_key in ALL_RELATIVE_VECTORS
         )
-        if not duplicate_dot:
+        if not self.exclude_axis_dots and not duplicate_dot:
             dict_to_update[kmd] = dot_products
             if not self.exclude_bidir:
                 dict_to_update[kmdbidir] = np.abs(dot_products)
@@ -989,17 +991,17 @@ class CalcsForVideo:
                 vec3s_dict[MD.VEL_DEG2_VEC3] = V3D(
                     deg2_vels / step, unit_vels_deg2, timescaled_speeds_deg2_full
                 )
-            if not self.exclude_circ_data:
-                vec3s_dict[MD.CIRC_VEL_DEG1_ERR_VEC3] = V3D(
-                    prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
-                )
-                if not self.exclude_vel_deg2:
-                    vec3s_dict[MD.CIRC_VEL_DEG2_ERR_VEC3] = V3D(
-                        prev_circ_errs_vd2, None, prev_circ_err_mags_vd2
-                    )
-                vec3s_dict[MD.CIRC_ACC_ERR_VEC3] = V3D(
-                    prev_circ_errs_acc, None, prev_circ_err_mags_acc
-                )
+            # if not self.exclude_circ_data:
+            #     vec3s_dict[MD.CIRC_VEL_DEG1_ERR_VEC3] = V3D(
+            #         prev_circ_errs_vd1, None, prev_circ_err_mags_vd1
+            #     )
+            #     if not self.exclude_vel_deg2:
+            #         vec3s_dict[MD.CIRC_VEL_DEG2_ERR_VEC3] = V3D(
+            #             prev_circ_errs_vd2, None, prev_circ_err_mags_vd2
+            #         )
+            #     vec3s_dict[MD.CIRC_ACC_ERR_VEC3] = V3D(
+            #         prev_circ_errs_acc, None, prev_circ_err_mags_acc
+            #     )
 
 
 

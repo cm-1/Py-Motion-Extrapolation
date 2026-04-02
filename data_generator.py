@@ -42,9 +42,9 @@ cfc = CalcsForVideo(
     min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
     err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH,
-    exclude_axis_angs=False, exclude_bidir=False, exclude_circ_data=False,
-    exclude_onehots=False, exclude_past_muls=False, exclude_timescaled=False,
-    exclude_vel_deg2=False
+    exclude_axis_angs=False, exclude_axis_dots=True, exclude_bidir=True,
+    exclude_circ_data=False, exclude_onehots=False, exclude_past_muls=False,
+    exclude_timescaled=False, exclude_vel_deg2=True
 )
 cfc.getAll(bcot_loaders)
 
