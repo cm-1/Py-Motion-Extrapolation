@@ -451,12 +451,13 @@ class CalcsForVideo:
             kmdbidir = kmpbidir
             dots_with_unit_axis = dot_products
 
+        rel_is_md = isinstance(relative_axis, MOTION_DATA)
         duplicate_dot = (
-            isinstance(relative_axis, MOTION_DATA) and (not shift)
+            rel_is_md and (not shift)
             and motion_data_base_key.value < relative_axis.value
             and motion_data_base_key in ALL_RELATIVE_VECTORS
         )
-        if not self.exclude_axis_dots and not duplicate_dot:
+        if not duplicate_dot and not (rel_is_md and self.exclude_axis_dots):
             dict_to_update[kmd] = dot_products
             if not self.exclude_bidir:
                 dict_to_update[kmdbidir] = np.abs(dot_products)

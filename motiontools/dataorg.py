@@ -309,6 +309,15 @@ class UnitAwareScaler:
 
     def inverse_transform(self, X):
         return (X * self.scale_) + self.mean_
+
+    def fakeFit(self):
+        n_keys = len(self.column_keys)
+        self.pos_scale = 1.0
+        self.rot_scale = 1.0
+        self.scale_ = np.ones(n_keys)
+        self.mean_ = np.zeros(n_keys)
+        self.n_features_in_ = n_keys
+
     
 class SkipSubsetKind(IntEnum):
     skip0 = 0
