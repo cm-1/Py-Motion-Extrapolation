@@ -77,8 +77,8 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
 
 #%%
-
-col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.MINIMAL)
+chosen_preset = SUBSET_PRESET.MINIMAL
+col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(chosen_preset)
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
@@ -829,7 +829,7 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 
 
 #%% Train the network.
-latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
+latest_models = {}
 if TRAIN_NEW_MODEL:
     val_param = None
     bcot_validation_ids = dog.subset_ids[DataSubsetKind.VALIDATION]
@@ -842,6 +842,7 @@ if TRAIN_NEW_MODEL:
     )
     latest_models[chosen_mode.name] = bcs_model
 else:
+    latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"), chosen_preset)
     bcs_model = latest_models[chosen_mode.name]
 #%% Evaluate network on test data.
 
@@ -850,8 +851,8 @@ bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
 
 #%% Saving model to disk.
 if TRAIN_NEW_MODEL:
-    model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
-        chosen_mode.name, datetime.datetime.now()
+    model_name = "results/models/{}--{}--{:%Y-%m-%d_%H-%M-%S}.keras".format(
+        chosen_mode.name, chosen_preset.name, datetime.datetime.now()
     )
     bcs_model.save(model_name)
 
