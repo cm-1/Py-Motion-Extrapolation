@@ -20,7 +20,7 @@ from data_by_combo_functions import rnnDataWindows
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
 
-WIN_SIZE = 4
+WIN_SIZE = 6
 
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.

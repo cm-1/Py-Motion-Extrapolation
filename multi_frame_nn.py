@@ -135,6 +135,7 @@ def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
     for _ in range(n_layers - 1):
         x = keras.layers.Dropout(dropout_rate)(x)
         x = make_dense()(x)
+    x = keras.layers.Dropout(dropout_rate)(x)
     
     out = keras.layers.Dense(out_dim)(x)
 
