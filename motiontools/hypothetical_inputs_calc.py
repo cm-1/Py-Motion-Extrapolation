@@ -56,26 +56,29 @@ class HypotheticalInputsForNN:
             MD.VEL_DEG1_VEC3, MD.ACC_VEC3, MD.JERK_VEC3, MD.JERK_ERR_VEC3,
             MD.CRACKLE_VEC3, MD.ROTATION_VEC3, MD.ROT_ACC_VEC3, MD.ROT_JERK_VEC3
         )
-        rel_v3s = ( # All v3s except crackle
-            MD.VEL_DEG1_VEC3, MD.ACC_VEC3, MD.JERK_VEC3, MD.JERK_ERR_VEC3,
-            MD.ROTATION_VEC3, MD.ROT_ACC_VEC3, MD.ROT_JERK_VEC3
-        )
-        rel_axes = [
-            ra for ra in ALL_RELATIVE_VECTORS if ra != MD.VEL_DEG2_VEC3
-        ]
-        kp_pd = []
-        for bc in v3s:
-            for ax in rel_axes:
-                a = AM.MAG_DOT if isinstance(ax, MOTION_DATA) else AM.MAG_PROJ
-                kp_pd.append(SpecifiedMotionData(bc, ax, a, False, True))
-        kp_pp = [
-            SpecifiedMotionData(bc, ax, AM.MAG_PROJ, False, True)
-            for bc in v3s for ax in rel_v3s
-        ]
+        # rel_v3s = ( # All v3s except crackle
+        #     MD.VEL_DEG1_VEC3, MD.ACC_VEC3, MD.JERK_VEC3, MD.JERK_ERR_VEC3,
+        #     MD.ROTATION_VEC3, MD.ROT_ACC_VEC3, MD.ROT_JERK_VEC3
+        # )
+        # rel_axes = [
+        #     ra for ra in ALL_RELATIVE_VECTORS if ra != MD.VEL_DEG2_VEC3
+        # ]
+        # kp_pd = []
+        # for bc in v3s:
+        #     for ax in rel_axes:
+        #         a = AM.MAG_DOT if isinstance(ax, MOTION_DATA) else AM.MAG_PROJ
+        #         kp_pd.append(SpecifiedMotionData(bc, ax, a, False, True))
+        # kp_pp = [
+        #     SpecifiedMotionData(bc, ax, AM.MAG_PROJ, False, True)
+        #     for bc in v3s for ax in rel_v3s
+        # ]
+
+        # MAGNITUDES
         kp_m = [
             SpecifiedMotionData(bc, bc, AM.MAG_PROJ, False, False) for bc in v3s
         ]
         kp_nd = []
+        # ANGS WITH VECTORS
         for i in range(1, len(v3s)):
             for j in range(i):
                 base_vec = v3s[i]
@@ -84,13 +87,15 @@ class HypotheticalInputsForNN:
                     base_vec = v3s[j]
                     rel_vec = v3s[i]
                 kp_nd.append(SpecifiedMotionData(
-                    base_vec, rel_vec, AM.MAG_DOT, False, False
+                    base_vec, rel_vec, AM.ANG, False, False
                 ))
+        # PROJS_WITH_VECTORS
         kp_np = [
             SpecifiedMotionData(bc, ra, AM.MAG_PROJ, False, False)
-            for ra in rel_v3s for bc in v3s if ra != bc
+            for ra in v3s for bc in v3s if ra != bc
         ]
 
+        # PROJS_WITH_DIRS
         kp_np2 = []
         kp_np2.append(SpecifiedMotionData(
             MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
@@ -101,7 +106,19 @@ class HypotheticalInputsForNN:
             for bc in v3s[2:] for ax in OTHER_DIRECTION
         ]
 
-        kp = kp_t + kp_pd + kp_pp + kp_m + kp_nd + kp_np + kp_np2
+        ka_np2 = []
+        ka_np2.append(SpecifiedMotionData(
+            MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
+            AM.ANG, False, False
+        ))
+        ka_np2 += [
+            SpecifiedMotionData(bc, ax, AM.ANG, False, False)
+            for bc in v3s[2:] for ax in OTHER_DIRECTION
+        ]
+
+
+        # kp = kp_t + kp_pd + kp_pp + kp_m + kp_nd + kp_np + kp_np2
+        kp = kp_t + kp_m + kp_nd + kp_np + kp_np2 + ka_np2
         return kp
         
     def _keyPermutation(self):

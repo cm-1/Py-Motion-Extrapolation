@@ -16,7 +16,7 @@ import posemath as pm
 
 from data_by_combo_functions import rnnDataWindows
 
-from motiontools.dataorg import UnitAwareScaler
+from motiontools.dataorg import UnitAwareScaler, SUBSET_PRESET
 
 from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 
@@ -107,7 +107,7 @@ print("Creating combined model with custom layer...")
 # %%
 # Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
-bcs_model = loadLatestModels((model_key, ))[model_key]
+bcs_model = loadLatestModels((model_key, ), SUBSET_PRESET.MINIMAL)[model_key]
 hardcoded_model = create_hardcoded_model(bcs_model)
 
 # Define the getVelFrameDisplacements function as a TensorFlow operation
