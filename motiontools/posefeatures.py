@@ -525,8 +525,10 @@ class CalcsForVideo:
         for step in range(min_step, max_step + 1):
             step_sq = step*step
             translations = all_translations[::step]
+            translations = np.pad(translations, [(4, 0), (0, 0)], mode="edge")
 
             quats = all_quats[::step][:-1]
+            quats = np.pad(quats, [(4, 0), (0, 0)], mode="edge")
             inv_quats = pm.conjugateQuats(quats)
             quat_diffs = pm.multiplyQuatLists(quats[1:], inv_quats[:-1])
 
@@ -545,25 +547,25 @@ class CalcsForVideo:
             # NEED CONSIDERATION when accomodating non-constant timesteps!
             rderivs = DerivativeCollection(timescaled_vel_axes, 3)
             rot_accs = rderivs.accelerations / step
-            rot_jerks = np.pad(rderivs.jerks / step_sq, ((1, 0), (0, 0)))
+            rot_jerks = rderivs.jerks / step_sq # np.pad(, ((1, 0), (0, 0)))
 
             pderivs = DerivativeCollection(translation_diffs[:-1], 5)
             deg1_vels = pderivs.velocities
             deg2_accs = pderivs.accelerations / step_sq
             
-            scaled_jerks = np.empty_like(deg2_accs)
-            scaled_jerks[0] = 0.0 # TODO: handle this better!
-            scaled_jerks[1:] = pderivs.jerks / (step ** 3)
+            # scaled_jerks = np.empty_like(deg2_accs)
+            # scaled_jerks[0] = 0.0 # TODO: handle this better!
+            scaled_jerks = pderivs.jerks / (step ** 3)
 
             # Pad with 0 so it equals the "4th derivative".
             # TODO: handle better!
             scaled_snaps = pderivs.snaps / (step**4)
             snap_mags = np.linalg.norm(scaled_snaps, axis=-1)
 
-            prev_jerk_errs = np.pad(scaled_snaps, ((2, 0), (0, 0)))
-            prev_jerk_err_mags = np.pad(snap_mags, ((2, 0)))
+            prev_jerk_errs = scaled_snaps #np.pad(, ((2, 0), (0, 0)))
+            prev_jerk_err_mags = snap_mags #np.pad(, ((2, 0)))
 
-            crackles = np.pad(pderivs.crackles / (step**5), ((3, 0), (0, 0)))
+            crackles = np.pad(pderivs.crackles / (step**5), ((1, 0), (0, 0)))
 
             half_deg1_vel_diffs = 0.5 * pderivs.accelerations
             deg2_vels = deg1_vels[1:] + half_deg1_vel_diffs
@@ -588,7 +590,7 @@ class CalcsForVideo:
             temp_preds[MOTION_MODEL.CIRC_VEL_DEG2] = cma.vel_deg2_preds_3D
             temp_preds[MOTION_MODEL.CIRC_ACC] = cma.acc_preds_3D
 
-            n_jerk_preds = len(t_jerk_preds)
+            n_jerk_preds = len(translations) - 6
 
             motion_data = dict()
             motion_data[MOTION_DATA.TIMESTEP] = np.full(n_jerk_preds, step)
@@ -643,15 +645,16 @@ class CalcsForVideo:
             prev_vs_0 = all_vs_0[-(n_jerk_preds + 1):-1]
             prev_vs_pos = all_vs_pos[-(n_jerk_preds + 1):-1]
             disp_mag_div = pm.safeDivide(
-                deg1_speeds_full_flat[2:], deg1_speeds_full_flat[1:-1],
-                FLOAT_32_MAX, prev_vs_pos, prev_vs_0
+                deg1_speeds_full_flat[2:][-n_jerk_preds:],
+                deg1_speeds_full_flat[1:-1][-n_jerk_preds:],
+                FLOAT_32_MAX, prev_vs_pos[-n_jerk_preds:], prev_vs_0[-n_jerk_preds:]
             ).flatten()
             motion_data[MOTION_DATA.DISP_MAG_RATIO] = disp_mag_div
             inv_disp_mag_div = pm.safeDivide(
                 deg1_speeds_full_flat[1:-1], deg1_speeds_full_flat[2:],
                 FLOAT_32_MAX, last_vs_pos, last_vs_0
             ).flatten()
-            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = inv_disp_mag_div
+            motion_data[MOTION_DATA.INV_DISP_MAG_RATIO] = inv_disp_mag_div[-n_jerk_preds:]
 
             zeros_3 = np.zeros(3)
             unit_vels_deg1 = pm.safelyNormalizeArray(
@@ -687,7 +690,7 @@ class CalcsForVideo:
                 motion_data[MOTION_DATA.INV_CIRC_ANG_RATIO] = 1.0 / c_ang_ratio[-n_jerk_preds:]
                 
 
-                motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()
+                motion_data[MOTION_DATA.CIRC_VEC6_DIFF] = cma.vec6CircleDists()[-n_jerk_preds:]
 
                 radii_diffs = np.diff(radii, 1, axis=0)[-n_jerk_preds:]
                 motion_data[MOTION_DATA.RAD_DIFF] = radii_diffs
@@ -696,7 +699,7 @@ class CalcsForVideo:
 
                 c_centre_diff_vecs = np.diff(cma.getCentres3D(), axis=0)
                 c_centre_diff_norms = np.linalg.norm(c_centre_diff_vecs, axis=-1)
-                motion_data[MOTION_DATA.CIRC_CENTRE_DIFF] = c_centre_diff_norms
+                motion_data[MOTION_DATA.CIRC_CENTRE_DIFF] = c_centre_diff_norms[-n_jerk_preds:]
 
 
                 is_circ_res = cma.isMotionStillCircular(
@@ -714,10 +717,12 @@ class CalcsForVideo:
                 motion_data[MOTION_DATA.ANG_SUM_CIRC_MOTION] = ang_sum_circ[-n_jerk_preds:]
                 motion_data[MOTION_DATA.DIST_SUM_CIRC_MOTION] = dist_sum_circ[-n_jerk_preds:]
 
-                motion_data[MOTION_DATA.DIST_FROM_CIRCLE] = is_circ_res.dists
-                motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios
+                motion_data[MOTION_DATA.DIST_FROM_CIRCLE] = is_circ_res.dists[-n_jerk_preds:]
+                motion_data[MOTION_DATA.RATIO_FROM_CIRCLE] = is_circ_res.dist_radius_ratios[-n_jerk_preds:]
 
             rotation_mats = all_rotation_mats[::step]
+            rotation_mats = np.pad(rotation_mats, [(4, 0), (0, 0), (0, 0)], mode="edge")
+
             prev_fixed_ax_angs = pm.closestAnglesAboutAxis(
                 rotation_mats[1:-2], rotation_mats[2:-1], vel_axes[:-1]
             )
@@ -833,7 +838,7 @@ class CalcsForVideo:
             curr_errs_3D = dict()
             for i, motion_mod in enumerate(self.motion_mod_keys):
                 pred_subset = None
-                if motion_mod != MOTION_MODEL.JERK:
+                if True or motion_mod != MOTION_MODEL.JERK:
                     if temp_preds[motion_mod] is None:
                         tdim = translations.shape[1]
                         pred_subset = np.full(
@@ -875,12 +880,12 @@ class CalcsForVideo:
             circ_vd1_ind = MOTION_MODEL.CIRC_VEL_DEG1.value - 1
             circ_vd2_ind = MOTION_MODEL.CIRC_VEL_DEG2.value - 1
             circ_acc_ind = MOTION_MODEL.CIRC_ACC.value - 1
-            prev_circ_errs_vd1 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG1][:-1]
-            prev_circ_errs_vd2 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG2][:-1]
-            prev_circ_errs_acc = curr_errs_3D[MOTION_MODEL.CIRC_ACC][:-1]
-            prev_circ_err_mags_vd1 = curr_err_norms[circ_vd1_ind][:-1]
-            prev_circ_err_mags_vd2 = curr_err_norms[circ_vd2_ind][:-1]
-            prev_circ_err_mags_acc = curr_err_norms[circ_acc_ind][:-1]
+            # prev_circ_errs_vd1 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG1][:-1]
+            # prev_circ_errs_vd2 = curr_errs_3D[MOTION_MODEL.CIRC_VEL_DEG2][:-1]
+            # prev_circ_errs_acc = curr_errs_3D[MOTION_MODEL.CIRC_ACC][:-1]
+            # prev_circ_err_mags_vd1 = curr_err_norms[circ_vd1_ind][:-1]
+            # prev_circ_err_mags_vd2 = curr_err_norms[circ_vd2_ind][:-1]
+            # prev_circ_err_mags_acc = curr_err_norms[circ_acc_ind][:-1]
         
 
 
@@ -908,21 +913,21 @@ class CalcsForVideo:
             
 
             jerk_vel_deg1_mags = pm.einsumDot(
-                scaled_jerks[1:], unit_vels_deg1[2:]
+                scaled_jerks[-n_jerk_preds:], unit_vels_deg1[-n_jerk_preds:]
             )
             jvd1m = jerk_vel_deg1_mags * timescaled_speeds_deg1
             
             jerk_acc_ortho_mags = pm.einsumDot(
-                scaled_jerks[1:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+                scaled_jerks[-n_jerk_preds:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
             )
             
             jerk_vel_vecs = pm.scalarsVecsMul(
-                jerk_vel_deg1_mags, unit_vels_deg1[-n_jerk_preds:]
+                jerk_vel_deg1_mags[-n_jerk_preds:], unit_vels_deg1[-n_jerk_preds:]
             )
             jerk_acc_vecs = pm.scalarsVecsMul(
-                jerk_acc_ortho_mags, unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
+                jerk_acc_ortho_mags[-n_jerk_preds:], unit_acc_ortho_deg1_vecs[-n_jerk_preds:]
             )
-            jerk_ortho_vecs = scaled_jerks[1:] - (jerk_vel_vecs + jerk_acc_vecs)
+            jerk_ortho_vecs = scaled_jerks[-n_jerk_preds:] - (jerk_vel_vecs + jerk_acc_vecs)
             jerk_ortho_norms = np.linalg.norm(jerk_ortho_vecs, axis=-1, keepdims=True)
 
             
@@ -950,9 +955,9 @@ class CalcsForVideo:
             # cross product gives a better neural network score.
             # So I'm going to keep using the cross product unless I can make a
             # big improvement somewhere else so that this stops mattering. 
-            next_ortho_is_0 = acc_ortho_is_0[1:].flatten()
-            vel_deg2_acc_cross[1:][next_ortho_is_0] = jerk_ortho_vecs[next_ortho_is_0]
-            sin_vel_deg2_acc_angs[1:][next_ortho_is_0] = jerk_ortho_norms[next_ortho_is_0]
+            next_ortho_is_0 = acc_ortho_is_0[-n_jerk_preds:].flatten()
+            vel_deg2_acc_cross[-n_jerk_preds:][next_ortho_is_0] = jerk_ortho_vecs[next_ortho_is_0]
+            sin_vel_deg2_acc_angs[-n_jerk_preds:][next_ortho_is_0] = jerk_ortho_norms[next_ortho_is_0]
             # cross_0 = np.cross(unit_vels_deg2[0], unit_accs[0])
             # mag_cross_0 = np.linalg.norm(cross_0, axis=-1, keepdims=True)
             # vel_deg2_acc_cross = np.insert(jerk_ortho_vecs, 0, cross_0, axis=0)
@@ -1086,7 +1091,7 @@ class CalcsForVideo:
             flat_accs = acc_mags.flatten()
             self._addDotsAndAngs(
                 motion_data, MD.ACC_VEC3, OD.ACC_ORTHO_DEG1, False,
-                acc_ortho_deg1_mags[-n_jerk_preds:].flatten(), flat_accs
+                acc_ortho_deg1_mags[-n_jerk_preds:].flatten(), flat_accs[-n_jerk_preds:]
             )
 
             apv = np.copy(acc_vel_deg1_mag[-n_jerk_preds:])
@@ -1094,8 +1099,8 @@ class CalcsForVideo:
             avd1m[-n_jerk_preds:][last_vs_0] = 0.0
             self._addDotsAndAngs(
                 motion_data, MD.ACC_VEC3, MD.VEL_DEG1_VEC3, False,
-                avd1m[-n_jerk_preds:], flat_accs,
-                dots_with_unit_axis=apv
+                avd1m[-n_jerk_preds:], flat_accs[-n_jerk_preds:],
+                dots_with_unit_axis=apv[-n_jerk_preds:]
             )
 
             jpv = np.copy(jerk_vel_deg1_mags[-n_jerk_preds:])
@@ -1104,7 +1109,7 @@ class CalcsForVideo:
             self._addDotsAndAngs(
                 motion_data, MD.JERK_VEC3, MD.VEL_DEG1_VEC3, False,
                 jvd1m[-n_jerk_preds:], jerk_norms[-n_jerk_preds:],
-                dots_with_unit_axis=jpv
+                dots_with_unit_axis=jpv[-n_jerk_preds:]
             )
 
             self._addDotsAndAngs(
@@ -1120,16 +1125,17 @@ class CalcsForVideo:
             jerk_mags_pos = (jerk_mags != 0.0)
             jerk_mags_0 = ~jerk_mags_pos
             motion_data[MOTION_DATA.SPEED_JERK_RATIO] = pm.safeDivide(
-                timescaled_speeds_deg1, jerk_mags, FLOAT_32_MAX,
-                jerk_mags_pos, jerk_mags_0
+                timescaled_speeds_deg1[-n_jerk_preds:], jerk_mags[-n_jerk_preds:], FLOAT_32_MAX,
+                jerk_mags_pos[-n_jerk_preds:], jerk_mags_0[-n_jerk_preds:]
             )
             motion_data[MOTION_DATA.ACC_JERK_RATIO] = pm.safeDivide(
-                acc_mags, jerk_mags, FLOAT_32_MAX, jerk_mags_pos, jerk_mags_0
+                acc_mags[-n_jerk_preds:], jerk_mags[-n_jerk_preds:], FLOAT_32_MAX,
+                jerk_mags_pos[-n_jerk_preds:], jerk_mags_0[-n_jerk_preds:]
             )
             
             oacc_deg1_mags_nj = acc_ortho_deg1_mags[-n_jerk_preds:].flatten()
             speed_oacc_ratio = pm.safeDivide(
-                timescaled_speeds_deg1, oacc_deg1_mags_nj, FLOAT_32_MAX
+                timescaled_speeds_deg1[-n_jerk_preds:], oacc_deg1_mags_nj[-n_jerk_preds:], FLOAT_32_MAX
             )
 
             motion_data[MOTION_DATA.SPEED_ORTHO_ACC_RATIO] = speed_oacc_ratio
@@ -1190,8 +1196,8 @@ class CalcsForVideo:
             curvatures = pm.safeDivideElseZero(
                 ck_num, ck_denom, all_vs_pos[1:]
             )
-            motion_data[MOTION_DATA.CURVATURE] = curvatures[1:]
-            motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1]
+            motion_data[MOTION_DATA.CURVATURE] = curvatures[1:][-n_jerk_preds:]
+            motion_data[MOTION_DATA.LAST_CURVATURE] = curvatures[:-1][-n_jerk_preds:]
 
             # Remove any specified keys.
             for k in self.other_exclusions:
@@ -1257,6 +1263,7 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
                         all_translations: typing.Optional[NDArray],
                         all_times: typing.Optional[NDArray], step: int):
     gt_translations_stepped = gt_translations[::step]
+    gt_translations_stepped = np.pad(gt_translations_stepped, [(4, 0), (0, 0)], mode="edge")
     times = all_times
     if all_times is not None:
         times = all_times[::step][:-1]
@@ -1268,6 +1275,8 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
         displacements = gt_displacements
     else:
         translations_stepped = all_translations[::step]
+        translations_stepped = np.pad(translations_stepped, [(4, 0), (0, 0)], mode="edge")
+
         displacements = np.diff(translations_stepped, axis=0)
         gt_displacements = gt_translations_stepped[1:] - translations_stepped[:-1]
 
@@ -1278,8 +1287,8 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
     vels = mds.velocities
     accs = mds.accelerations
     jerks = mds.jerks
-    snaps = np.insert(mds.snaps, 0, np.zeros(3), axis=0)
-    crackles = np.concatenate((np.zeros((2, 3)), mds.crackles), axis=0)
+    snaps = mds.snaps #np.insert(mds.snaps, 0, np.zeros(3), axis=0)
+    crackles = mds.crackles #np.concatenate((np.zeros((2, 3)), mds.crackles), axis=0)
 
     # Here we specify which order in which we orthonormalize our
     # velocity, acceleration, and jerk vectors into orthonormal frames.
@@ -1288,7 +1297,7 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
     
     # To only calculate as much as we need, we clip the arrays' fronts
     # off when we can.
-    default_ordered = (vels[2:], accs[1:], jerks)
+    default_ordered = (vels[4:], accs[3:], jerks[2:])
     ordered = copy.copy(default_ordered)
     if vec_order is not None:
         ordered = tuple(default_ordered[v.value - 1] for v in vec_order)
@@ -1312,15 +1321,15 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
     _, third_orth = pm.parallelAndOrthoParts(
         jerks[second_ortho_is_0], mats[second_ortho_is_0, 0], True
     )
-    mats[second_ortho_is_0, 2] = pm.normalizeAll(third_orth)
+    mats[second_ortho_is_0, 2] = pm.safelyNormalizeArray(third_orth, vec_for_zero_norms=np.zeros(3))
 
     where_first_zero = np.where(first_are_zero)[0]            
     # Transform each third vector and to-next-frame displacement into
     # this frame via matmul.
     # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
-    local_diffs = pm.einsumMatVecMul(mats, gt_displacements[3:])
+    local_diffs = pm.einsumMatVecMul(mats, gt_displacements[5:])
     local_third_order = pm.einsumMatVecMul(mats, ordered[2])
-    local_snaps = pm.einsumMatVecMul(mats, snaps)
+    local_snaps = pm.einsumMatVecMul(mats, snaps[1:])
     local_crackles = pm.einsumMatVecMul(mats, crackles)
     local_third_order[where_first_zero, 0] = 0.0
     local_snaps[where_first_zero, 0] = 0.0
@@ -1339,7 +1348,7 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
         *(local_diffs.T)
     )
 
-    return np.stack(c_res, axis=-1), gt_translations_stepped, mats
+    return np.stack(c_res, axis=-1), gt_translations_stepped[2:], mats
 
 def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                      apply_noise: bool,
@@ -1377,7 +1386,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         curr_translations = calc_obj.getTranslationsGTNP()
         noisy_translations = None
         if apply_noise:
-            noisy_translations = calc_obj.getNoisyTranslation(2.0)
+            noisy_translations = calc_obj.getNoisyTranslation(1.0)
 
         # Only applicable if we want to return associated rotations.
         curr_rotation_mats: typing.Optional[NDArray] = None
@@ -1404,6 +1413,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                 all_translations[skip][c] = translations
             if return_rotation_mats or return_rotation_vels:
                 rotation_mats = curr_rotation_mats[::step]
+                rotation_mats = np.pad(rotation_mats, [(2,0), (0,0), (0,0)], mode="edge")
                 if return_rotation_mats:
                     all_rotation_mats[skip][c] = rotation_mats
                 if return_rotation_vels:
