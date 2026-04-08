@@ -6,10 +6,13 @@ import keras
 from nn_utilities.nn_losses import poseLossJAV
 from motiontools.dataorg import SUBSET_PRESET
 
-def loadLatestModels(model_prefixes, preset: SUBSET_PRESET):
+def loadLatestModels(model_prefixes, preset: SUBSET_PRESET, noise_resistant: bool):
     model_loads = dict()
     for prefix in model_prefixes:
-        matching_models = glob.glob("./results/models/" + prefix + "--" + preset.name + "*.keras")
+        fname = "./results/models/" + prefix + "--" + preset.name
+        if noise_resistant:
+            fname += "--noised"
+        matching_models = glob.glob(fname + "*.keras")
         # Get most recent model (filenames are known to be timestamped).
         if len(matching_models) > 0:
             chosen_model_fname = sorted(matching_models)[-1] 

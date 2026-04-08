@@ -19,6 +19,8 @@ from gtCommon import PoseLoaderBCOT
 import posemath as pm
 import poseextrapolation as pex
 
+USE_NOISE = True
+
 TRANSLATION_THRESH = None #20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
@@ -76,18 +78,7 @@ def wahbaMoreGeneral(rough_mats, reference_mat):
         sum_mat += np.einsum('bi,j->bij', rough_mats[:, :, i], reference_mat[:, i])
     return wahba(sum_mat)
 
-def getRandomQuatError(shape, max_err_rads):
-    axes = np.random.uniform(-1.0, 1.0, shape[:-1] + (3,))
-    unit_axes = axes / np.linalg.norm(axes, axis=-1, keepdims=True)
-    half_max = max_err_rads / 2.0
-    half_angles = np.random.uniform(
-        -half_max, half_max, shape[:-1] + (1,)
-    )
 
-    error_quats = np.empty(shape)
-    error_quats[..., 0:1] = np.cos(half_angles)
-    error_quats[..., 1:] = np.sin(half_angles) * unit_axes
-    return error_quats
 
 # Numerical TODO items:
 # -  (skip1 test is all that's left) Godot thing
@@ -835,11 +826,11 @@ for i, combo in enumerate(combos):
 
 
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
-    rotations_quats = rotations_gt_quats
-    #  = pm.multiplyQuatLists(
-    #     getRandomQuatError(rotations_gt_quats.shape, ROTATION_THRESH_RAD), 
-    #     rotations_gt_quats
-    # )
+    rotations_quats = rotations_gt_quats # pm.applyRandomQuatNoise(...)
+    if USE_NOISE:
+        translations = calculator.getNoisyTranslation(2.0)[::(skipAmount + 1)]
+
+
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
     
     rev_rotations_quats = pm.conjugateQuats(rotations_quats)

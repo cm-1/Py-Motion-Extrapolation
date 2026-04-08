@@ -187,7 +187,7 @@ class FeaturesAndResultsForVid:
     # err3D_lists[skip_amt][c2] = curr_errs_3D
 
 class CalcsForVideo:
-    def __init__(self, 
+    def __init__(self, has_noise_added: bool,
                  obj_static_thresh_mm: float = DEFAULT_OBJ_STATIC_THRESH_MM,
                  straight_angle_thresh_deg: float = DEFAULT_STRAIGHT_ANG_THRESH_DEG,
                  err_na_val: typing.Union[float, np.float32] = FLOAT_32_MAX,
@@ -201,6 +201,7 @@ class CalcsForVideo:
                  exclude_timescaled: bool = True,
                  other_exclusions: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]] = None
                  ):
+        self.has_noise_added = has_noise_added
         self.obj_static_thresh_mm = obj_static_thresh_mm
         self.straight_angle_thresh_rad = np.deg2rad(straight_angle_thresh_deg)
         self.min_jerk_opt_iter_lim = min_jerk_opt_iter_lim
@@ -483,7 +484,12 @@ class CalcsForVideo:
         
         all_translations = pose_loader.getTranslationsGTNP()
         aa_rotations = pose_loader.getRotationsGTNP()
-        all_rotation_mats = pose_loader.getRotationMatsGTNP()
+        all_rotation_mats = None
+        if self.has_noise_added:
+            all_translations = pose_loader.getNoisyTranslation(2.0)
+            aa_rotations = pose_loader.getNoisyRotation(2.0)
+        else:
+            all_rotation_mats = pose_loader.getRotationMatsGTNP()
 
         res = self.getInputFeatures(
             all_translations, aa_rotations, all_rotation_mats,
@@ -1247,13 +1253,24 @@ OrderForJAV = typing.Tuple[JAV, JAV, JAV]
 def _listOfEmptyDicts(size: int):
     return [dict() for _ in range(size)]
 
-def dataForPositionsJAV(vec_order: OrderForJAV, all_translations: NDArray,
+def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
+                        all_translations: typing.Optional[NDArray],
                         all_times: typing.Optional[NDArray], step: int):
-    translations = all_translations[::step]
+    gt_translations_stepped = gt_translations[::step]
     times = all_times
     if all_times is not None:
         times = all_times[::step][:-1]
-    displacements = np.diff(translations, axis=0)
+
+    gt_displacements: NDArray
+    displacements: NDArray
+    if all_translations is None:
+        gt_displacements = np.diff(gt_translations_stepped, axis=0)
+        displacements = gt_displacements
+    else:
+        translations_stepped = all_translations[::step]
+        displacements = np.diff(translations_stepped, axis=0)
+        gt_displacements = gt_translations_stepped[1:] - translations_stepped[:-1]
+
     # We need a displacement for the last timestep, but not an acceleration,
     # because we need the vectors that take each current position to the next
     # when calculating the "ground truth" for displacement predictions.
@@ -1301,7 +1318,7 @@ def dataForPositionsJAV(vec_order: OrderForJAV, all_translations: NDArray,
     # Transform each third vector and to-next-frame displacement into
     # this frame via matmul.
     # local_vecs2 = pm.einsumMatVecMul(mats, ordered[2])
-    local_diffs = pm.einsumMatVecMul(mats, displacements[3:])
+    local_diffs = pm.einsumMatVecMul(mats, gt_displacements[3:])
     local_third_order = pm.einsumMatVecMul(mats, ordered[2])
     local_snaps = pm.einsumMatVecMul(mats, snaps)
     local_crackles = pm.einsumMatVecMul(mats, crackles)
@@ -1322,9 +1339,10 @@ def dataForPositionsJAV(vec_order: OrderForJAV, all_translations: NDArray,
         *(local_diffs.T)
     )
 
-    return np.stack(c_res, axis=-1), translations, mats
+    return np.stack(c_res, axis=-1), gt_translations_stepped, mats
 
 def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
+                     apply_noise: bool,
                      return_world2locals: bool = False, 
                      return_translations: bool = False,
                      return_rotation_mats: bool = False,
@@ -1357,11 +1375,18 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
     for calc_obj in pose_loaders:
         c = calc_obj.getVidID()
         curr_translations = calc_obj.getTranslationsGTNP()
+        noisy_translations = None
+        if apply_noise:
+            noisy_translations = calc_obj.getNoisyTranslation(2.0)
 
         # Only applicable if we want to return associated rotations.
         curr_rotation_mats: typing.Optional[NDArray] = None
         if return_rotation_mats or return_rotation_vels:
             curr_rotation_mats = calc_obj.getRotationMatsGTNP()
+            # if apply_noise:
+            #     _ = calc_obj.getRotationsGTNP()
+            #     aas = calc_obj.getNoisyRotation(2.0)
+            #     noisy_rotations = ...
         
         for skip in range(skip_end):
             step = skip + 1
@@ -1370,7 +1395,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
                 times = calc_obj.getTimestamps()
 
             all_data[skip][c], translations, mats = dataForPositionsJAV(
-                vec_order, curr_translations, times, step
+                vec_order, curr_translations, noisy_translations, times, step
             )
 
             if return_world2locals:

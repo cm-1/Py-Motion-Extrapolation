@@ -33,8 +33,9 @@ from datatools.data_splitting import DataSubsetKind
 # ==============================================================================
 
 USE_WEIGHTED_CRIT = True
+USE_NOISE = False
 
-dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
+dog = DataOrganizer.load(PoseLoaderBCOT, USE_NOISE) # Load our data.
 
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 

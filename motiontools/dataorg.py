@@ -529,7 +529,8 @@ class DataOrganizer(RowsAndColsHandler):
                  concat_whole_data: NDArray,
                  concat_whole_class_errs: typing.Optional[NDArray],
                  concat_whole_labels: typing.Optional[NDArray],
-                 loader_class: typing.Type[gtc.PoseLoader]
+                 loader_class: typing.Type[gtc.PoseLoader],
+                 has_noise_added: bool
                  ):
         super(DataOrganizer, self).__init__(
             single_vid_bounds=row_col_handler.single_vid_bounds,
@@ -540,6 +541,7 @@ class DataOrganizer(RowsAndColsHandler):
             rows_per_subset=row_col_handler.rows_per_subset,
             supported_skips=row_col_handler.supported_skips
         )
+        self.noisy = has_noise_added
 
         # Now for the numpy arrays.
         self.concat_whole_data = concat_whole_data
@@ -595,7 +597,8 @@ class DataOrganizer(RowsAndColsHandler):
         return
 
     @ staticmethod
-    def FromCalcs(loader_class: typing.Type[gtc.PoseLoader], all_motion_data,
+    def FromCalcs(loader_class: typing.Type[gtc.PoseLoader],
+                  has_noise_added: bool, all_motion_data,
                   min_norm_labels, err_norm_lists, 
                   train_ids, test_ids, validation_ids = None,
                   motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None,
@@ -693,7 +696,7 @@ class DataOrganizer(RowsAndColsHandler):
 
         return DataOrganizer(
             non_np, concat_whole_data, concat_whole_class_errs,
-            concat_whole_labels, loader_class
+            concat_whole_labels, loader_class, has_noise_added
         )
 
         # self.untransformed_col_subset_train = empty_np
@@ -1102,24 +1105,26 @@ class DataOrganizer(RowsAndColsHandler):
         return pathlib.Path(DATA_PATH)
 
     @staticmethod
-    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader]):
+    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
         return DataOrganizer.generatedDataPath() / (
-            "processed_columns_" + loaderClass.datasetName() + ".npz"
+            noise_str + "processed_columns_" + loaderClass.datasetName() + ".npz"
         )
     
     @staticmethod
-    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader]):
+    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
         return DataOrganizer.generatedDataPath() / (
-            "other_processed_data_" + loaderClass.datasetName() + ".pkl"
+            noise_str + "other_processed_data_" + loaderClass.datasetName() + ".pkl"
         )
     
     def dump(self, compress: bool,
              np_file: typing.Optional[typing.Union[str, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, os.PathLike]] = None):
         if np_file is None:
-            np_file = self.getDumpFilenameNP(self.LoaderClass)
+            np_file = self.getDumpFilenameNP(self.LoaderClass, self.noisy)
         if pkl_file is None:
-            pkl_file = self.getDumpFilenamePkl(self.LoaderClass)
+            pkl_file = self.getDumpFilenamePkl(self.LoaderClass, self.noisy)
 
         save_dict = {
             "concat_whole_data": self.concat_whole_data,
@@ -1143,15 +1148,15 @@ class DataOrganizer(RowsAndColsHandler):
 
 
     @staticmethod
-    def load(loader_class: typing.Type[gtc.PoseLoader],
+    def load(loader_class: typing.Type[gtc.PoseLoader], has_noise_added: bool,
              np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              *,
              skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all):
         if np_file is None:
-            np_file = DataOrganizer.getDumpFilenameNP(loader_class)
+            np_file = DataOrganizer.getDumpFilenameNP(loader_class, has_noise_added)
         if pkl_file is None:
-            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class)
+            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class, has_noise_added)
 
         with open(pkl_file, "rb") as f:
             nnpl = typing.cast(RowsAndColsHandler, pickle.load(f))
@@ -1165,7 +1170,7 @@ class DataOrganizer(RowsAndColsHandler):
             sliced["concat_whole_data"],
             sliced["concat_whole_class_errs"],
             sliced["concat_whole_labels"],
-            loader_class
+            loader_class, has_noise_added
         )
 
         npl.close()

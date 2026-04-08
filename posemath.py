@@ -1427,6 +1427,30 @@ def cross2D(vecs0, vecs1):
 
     return (x0 * y1) - (x1 * y0)
 
+def getRandomQuatNoise(shape, std_err_degs, rng_seed):
+    std_err_rads = np.deg2rad(std_err_degs)
+    rng = np.random.default_rng(seed=rng_seed)
+    axes = rng.uniform(-1.0, 1.0, shape[:-1] + (3,))
+    unit_axes = axes / np.linalg.norm(axes, axis=-1, keepdims=True)
+    angles = rng.normal(0.0, std_err_rads, shape[:-1] + (1,))
+    half_angles = angles / 2.0
+
+    error_quats = np.empty(shape)
+    error_quats[..., 0:1] = np.cos(half_angles)
+    error_quats[..., 1:] = np.sin(half_angles) * unit_axes
+    return error_quats
+
+def applyRandomQuatNoise(true_quats, std_err_degs, seed):
+    return multiplyQuatLists(
+        getRandomQuatNoise(true_quats.shape, std_err_degs, seed), 
+        true_quats
+    )
+
+def applyRandomAANoise(true_aas, std_err_degs, seed):
+    quats = quatsFromAxisAngleVec3s(true_aas)
+    noised_quats = applyRandomQuatNoise(quats, std_err_degs, seed)
+    return axisAngleVec3sFromQuats(noised_quats, remove_jumps=True)
+
 # TODO: Move this to another file.
 def poseLossAngle(y_true, y_pred):
     # 2acos(abs([cos||x/2|| cos||y/2|| + <x>*<y> sin||x/2|| sin||y/2||))

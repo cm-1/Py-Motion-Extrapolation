@@ -284,7 +284,18 @@ class PoseLoader(ABC):
     def getRotationsCalcNP(self):
         self.loadData()
         return self._rotationsCalcNP
+
+    def getNoisyTranslation(self, std_dev):
+        self.loadData()
+        h = hash(self.getVidID())
+        rng = np.random.default_rng(seed=abs(h)) # TODO: Replace abs with something better.
+        noise = rng.normal(0.0, std_dev, self._translationsGTNP.shape)
+        return self._translationsGTNP + noise
+
+    def getNoisyRotation(self, std_dev_deg):
+        return pm.applyRandomAANoise(self._rotationsGTNP, std_dev_deg, abs(hash(self.getVidID())))
     
+
     def getTimestamps(self):
         self.loadData()
         if self._are_timestamps_const:

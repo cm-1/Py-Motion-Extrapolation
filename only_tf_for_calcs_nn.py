@@ -26,6 +26,7 @@ from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapola
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
 CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
+USE_NOISE = True
 
 def create_hardcoded_model(refModel):
     shp = refModel.get_config()['layers'][0]['config']['batch_shape'][1:]
@@ -107,7 +108,7 @@ print("Creating combined model with custom layer...")
 # %%
 # Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
-bcs_model = loadLatestModels((model_key, ), SUBSET_PRESET.MINIMAL)[model_key]
+bcs_model = loadLatestModels((model_key, ), SUBSET_PRESET.MINIMAL, USE_NOISE)[model_key]
 hardcoded_model = create_hardcoded_model(bcs_model)
 
 # Define the getVelFrameDisplacements function as a TensorFlow operation
@@ -250,6 +251,8 @@ print("Final model setup complete")
 print("="*60 + "\n")
 
 tf_const_input = tf.constant(test_windows_flatter.astype(np.float32)) 
+batch_out = wrapper_batch.forward(tf_const_input)
+print("First batch out:", batch_out[0])
 final_model_forward = wrapper_batch.get_frozen_func(wrapper_batch.forward)
 test_out = final_model_forward(tf_const_input)[0]
 out_pts = test_out[..., -6:-3]

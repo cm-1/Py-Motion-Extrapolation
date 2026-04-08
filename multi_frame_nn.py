@@ -59,12 +59,14 @@ from motiontools.dataorg import (
 # ==============================================================================
 
 # Global parameters.
-TRAIN_NEW_MODEL = False
+TRAIN_NEW_MODEL = True
 
 NO_LAGRANGE_MEM_SAVE = False
 
+USE_NOISE = True
+
 print("Starting to load data!")
-dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
+dog = DataOrganizer.load(PoseLoaderBCOT, USE_NOISE) # Load our data.
 
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
@@ -280,7 +282,7 @@ class DataForJAV:
             all_true_ids = _dog.LoaderClass.prepIDsForConstructor(_dog.getAllIDs())
             loaders = [_dog.LoaderClass(*true_id) for true_id in all_true_ids] 
             jav_res = dataForCombosJAV(
-                loaders, JAV_order, True, True, True, True
+                loaders, JAV_order, USE_NOISE, True, True, True, True
             )
 
             # In this section, we'll be creating some values that we only really
@@ -842,7 +844,7 @@ if TRAIN_NEW_MODEL:
     )
     latest_models[chosen_mode.name] = bcs_model
 else:
-    latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"), chosen_preset)
+    latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"), chosen_preset, USE_NOISE)
     bcs_model = latest_models[chosen_mode.name]
 #%% Evaluate network on test data.
 
@@ -851,8 +853,9 @@ bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
 
 #%% Saving model to disk.
 if TRAIN_NEW_MODEL:
-    model_name = "results/models/{}--{}--{:%Y-%m-%d_%H-%M-%S}.keras".format(
-        chosen_mode.name, chosen_preset.name, datetime.datetime.now()
+    noise_str = "--noised" if USE_NOISE else ""
+    model_name = "results/models/{}--{}{}--{:%Y-%m-%d_%H-%M-%S}.keras".format(
+        chosen_mode.name, chosen_preset.name, noise_str, datetime.datetime.now()
     )
     bcs_model.save(model_name)
 
@@ -1273,7 +1276,7 @@ cfc.getAll(tudl_loaders)
 #%%
 tudl_train, tudl_test = PoseLoaderTUDL.trainTestIDs()
 tdog = DataOrganizer.FromCalcs(
-    PoseLoaderTUDL,
+    PoseLoaderTUDL, USE_NOISE,
     cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
     tudl_train, tudl_test, dog.motion_data_keys
 )
