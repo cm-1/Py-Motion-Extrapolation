@@ -828,7 +828,7 @@ for i, combo in enumerate(combos):
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations_quats = rotations_gt_quats # pm.applyRandomQuatNoise(...)
     if USE_NOISE:
-        translations = calculator.getNoisyTranslation(2.0)[::(skipAmount + 1)]
+        translations = calculator.getNoisyTranslation(1.0)[::(skipAmount + 1)]
 
 
     rotations = rotations_aa_gt # TODO: Apply quat error to these.
@@ -1361,6 +1361,8 @@ print()
 print("All acc ortho ratios stats:")
 ConsolidatedResults.printTable(acc_ortho_stat_results, stat_headers)
 print()
+
+#%%
 
 fig = plt.figure(0) # Arg of "0" means same figure reused if cell ran again.
 fig.clear() # Good to do for iPython running, if running a plot cell again.

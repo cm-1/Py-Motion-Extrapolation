@@ -486,8 +486,8 @@ class CalcsForVideo:
         aa_rotations = pose_loader.getRotationsGTNP()
         all_rotation_mats = None
         if self.has_noise_added:
-            all_translations = pose_loader.getNoisyTranslation(2.0)
-            aa_rotations = pose_loader.getNoisyRotation(2.0)
+            all_translations = pose_loader.getNoisyTranslation(1.0)
+            aa_rotations = pose_loader.getNoisyRotation(3.5)
         else:
             all_rotation_mats = pose_loader.getRotationMatsGTNP()
 
