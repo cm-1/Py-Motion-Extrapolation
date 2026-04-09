@@ -23,3 +23,21 @@ Above score is for skip2 data.
 153/153 ━━━━━━━━━━━━━━━━━━━━ 0s 939us/step
 LSTM err when all inputs translated by constant amount: 9.868001474198717
 LSTM err when all inputs reflected by constant amount: 54.93753491372697
+
+
+
+Train data score:
+{<SkipSubsetKind.skip0: 0>: 1.124795614611552, <SkipSubsetKind.skip1: 1>: 3.560465036559742, <SkipSubs
+etKind.skip2: 2>: 8.498111874433015, <SkipSubsetKind._all: -1>: 3.106420826921471}
+Test data score:
+{<SkipSubsetKind.skip0: 0>: 1.5528350017073664, <SkipSubsetKind.skip1: 1>: 4.917976051351967, <SkipSub
+setKind.skip2: 2>: 11.334882587087797, <SkipSubsetKind._all: -1>: 4.213511103675596}
+          rank  ensemble_weight               type      cost    duration
+model_id
+35           1             0.22  gradient_boosting  0.576551  621.530238
+2            2             0.20      random_forest  0.580924  690.916910
+31           3             0.20  gradient_boosting  0.589789  278.906595
+49           4             0.14  gradient_boosting  0.593203  376.283977
+13           5             0.16                mlp  0.601270  654.852797
+18           6             0.04  gradient_boosting  0.605063  380.564776
+37           7             0.04  gradient_boosting  0.605403   92.729443
