@@ -97,6 +97,15 @@ max_depth = 8
 
 nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.FAST_TO_EXPLAIN)
 
+non_smd_key_names = [
+    k.name for k in nonco_col_ks if not isinstance(k, SpecifiedMotionData)
+]
+print("\n".join(non_smd_key_names))
+
+bcs_scaler = UnitAwareScaler(nonco_col_ks)
+bcs_scaler.fakeFit()
+dog.setPickAndTransform(nonco_cols, bcs_scaler)
+
 #%%
 import autosklearn.classification
 import datetime
@@ -247,14 +256,6 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
 mc.set_y_errs(y_errs_reshape)
 
 
-non_smd_key_names = [
-    k.name for k in nonco_col_ks if not isinstance(k, SpecifiedMotionData)
-]
-print("\n".join(non_smd_key_names))
-
-bcs_scaler = UnitAwareScaler(nonco_col_ks)
-bcs_scaler.fakeFit()
-dog.setPickAndTransform(nonco_cols, bcs_scaler)
 
 #%% Training decision tree at max depth.
 # ---
