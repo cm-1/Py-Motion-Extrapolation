@@ -5,6 +5,22 @@ import keras
 def poseLossVec3(y_true, y_pred):
     return tf.norm(y_true - y_pred, axis=-1)
 
+@keras.saving.register_keras_serializable()
+def poseLossLagrange(y_true, y_pred):
+    # Divide coeffs by sum to ensure we get an affine combination of the points.
+    y_pred_n = y_pred / tf.reduce_sum(y_pred, axis=-1, keepdims=True)
+
+    # Positions passed in as T6, T5, ..., T0 semi-flattened into vec21s.
+    prev_positions = tf.reshape(y_true[:, 3:], (-1, 6, 3))
+    # Apply the coefficients:
+    prod = tf.reshape(y_pred_n, (-1, 6, 1)) * prev_positions
+    predictions_vec3 = tf.reduce_sum(prod, axis = -2)
+
+    true_vec3 = y_true[:, :3]
+    err_vec3 = true_vec3 - predictions_vec3
+    
+    return tf.norm(err_vec3, axis=-1)
+
 # Get the pose loss for a set of Jerk, Acceleration, & Velocity multipliers.
 @keras.saving.register_keras_serializable()
 def poseLossJAV(y_true, y_pred):

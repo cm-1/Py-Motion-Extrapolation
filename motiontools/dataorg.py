@@ -1,7 +1,7 @@
 from io import BufferedWriter
 import typing
 import builtins # For ellipsis type pre Python 3.10
-from enum import IntEnum
+from enum import IntEnum, Enum
 import os
 import pathlib
 
@@ -13,9 +13,17 @@ from numpy.typing import NDArray
 import gtCommon as gtc
 from motiontools.key_and_vec_specs import (
     MOTION_MODEL, MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION,
-    OneHotMotionData, MOTION_DATA_KEY_TYPE
+    OneHotMotionData, MOTION_DATA_KEY_TYPE, LONG_EXPLANATION_KEYS, SLIGHT_EXPLANATION_KEYS
 )
 from datatools.data_splitting import DataSubsetKind
+
+class SUBSET_PRESET(Enum):
+    NONCIRC_VEC3S_ONLY = 0
+    FAST_TO_EXPLAIN = 1
+    LESS_FAST_TO_EXPLAIN = 2
+    NN_ORIG_CUSTOM_SUBSET = 3
+    EVERYTHING = 4
+    MINIMAL = 5
 
 # We frequently work with data sequences that have the following type: 
 #     List[Dict[Combo, (Dict|NDArray)]]
@@ -37,12 +45,27 @@ from datatools.data_splitting import DataSubsetKind
 # Motivation: We may want to quickly filter out a skip amount for training.
 def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
                          diff_order: int = 0, del_original_data: bool = False,
-                         return_indices: bool = False):
+                         return_indices: bool = False,
+                         *, pad_missing_with_1st: bool = False):
     ret_val: typing.List[typing.Union[typing.Dict, NDArray]] = []
     num_vids = len(vid_ids)
     id_index_maps = []
     single_vid_bounds: typing.Dict[SkipSubsetKind, NDArray] = {}
+    orig_start = front_trim
+    needs_pad = (front_trim < 0)
+    if needs_pad:
+        front_trim = 0
 
+    def perComboTrimming(untrimmed):
+        trimmed = untrimmed[front_trim:end]
+        if needs_pad:
+            if pad_missing_with_1st:
+                pad = np.repeat(trimmed[:1], -orig_start, axis=0)
+                trimmed = np.concatenate((pad, trimmed), axis=0)
+            else:
+                raise NotImplementedError("No other paddings supported yet!")
+        return trimmed
+    
     # process skips in reverse order
     for skip_ind in range(len(data) - 1, -1, -1):
         els_for_skip = data[skip_ind]
@@ -61,14 +84,14 @@ def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
             if diff_order > 0:
                 concated = {
                     k: np.concatenate([
-                        np.diff(s[k][front_trim:end], diff_order, axis=0)
+                        np.diff(perComboTrimming(s[k]), diff_order, axis=0)
                         for s in subset_via_ids
                     ]) for k in subset_via_ids[0].keys()
                 }
             else:
                 concated = {
                     k: np.concatenate([
-                        s[k][front_trim:end] for s in subset_via_ids
+                        perComboTrimming(s[k]) for s in subset_via_ids
                     ]) for k in subset_via_ids[0].keys()
                 }
 
@@ -79,12 +102,12 @@ def concatForComboSubset(data, vid_ids, front_trim: int = 0, end_trim: int = 0,
         else:
             if diff_order > 0:
                 concated = np.concatenate([
-                    np.diff(svc[front_trim:end], diff_order, axis=0)
+                    np.diff(perComboTrimming(svc), diff_order, axis=0)
                     for svc in subset_via_ids
                 ])
             else:
                 concated = np.concatenate([
-                    svc[front_trim:end] for svc in subset_via_ids
+                    perComboTrimming(svc) for svc in subset_via_ids
                 ]) 
             
             if return_indices:
@@ -286,6 +309,15 @@ class UnitAwareScaler:
 
     def inverse_transform(self, X):
         return (X * self.scale_) + self.mean_
+
+    def fakeFit(self):
+        n_keys = len(self.column_keys)
+        self.pos_scale = 1.0
+        self.rot_scale = 1.0
+        self.scale_ = np.ones(n_keys)
+        self.mean_ = np.zeros(n_keys)
+        self.n_features_in_ = n_keys
+
     
 class SkipSubsetKind(IntEnum):
     skip0 = 0
@@ -497,7 +529,8 @@ class DataOrganizer(RowsAndColsHandler):
                  concat_whole_data: NDArray,
                  concat_whole_class_errs: typing.Optional[NDArray],
                  concat_whole_labels: typing.Optional[NDArray],
-                 loader_class: typing.Type[gtc.PoseLoader]
+                 loader_class: typing.Type[gtc.PoseLoader],
+                 has_noise_added: bool
                  ):
         super(DataOrganizer, self).__init__(
             single_vid_bounds=row_col_handler.single_vid_bounds,
@@ -508,6 +541,7 @@ class DataOrganizer(RowsAndColsHandler):
             rows_per_subset=row_col_handler.rows_per_subset,
             supported_skips=row_col_handler.supported_skips
         )
+        self.noisy = has_noise_added
 
         # Now for the numpy arrays.
         self.concat_whole_data = concat_whole_data
@@ -563,7 +597,8 @@ class DataOrganizer(RowsAndColsHandler):
         return
 
     @ staticmethod
-    def FromCalcs(loader_class: typing.Type[gtc.PoseLoader], all_motion_data,
+    def FromCalcs(loader_class: typing.Type[gtc.PoseLoader],
+                  has_noise_added: bool, all_motion_data,
                   min_norm_labels, err_norm_lists, 
                   train_ids, test_ids, validation_ids = None,
                   motion_data_keys: typing.Optional[typing.List[MOTION_DATA_KEY_TYPE]]=None,
@@ -661,7 +696,7 @@ class DataOrganizer(RowsAndColsHandler):
 
         return DataOrganizer(
             non_np, concat_whole_data, concat_whole_class_errs,
-            concat_whole_labels, loader_class
+            concat_whole_labels, loader_class, has_noise_added
         )
 
         # self.untransformed_col_subset_train = empty_np
@@ -819,6 +854,204 @@ class DataOrganizer(RowsAndColsHandler):
 
         return
     
+    @staticmethod
+    def non_collinear_features(X: np.ndarray, threshold: float = 0.99):
+        """
+        Detects collinear columns from a 2D NumPy array based on the given correlation threshold.
+        
+        Parameters:
+            X : np.ndarray
+                Input 2D array (samples x features).
+            threshold: float
+                Correlation threshold for collinearity. Columns with correlation 
+                above this value will be removed.
+
+        Returns:
+            (to_keep, upper_tri): (np.ndarray, np.ndarray)
+                - Boolean mask indicating which columns to keep.
+                - Upper triangular of covariance matrix.
+        """
+        # Note: Function generated by ChatGPT. Manually commented/verified below.
+
+        # Correlation matrix, assuming each column in X contains the values for a
+        # distinct variable.
+        corr_matrix = np.corrcoef(X, rowvar=False)
+
+        # We look at the upper triangular only for high covariances so that if the
+        # variables for data columns m and n, n > m, are correlated, the correlation
+        # matrix column m will not contain this high correlation value in its n-th
+        # row (which will be zero) but the nth column will contain the high value in
+        # its mth row. So we'll remove column n only instead of both or neither.
+        upper_tri = np.triu(np.abs(corr_matrix), k=1)  # k=1 -> zeros on diagonal.
+        to_keep = ~(np.any(upper_tri > threshold, axis=0))
+        
+        return to_keep, upper_tri
+    
+    def indsForKeysMD(self, keysMD: typing.Sequence[MOTION_DATA]):
+        ret = []
+        for k in keysMD:
+            f = -1
+            try:
+                f = self.motion_data_keys.index(k)
+            except ValueError:
+                print("Key", k.name, "not found.")
+            if f >= 0:
+                ret.append(f)
+        return ret
+
+    def maskAndKeysForSubsetPreset(self, preset: SUBSET_PRESET):
+        nonco_cols = np.full(self.concat_train_data.shape[1], True)
+
+        ang_inds = [
+            i for i, k in enumerate(self.motion_data_keys)
+            if isinstance(k, SpecifiedMotionData) and k.ang_or_mag == ANG_OR_MAG.ANG
+        ]
+        bidir_inds = [
+            i for i, k in enumerate(self.motion_data_keys)
+            if isinstance(k, SpecifiedMotionData) and k.bidirectional
+        ]
+        circ_vec3_inds = [
+            i for i, k in enumerate(self.motion_data_keys)
+            if isinstance(k, SpecifiedMotionData) and k.base_cat.name[:4].upper() == "CIRC"
+        ]
+        vd2_inds = [
+            i for i, k in enumerate(self.motion_data_keys)
+            if "deg2" in k.name.lower()
+        ]
+        
+        bounce_ang_key = SpecifiedMotionData(
+            MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
+            False, True
+        )
+        bounce_ang_ind = self.motion_data_keys.index(bounce_ang_key)
+        skip_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTEP)
+
+        long_explanation_inds = self.indsForKeysMD(LONG_EXPLANATION_KEYS)
+        slight_explanation_inds = self.indsForKeysMD(SLIGHT_EXPLANATION_KEYS)
+
+        def isMinimal(smdk: SpecifiedMotionData):
+            retVal = True
+            # retVal &= smdk.ang_or_mag == ANG_OR_MAG.MAG_PROJ
+            retVal &= (smdk.ang_or_mag != ANG_OR_MAG.MAG_DOT)
+            retVal &= not smdk.bidirectional and not smdk.is_timestep_shifted
+            return retVal
+
+        minimal_inds = [
+            i for i, k in enumerate(self.motion_data_keys)
+            if isinstance(k, SpecifiedMotionData) and isMinimal(k)
+        ]
+
+        nonco_cols[vd2_inds] = False
+        if preset != SUBSET_PRESET.NONCIRC_VEC3S_ONLY:
+            nonco_cols[[
+                i for i, k in enumerate(self.motion_data_keys)
+                if isinstance(k, SpecifiedMotionData) and i not in minimal_inds
+            ]] = False
+
+        if preset == SUBSET_PRESET.NONCIRC_VEC3S_ONLY:
+            nonco_cols[[
+                i for i, k in enumerate(self.motion_data_keys)
+                if isinstance(k, MOTION_DATA) and k != MOTION_DATA.TIMESTEP
+            ]] = False
+            nonco_cols[bidir_inds] = False
+            nonco_cols[ang_inds] = False
+            nonco_cols[circ_vec3_inds] = False
+            nonco_cols[vd2_inds] = False
+        elif preset == SUBSET_PRESET.MINIMAL:
+            
+            nonco_cols[:] = False
+            nonco_cols[skip_ind] = True
+            nonco_cols[minimal_inds] = True
+            nonco_cols[circ_vec3_inds] = False
+            nonco_cols[vd2_inds] = False
+        elif preset == SUBSET_PRESET.FAST_TO_EXPLAIN:
+            nonco_cols[long_explanation_inds] = False
+            nonco_cols[slight_explanation_inds] = False
+            nonco_cols[bounce_ang_ind] = True
+        elif preset == SUBSET_PRESET.LESS_FAST_TO_EXPLAIN:
+            nonco_cols[long_explanation_inds] = False
+        elif preset == SUBSET_PRESET.NN_ORIG_CUSTOM_SUBSET:
+            timestamp_ind = self.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
+            framenum_ind = self.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
+
+            onehot_inds = [
+                i for i, k in enumerate(self.motion_data_keys)
+                if isinstance(k, OneHotMotionData)
+            ]
+            GT_inds = [
+                i for i, k in enumerate(self.motion_data_keys)
+                if len(k.name) == 3 and k.name[:2] == "GT"
+            ]
+            veld2_dot_inds = [
+                i for i, k in enumerate(self.motion_data_keys)
+                if "DEG2_DOT" in k.name.upper()
+            ]
+            veld_ra_inds = [
+                i for i, k in enumerate(self.motion_data_keys)
+                if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
+            ]
+            # plane_ra_inds = [
+            #     i for i, k in enumerate(self.motion_data_keys)
+            #     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
+            # ]
+            all_circ_inds = [
+                i for i, k in enumerate(self.motion_data_keys) if "CIRC" in k.name.upper()
+            ]
+            all_timescaled_inds = [
+                i for i, k in enumerate(self.motion_data_keys) if "TIMESCALED" in k.name.upper()
+            ]
+
+            misc_rem_inds = self.indsForKeysMD([
+                MOTION_DATA.INV_VEL_BCS_RATIOS, MOTION_DATA.RAD_DIFF,
+                MOTION_DATA.SPEED_ACC_RATIO, MOTION_DATA.DISP_MAG_DIFF,
+                MOTION_DATA.PLANE_NORMAL_DOT, MOTION_DATA.SPEED_ORTHO_ACC_RATIO
+            ])
+
+
+            broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
+            broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
+            broad_exclusions += veld_ra_inds + veld2_dot_inds
+            # A lot of the features we calculated might be collinear (especially since a lot 
+            # of very similar features were tried for the decision tree) we'll remove the
+            # collinear ones before training.
+            colin_thresh = 0.7 # Threshold for collinearity.
+
+            nonco_cols, co_mat = self.non_collinear_features(
+                self.concat_train_data, colin_thresh
+            )
+
+            
+            nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
+            nonco_cols[framenum_ind] = False
+            nonco_cols[broad_exclusions] = False
+            nonco_cols[misc_rem_inds] = False
+
+            # nonco_cols[plane_ra_inds] = False
+
+
+            AVD2_KEY = SpecifiedMotionData(
+                MOTION_DATA.ACC_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG, False, True
+            )
+
+            col_sub_keys = [
+                AVD2_KEY, bounce_ang_key, MOTION_DATA.VEL_BCS_RATIOS,
+                MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
+                MOTION_DATA.DISP_MAG_RATIO
+            ]
+            col_indices = self.indsForKeysMD(col_sub_keys)
+            nonco_cols[col_indices] = True
+
+        elif preset == SUBSET_PRESET.EVERYTHING:
+            nonco_cols = np.full(self.concat_train_data.shape[1], True)
+        else:
+            raise NotImplementedError("Unhandled enum value: {}".format(preset.name))
+    
+        key_subset = [
+            k for i, k in enumerate(self.motion_data_keys) if nonco_cols[i]
+        ]
+        
+        return nonco_cols, key_subset
+    
     # def getColumnSubsetBySeqSubset(self, subset: DataSubsetKind):
     #     ret: NDArray
     #     if subset == DataSubsetKind.TRAIN:
@@ -872,24 +1105,26 @@ class DataOrganizer(RowsAndColsHandler):
         return pathlib.Path(DATA_PATH)
 
     @staticmethod
-    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader]):
+    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
         return DataOrganizer.generatedDataPath() / (
-            "processed_columns_" + loaderClass.datasetName() + ".npz"
+            noise_str + "processed_columns_" + loaderClass.datasetName() + ".npz"
         )
     
     @staticmethod
-    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader]):
+    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
         return DataOrganizer.generatedDataPath() / (
-            "other_processed_data_" + loaderClass.datasetName() + ".pkl"
+            noise_str + "other_processed_data_" + loaderClass.datasetName() + ".pkl"
         )
     
     def dump(self, compress: bool,
              np_file: typing.Optional[typing.Union[str, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, os.PathLike]] = None):
         if np_file is None:
-            np_file = self.getDumpFilenameNP(self.LoaderClass)
+            np_file = self.getDumpFilenameNP(self.LoaderClass, self.noisy)
         if pkl_file is None:
-            pkl_file = self.getDumpFilenamePkl(self.LoaderClass)
+            pkl_file = self.getDumpFilenamePkl(self.LoaderClass, self.noisy)
 
         save_dict = {
             "concat_whole_data": self.concat_whole_data,
@@ -913,15 +1148,15 @@ class DataOrganizer(RowsAndColsHandler):
 
 
     @staticmethod
-    def load(loader_class: typing.Type[gtc.PoseLoader],
+    def load(loader_class: typing.Type[gtc.PoseLoader], has_noise_added: bool,
              np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              *,
              skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all):
         if np_file is None:
-            np_file = DataOrganizer.getDumpFilenameNP(loader_class)
+            np_file = DataOrganizer.getDumpFilenameNP(loader_class, has_noise_added)
         if pkl_file is None:
-            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class)
+            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class, has_noise_added)
 
         with open(pkl_file, "rb") as f:
             nnpl = typing.cast(RowsAndColsHandler, pickle.load(f))
@@ -935,7 +1170,7 @@ class DataOrganizer(RowsAndColsHandler):
             sliced["concat_whole_data"],
             sliced["concat_whole_class_errs"],
             sliced["concat_whole_labels"],
-            loader_class
+            loader_class, has_noise_added
         )
 
         npl.close()

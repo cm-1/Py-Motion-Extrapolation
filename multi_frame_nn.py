@@ -27,7 +27,7 @@ import motiontools.shared_constants
 from nn_utilities.nn_modes import OutVecMode
 
 from nn_utilities.nn_losses import (
-    poseLossJAV, poseLossVec3
+    poseLossJAV, poseLossVec3, poseLossLagrange
 )
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.data_cache import (
@@ -40,10 +40,7 @@ from datatools.data_splitting import DataSubsetKind
 # MOTION_DATA is an enum representing input feature column "names", while
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.key_and_vec_specs import (
-    MOTION_DATA, MOTION_MODEL, ANG_OR_MAG,          # Enums
-    SpecifiedMotionData, OneHotMotionData,          # Other "labels" for columns
-)
+from motiontools.key_and_vec_specs import MOTION_MODEL
 
 from motiontools.posefeatures import (
     JAV,                                            # Enum
@@ -55,18 +52,21 @@ from motiontools.posefeatures import (
 
 from motiontools.dataorg import (
     DataOrganizer, RowsAndColsHandler, UnitAwareScaler, SkipSubsetKind,
-    concatForComboSubset
+    concatForComboSubset, SUBSET_PRESET
 )
 
 # End of imports
 # ==============================================================================
 
 # Global parameters.
-TRAIN_NEW_MODEL = False
+TRAIN_NEW_MODEL = True
 
+NO_LAGRANGE_MEM_SAVE = False
+
+USE_NOISE = True
 
 print("Starting to load data!")
-dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
+dog = DataOrganizer.load(PoseLoaderBCOT, USE_NOISE) # Load our data.
 
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
@@ -79,115 +79,12 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
 
 #%%
-# A lot of the features we calculated might be collinear (especially since a lot 
-# of very similar features were tried for the decision tree) we'll remove the
-# collinear ones before training.
-colin_thresh = 0.7 # Threshold for collinearity.
-
-nonco_cols, co_mat = pm.non_collinear_features(
-    dog.concat_train_data, colin_thresh
-)
-def indsForKeysMD(keysMD: typing.List[MOTION_DATA]):
-    ret = []
-    for k in keysMD:
-        f = -1
-        try:
-            f = dog.motion_data_keys.index(k)
-        except ValueError:
-            print("Key", k.name, "not found.")
-        if f >= 0:
-            ret.append(f)
-    return ret
-
-timestamp_ind = dog.motion_data_keys.index(MOTION_DATA.TIMESTAMP)
-framenum_ind = dog.motion_data_keys.index(MOTION_DATA.FRAME_NUM)
-onehot_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, OneHotMotionData)
-]
-GT_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if len(k.name) == 3 and k.name[:2] == "GT"
-]
-ang_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.ang_or_mag == ANG_OR_MAG.ANG
-]
-bidir_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.bidirectional
-]
-circ_vec3_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.base_cat.name[:4].upper() == "CIRC"
-]
-veld_ra_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, SpecifiedMotionData) and k.axis == MOTION_DATA.VEL_DEG2_VEC3
-]
-veld2_dot_inds = [
-    i for i, k in enumerate(dog.motion_data_keys)
-    if "DEG2_DOT" in k.name.upper()
-]
-# plane_ra_inds = [
-#     i for i, k in enumerate(dog.motion_data_keys)
-#     if isinstance(k, SpecifiedMotionData) and k.axis == OTHER_DIRECTION.PLANE_ORTHO
-# ]
-all_circ_inds = [
-    i for i, k in enumerate(dog.motion_data_keys) if "CIRC" in k.name.upper()
-]
-all_timescaled_inds = [
-    i for i, k in enumerate(dog.motion_data_keys) if "TIMESCALED" in k.name.upper()
-]
-misc_rem_inds = indsForKeysMD([
-    MOTION_DATA.INV_VEL_BCS_RATIOS, MOTION_DATA.RAD_DIFF,
-    MOTION_DATA.SPEED_ACC_RATIO, MOTION_DATA.DISP_MAG_DIFF,
-    MOTION_DATA.PLANE_NORMAL_DOT, MOTION_DATA.SPEED_ORTHO_ACC_RATIO
-])
-
-nonco_cols[:] = True
-nonco_cols[timestamp_ind] = False # Current frame number seems... unhelpful.
-nonco_cols[framenum_ind] = False
-
-broad_exclusions = onehot_inds + GT_inds + ang_inds + bidir_inds 
-broad_exclusions += circ_vec3_inds + all_circ_inds + all_timescaled_inds
-broad_exclusions += veld_ra_inds + veld2_dot_inds
-
-nonco_cols[broad_exclusions] = False
-nonco_cols[misc_rem_inds] = False
-nonco_cols[[
-    i for i, k in enumerate(dog.motion_data_keys)
-    if isinstance(k, MOTION_DATA) and k != MOTION_DATA.TIMESTEP
-]] = False
-# nonco_cols[plane_ra_inds] = False
-
-
-AVD2_KEY = SpecifiedMotionData(
-    MOTION_DATA.ACC_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG, False, True
-)
-
-bounce_ang_key = SpecifiedMotionData(
-    MOTION_DATA.VEL_DEG1_VEC3, MOTION_DATA.VEL_DEG1_VEC3, ANG_OR_MAG.ANG,
-    False, True
-)
-
-col_sub_keys = [
-    AVD2_KEY, bounce_ang_key, MOTION_DATA.VEL_BCS_RATIOS,
-    MOTION_DATA.CIRC_ACC, MOTION_DATA.DISP_MAG_DIFF, MOTION_DATA.TIMESTEP,
-    MOTION_DATA.DISP_MAG_RATIO
-]
-# col_indices = indsForKeysMD(col_sub_keys)
-# nonco_cols[col_indices] = True
-
-nonco_col_nums = np.where(nonco_cols)[0]
-# Get the column names for each of the kept columns.
-nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
-nonco_featnames = np.array([k.name for k in nonco_col_ks])
+chosen_preset = SUBSET_PRESET.MINIMAL
+col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(chosen_preset)
 
 # select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
 # nonco_cols[:] = False
 # nonco_cols[list(select_cols)] = True
-
 
 # Custom importance weighting layer suggested/described "in theory" by a friend.
 # Then, I had the class written by ChatGPT and manually verified.
@@ -240,6 +137,7 @@ def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
     for _ in range(n_layers - 1):
         x = keras.layers.Dropout(dropout_rate)(x)
         x = make_dense()(x)
+    x = keras.layers.Dropout(dropout_rate)(x)
     
     out = keras.layers.Dense(out_dim)(x)
 
@@ -259,6 +157,13 @@ if chosen_mode != OutVecMode.JAV_MULTIPLIERS:
     if chosen_mode == OutVecMode.ROT_FIXED_AX:
         sel_dim = 1
         sel_loss = 'mae'
+    elif chosen_mode == OutVecMode.LAGRANGE_POLY:
+        if NO_LAGRANGE_MEM_SAVE:
+            raise Exception(
+                "Memory saving turned on, and LAGRANGE mode uses more mem for its GT values!"
+            )
+        sel_dim = 6
+        sel_loss = poseLossLagrange
     else:
         sel_dim = 3
         sel_loss = 'mse' if chosen_mode in ROT_VEC_MODES else poseLossVec3 
@@ -270,7 +175,7 @@ JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 # bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
 
 # Z-scale each column to standard normal distribution.
-bcs_scaler = UnitAwareScaler(nonco_col_ks) #, False)
+bcs_scaler = UnitAwareScaler(key_subset) #, False)
 
 class DataForJAV:
     class _CacheHelper(typing.NamedTuple):
@@ -282,7 +187,7 @@ class DataForJAV:
         prev_vel_axes: NumpyForSkipAndID
 
     def __init__(self, data_organizer: DataOrganizer, bcs_scaler, 
-                 col_inds: NDArray, JAV_order: OrderForJAV,
+                 col_mask: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
                  *, save_data_for_conf: bool = False,
@@ -290,7 +195,7 @@ class DataForJAV:
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(
-            col_inds, bcs_scaler, free_orig_mem=True
+            col_mask, bcs_scaler, free_orig_mem=True
         )
         _dog = self.data_organizer
         self._val_start = len(_dog.col_subset_train)
@@ -377,7 +282,7 @@ class DataForJAV:
             all_true_ids = _dog.LoaderClass.prepIDsForConstructor(_dog.getAllIDs())
             loaders = [_dog.LoaderClass(*true_id) for true_id in all_true_ids] 
             jav_res = dataForCombosJAV(
-                loaders, JAV_order, True, True, True, True
+                loaders, JAV_order, USE_NOISE, True, True, True, True
             )
 
             # In this section, we'll be creating some values that we only really
@@ -456,6 +361,8 @@ class DataForJAV:
                     continue
                 if m == OutVecMode.VEL_ALIGNED_VEC3:
                     continue
+                if m == OutVecMode.LAGRANGE_POLY:
+                    continue # We'll calculate this after the for loop.
 
                 m_rot_align = m == OutVecMode.ROT_ALIGNED_VEC3 
                 m_rot_output = m in ROT_VEC_MODES
@@ -498,6 +405,16 @@ class DataForJAV:
                 
                 all_gt_data[m] = gt_for_m
 
+            if not NO_LAGRANGE_MEM_SAVE:
+                prev_poses = [all_gt_data[OutVecMode.WORLD_VEC3]] + [
+                    self._worldvec_helper(
+                        i_p, use_translation=True, pad_missing_with_1st=True
+                    )
+                    for i_p in range(1, 7)
+                ]
+                all_gt_data[OutVecMode.LAGRANGE_POLY] = np.concatenate(
+                    prev_poses, axis=-1
+                )
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             # The actual saving of cached data would go here, I guess.
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -544,7 +461,6 @@ class DataForJAV:
             del all_gt_data
             
             full_gt /= self.pos_scale
-
         else:
             full_gt = all_gt_data[self.outVecMode]
             del all_gt_data
@@ -575,6 +491,11 @@ class DataForJAV:
             # self.ref_predictions[subset_kind] = \
             #     self._prev_ang_concat[subset_kind]
             self.ref_predictions = {k: np.ones((1, 1)) for k in DataSubsetKind}
+        elif self.outVecMode == OutVecMode.LAGRANGE_POLY:
+            self.ref_predictions = { # Quadratic acc coefficients
+                k: np.array([[0.0, 0.0, 0.0, 1.0, -3.0, 3.0][::-1]])
+                for k in DataSubsetKind
+            }
         elif self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
             if extra_cols is None:
                 raise Exception("Should have set extra_cols in this case!")
@@ -631,7 +552,9 @@ class DataForJAV:
         self.score_fn = poseLossJAV
         if self.outVecMode != OutVecMode.JAV_MULTIPLIERS:
             if self.outVecMode in ROT_VEC_MODES:
-                self.score_fn = pm.poseLossAngle 
+                self.score_fn = pm.poseLossAngle
+            elif self.outVecMode == OutVecMode.LAGRANGE_POLY:
+                self.score_fn = poseLossLagrange 
             else:
                 self.score_fn = poseLossVec3
 
@@ -757,7 +680,8 @@ class DataForJAV:
     def _worldvec_helper(self, shift_from_gt: int,
                          diff_order: int = 0, current_diff_order: int = 0,
                          scale: float = 0.0, use_translation: bool = False,
-                         vecs: typing.Optional[typing.List[typing.Dict[typing.Any, NDArray]]] = None):
+                         vecs: typing.Optional[typing.List[typing.Dict[typing.Any, NDArray]]] = None,
+                         *, pad_missing_with_1st: bool = False):
         start = 4 - diff_order - current_diff_order - shift_from_gt
         if use_translation:
             vecs = self._cache_help.translations_JAV
@@ -765,7 +689,7 @@ class DataForJAV:
             raise ValueError("No vectors specified!")
         concat = self._concat_per_id_data_by_dsk(
             vecs, front_trim=start, end_trim=shift_from_gt,
-            diff_order = diff_order
+            diff_order = diff_order, pad_missing_with_1st = pad_missing_with_1st
         )
         if use_translation and scale == 0.0:
             concat = typing.cast(
@@ -853,7 +777,7 @@ class DataForJAV:
         return scores
     
 bcotjav = DataForJAV(
-    dog, bcs_scaler, nonco_cols, JAV_order, chosen_mode,
+    dog, bcs_scaler, col_subset_mask, JAV_order, chosen_mode,
     save_data_for_conf=True, #skip=2
 )
 #%%
@@ -861,6 +785,39 @@ print("Reference scores for whole dataset (i.e., no train/test split).")
 print("Reference method:", bcotjav.ref_prediction_name)
 print("Reference scores:")
 bcotjav.getScoresSubset(DataSubsetKind.WHOLE, bcotjav.ref_predictions[DataSubsetKind.WHOLE], True)
+
+
+#%%
+# import tikzplotlib
+# import matplotlib.pyplot as plt
+# acc_ratios = np.linspace(0, 1, 101)
+# res = np.zeros((3, 101))
+# for ir, r in enumerate(acc_ratios):
+#     ratio_errs = bcotjav.getScoresSubset(
+#         DataSubsetKind.TEST,
+#         r * np.array([[1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
+#     )
+#     for i in range(3):
+#         res[i, ir] = ratio_errs[i]
+
+# # Source: https://stackoverflow.com/questions/75900239/attributeerror-occurs-with-tikzplotlib-when-legend-is-plotted
+# def tikzplotlib_fix_ncols(obj):
+#     """
+#     workaround for matplotlib 3.6 renamed legend's _ncol to _ncols, which breaks tikzplotlib
+#     """
+#     if hasattr(obj, "_ncols"):
+#         obj._ncol = obj._ncols
+#     for child in obj.get_children():
+#         tikzplotlib_fix_ncols(child)
+
+# start_ratio = 70
+# fig = plt.figure()
+# plt.plot(acc_ratios[start_ratio:], res[0, start_ratio:], label="skip 0")
+# plt.plot(acc_ratios[start_ratio:], res[1, start_ratio:], label="skip 1")
+# plt.plot(acc_ratios[start_ratio:], res[2, start_ratio:], label="skip 2")
+# plt.legend()
+# tikzplotlib_fix_ncols(fig)
+# tikzplotlib.save("mytikz.tex")
 
 #%%
 import pickle
@@ -874,7 +831,7 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 
 
 #%% Train the network.
-latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"))
+latest_models = {}
 if TRAIN_NEW_MODEL:
     val_param = None
     bcot_validation_ids = dog.subset_ids[DataSubsetKind.VALIDATION]
@@ -887,6 +844,7 @@ if TRAIN_NEW_MODEL:
     )
     latest_models[chosen_mode.name] = bcs_model
 else:
+    latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"), chosen_preset, USE_NOISE)
     bcs_model = latest_models[chosen_mode.name]
 #%% Evaluate network on test data.
 
@@ -895,8 +853,9 @@ bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
 
 #%% Saving model to disk.
 if TRAIN_NEW_MODEL:
-    model_name = "results/models/{}-{:%Y-%m-%d_%H-%M-%S}.keras".format(
-        chosen_mode.name, datetime.datetime.now()
+    noise_str = "--noised" if USE_NOISE else ""
+    model_name = "results/models/{}--{}{}--{:%Y-%m-%d_%H-%M-%S}.keras".format(
+        chosen_mode.name, chosen_preset.name, noise_str, datetime.datetime.now()
     )
     bcs_model.save(model_name)
 
@@ -942,7 +901,6 @@ np.savez_compressed(
 # print(bcs_test_scores)
 #%%
 import errorstats as es
-motion_data_key_subset = [dog.motion_data_keys[i] for i in nonco_col_nums]
 
 all_rotation_mats_T: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in dog.getAllIDs():
@@ -1096,6 +1054,7 @@ head_num = 10 # How many "best" to print.
 head_best = scramble_rank[:head_num]
 print("Most important feature inds:", head_best, sep='\n')
 
+nonco_featnames = [k.name for k in key_subset]
 print("Names:")
 for hb in head_best:
     print([nonco_featnames[i] for i in hb])
@@ -1160,8 +1119,8 @@ import matplotlib.pyplot as plt
 
 scramble_for_bars = scramble_scores - np.min(scramble_scores, axis=0)
 scramble_for_bars /= (np.mean(scramble_for_bars, axis=0) + np.std(scramble_for_bars, axis=0))
-num_features = len(nonco_col_nums)
-nonco_arange = np.arange(num_features)
+num_subset_cols = dog.col_subset_train.shape[1]
+nonco_arange = np.arange(num_subset_cols)
 for skip in range(4):
     plt.bar(
         nonco_arange + skip / 4, scramble_for_bars[:, skip],
@@ -1317,12 +1276,12 @@ cfc.getAll(tudl_loaders)
 #%%
 tudl_train, tudl_test = PoseLoaderTUDL.trainTestIDs()
 tdog = DataOrganizer.FromCalcs(
-    PoseLoaderTUDL,
+    PoseLoaderTUDL, USE_NOISE,
     cfc.all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
     tudl_train, tudl_test, dog.motion_data_keys
 )
 #
-tjav = DataForJAV(tdog, bcs_scaler, nonco_cols, JAV_order)
+tjav = DataForJAV(tdog, bcs_scaler, col_subset_mask, JAV_order)
 #%%
 
 tjavps = bcs_model.predict(tdog.col_subset_test)
@@ -1384,7 +1343,7 @@ def getUntrainedNNC():
     nodes_per_layer = 128
     vel_nn_activation = 'sigmoid'
 
-    input_layer = keras.Input(shape=(len(nonco_col_nums),))
+    input_layer = keras.Input(shape=(num_subset_cols,))
 
     def build_branch():
         x = keras.layers.Dense(nodes_per_layer, activation=vel_nn_activation)(input_layer)
@@ -1447,7 +1406,7 @@ def getUntrainedNNSplit(input_shape1, input_shape2, input_shape3):
     model.summary()
     return model
 
-lnccn = len(nonco_col_nums)
+lnccn = num_subset_cols
 split_nn = getUntrainedNNSplit(lnccn, lnccn - 1, lnccn - 2)
 split_nn.fit([dog.col_subset_test, dog.col_subset_test[:, :-1], dog.col_subset_test[:, :-2]], bcotjav.jav_test, epochs=33, batch_size=128, shuffle=True)
 

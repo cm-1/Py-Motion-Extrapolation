@@ -484,12 +484,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         self._jav_muls = _get_JAV_muls(step)
 
-        CIND = ALL_RELATIVE_VECTORS.index(MOTION_DATA.JERK_ERR_VEC3)
+        # CIND = ALL_RELATIVE_VECTORS.index(MOTION_DATA.JERK_ERR_VEC3)
         # We don't divide by crackle's mag because it's not used as a relative
         # axis.
-        self._non_crackles = tuple([
-            i for i in range(1, self._n_vec_kinds) if i != CIND
-        ])#, dtype=tf.int32)
+        # self._non_crackles = tuple([
+        #     i for i in range(1, self._n_vec_kinds) if i != CIND
+        # ])#, dtype=tf.int32)
         if self._n_vec_kinds != 8:
             raise Exception(
                 "Hardcoded 'loop' iterations and whatnot assume "
@@ -501,7 +501,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # For each i in _non_crackles: we add 1 tensor, plus 1 more if i < _n_other_vec_kinds
         self._non_vel_projs_size = sum(
             2 if i < self._n_other_vec_kinds else 1
-            for i in range(1, self._n_vec_kinds) if i != CIND
+            for i in range(1, self._n_vec_kinds)# if i != CIND
         )
 
     def get_config(self):
@@ -569,10 +569,10 @@ class PointsToInputsConstStep(keras.layers.Layer):
         all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
 
         all_prev_vels = all_pds.velocities[:-1]
-        prev_vel = all_prev_vels[-1]
-        prev_acc = all_pds.accelerations[-2]
-        prev_jerk = all_pds.jerks[-2]
-        prev_snap = all_pds.snaps[-2]
+        # prev_vel = all_prev_vels[-1]
+        # prev_acc = all_pds.accelerations[-2]
+        # prev_jerk = all_pds.jerks[-2]
+        # prev_snap = all_pds.snaps[-2]
         
         # Calculate velocities, speeds, and indices where speed is 0.
         vels = all_pds.velocities[-1]
@@ -584,31 +584,31 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
 
         prev_vel_mags = tf.norm(all_prev_vels, axis=-1)
-        # rev_prev_vel_mags = prev_vel_mags[..., ::-1]
-        # last_nonzero_vels = all_prev_vels[-1]
+        # # rev_prev_vel_mags = prev_vel_mags[..., ::-1]
+        # # last_nonzero_vels = all_prev_vels[-1]
         
-        # pm.handleCondsAtStart(
-        #     rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
-        #     arr_to_mod=last_nonzero_vels
-        # )
+        # # pm.handleCondsAtStart(
+        # #     rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
+        # #     arr_to_mod=last_nonzero_vels
+        # # )
         
-        # last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
-        prev_speed = tf.norm(prev_vel, axis=-1, keepdims=True)
-        prev_unit_vel = tf.math.divide_no_nan(prev_vel, prev_speed)
+        # # last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
+        # prev_speed = tf.norm(prev_vel, axis=-1, keepdims=True)
+        # prev_unit_vel = tf.math.divide_no_nan(prev_vel, prev_speed)
 
-        prev_ang_vel = all_rds.velocities[-2]
-        prev_ang_acc = all_rds.accelerations[-2]
-        prev_ang_jerk = all_rds.jerks[-2]
+        # prev_ang_vel = all_rds.velocities[-2]
+        # prev_ang_acc = all_rds.accelerations[-2]
+        # prev_ang_jerk = all_rds.jerks[-2]
 
         new_ang_vel = all_rds.velocities[-1]
         new_ang_acc = all_rds.accelerations[-1]
         new_ang_jerk = all_rds.jerks[-1]
 
-        prev_ortho_mags, prev_ortho_dirs = tfOrthonormalFramesFromUnitVec0s(
-            True, prev_unit_vel, prev_acc, self.zero_angle_thresh
-        )
+        # prev_ortho_mags, prev_ortho_dirs = tfOrthonormalFramesFromUnitVec0s(
+        #     True, prev_unit_vel, prev_acc, self.zero_angle_thresh
+        # )
 
-        a0_is_0 = tf.equal(prev_ortho_mags[1], 0.0)
+        # a0_is_0 = tf.equal(prev_ortho_mags[1], 0.0)
         
         # Only compute if any acceleration orthogonal components are zero
         def update_ortho_dirs_with_jerk(ortho_dirs, jerk_vals, condition_mask):
@@ -644,36 +644,36 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 j_orth_normalized
             )
         
-        prev_ortho_dirs = tf.cond(
-            tf.reduce_any(a0_is_0),
-            lambda: update_ortho_dirs_with_jerk(prev_ortho_dirs, prev_jerk, a0_is_0),
-            lambda: prev_ortho_dirs
-        )
+        # prev_ortho_dirs = tf.cond(
+        #     tf.reduce_any(a0_is_0),
+        #     lambda: update_ortho_dirs_with_jerk(prev_ortho_dirs, prev_jerk, a0_is_0),
+        #     lambda: prev_ortho_dirs
+        # )
 
-        # print("hyp pre:", prev_ortho_dirs)
+        # # print("hyp pre:", prev_ortho_dirs)
 
-        prev_relative_vecs = tf.stack(
-            (
-                prev_vel, prev_acc, prev_jerk, prev_snap,
-                prev_ang_vel, prev_ang_acc, prev_ang_jerk,
-                prev_ortho_dirs[..., 1, :], prev_ortho_dirs[..., 2, :]
-            ), axis=0
-        )
+        # prev_relative_vecs = tf.stack(
+        #     (
+        #         prev_vel, prev_acc, prev_jerk, prev_snap,
+        #         prev_ang_vel, prev_ang_acc, prev_ang_jerk,
+        #         prev_ortho_dirs[..., 1, :], prev_ortho_dirs[..., 2, :]
+        #     ), axis=0
+        # )
 
-        # Because the scales of the prev_ortho_dirs are just 1, we exclude these
-        # from the array, hence the "-2" instances below.
-        # num_scale_types = self._n_rel_axes_excl_ortho  # 7 relative axes (vel, acc, jerk, snap, ang_vel, ang_acc, ang_jerk)
+        # # Because the scales of the prev_ortho_dirs are just 1, we exclude these
+        # # from the array, hence the "-2" instances below.
+        # # num_scale_types = self._n_rel_axes_excl_ortho  # 7 relative axes (vel, acc, jerk, snap, ang_vel, ang_acc, ang_jerk)
 
-        # inner_prev_vecs_shape = tf.shape(prev_relative_vecs)[1:-1]
-        # n_ins = x0_through_5.shape[1]
-        # prev_scale_shape = (num_scale_types, n_ins)
+        # # inner_prev_vecs_shape = tf.shape(prev_relative_vecs)[1:-1]
+        # # n_ins = x0_through_5.shape[1]
+        # # prev_scale_shape = (num_scale_types, n_ins)
 
-        # Build prev_relative_scales using tensor_scatter_nd_update for graph compatibility
-        scale_0 = tf.reshape(prev_vel_mags[-1], [1, -1])
-        scale_1 = tf.reshape(tf.sqrt(prev_ortho_mags[0]**2 + prev_ortho_mags[1]**2), [1, -1])
-        scales_2_onwards = tf.norm(prev_relative_vecs[2:-2], axis=-1)  # Shape: (5, n_ins)
+        # # Build prev_relative_scales using tensor_scatter_nd_update for graph compatibility
+        # scale_0 = tf.reshape(prev_vel_mags[-1], [1, -1])
+        # scale_1 = tf.reshape(tf.sqrt(prev_ortho_mags[0]**2 + prev_ortho_mags[1]**2), [1, -1])
+        # scales_2_onwards = tf.norm(prev_relative_vecs[2:-2], axis=-1)  # Shape: (5, n_ins)
         
-        prev_relative_scales = tf.concat([scale_0, scale_1, scales_2_onwards], axis=0)
+        # prev_relative_scales = tf.concat([scale_0, scale_1, scales_2_onwards], axis=0)
 
         # Safely obtain unit velocities, 
         unit_vels = tf.math.divide_no_nan(vels, vel_mags)
@@ -694,13 +694,13 @@ class PointsToInputsConstStep(keras.layers.Layer):
             "Hardcoded value for self._n_vec_kinds no longer correct!"
         )
 
-        all_dots_with_prev = tf.einsum(
-            'aik,bik->abi', all_curr_vecs, prev_relative_vecs
-        )
+        # all_dots_with_prev = tf.einsum(
+        #     'aik,bik->abi', all_curr_vecs, prev_relative_vecs
+        # )
 
-        all_proj_with_prev = tf.math.divide_no_nan(
-            all_dots_with_prev[:, :-2], prev_relative_scales 
-        )
+        # all_proj_with_prev = tf.math.divide_no_nan(
+        #     all_dots_with_prev[:, :-2], prev_relative_scales 
+        # )
 
         
         (a_proj_v, a_ortho_v), curr_ortho_mats = tfOrthonormalFramesFromUnitVec0s(
@@ -735,6 +735,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
         other_mags = tf.norm(all_curr_vecs[2:], axis=-1)    # Shape: (6, n_ins)
         non_vel_mags = tf.concat([tf.transpose(acc_mag), other_mags], axis=0)  # Shape: (7, n_ins)
 
+        all_mags = tf.concat([tf.reshape(vel_mags, (1, n_ins)), non_vel_mags], axis=0)
+
         # Build tri_dots row by row using TensorArray for graph compatibility
         # tri_dots_rows = tf.TensorArray(
         #     dtype=tf.float32, size=self._n_other_vec_kinds - 1,
@@ -755,15 +757,26 @@ class PointsToInputsConstStep(keras.layers.Layer):
             # Conversion to TFLite converts einsum version of this into a
             # batched matmul in an incorrect way, so I need to "manually" do it
             # the correct way.
-            vecs_i = all_curr_vecs[i][..., tf.newaxis]
-            post_i = tf.transpose(all_curr_vecs[:i], [1, 0, 2])
-            muls = tf.matmul(post_i, vecs_i)
-            dots_i = tf.transpose(tf.reshape(muls, [-1, i]), [1, 0])
+            vecs_i = all_curr_vecs[i][..., tf.newaxis] # Shape: n_ins, 3, 1
+            post_i = tf.transpose(all_curr_vecs[:i], [1, 0, 2]) # shape: n_ins, i, 3
+            muls = tf.matmul(post_i, vecs_i) # shape: n_ins, i, 1
+            dots_i = tf.transpose(tf.reshape(muls, [-1, i]), [1, 0]) # shape: i, n_ins
             # dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
 
             # Pad with zeros for the rest of the row
             return tf.concat([
                 dots_i,  # Shape: (i, n_ins)
+                tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
+            ], axis=0)
+
+        def loop_bod_div(i):
+            v = all_mags[i] # shape: n_ins
+            w = all_mags[:i] # shape: i, n_ins
+            muls_i = v * w # shape i, n_ins
+
+            # Pad with zeros for the rest of the row
+            return tf.concat([
+                muls_i,  # Shape: (i, n_ins)
                 tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
             ], axis=0)
         
@@ -774,6 +787,15 @@ class PointsToInputsConstStep(keras.layers.Layer):
             loop_bod(6), loop_bod(7)
         ), axis=0) 
 
+        row_0_nm_val = tf.reshape(vel_mags, [-1]) * non_vel_mags[0]  # Shape: (n_ins,)
+        row_0_norm_mul = tf.concat([
+            row_0_nm_val[tf.newaxis, :],  # Element [0,0]
+            tf.zeros((self._n_other_vec_kinds - 1, n_ins), dtype=tf.float32)  # Rest are zeros
+        ], axis=0)
+        tri_norm_muls = tf.stack((
+            row_0_norm_mul, loop_bod_div(2), loop_bod_div(3), loop_bod_div(4),
+            loop_bod_div(5), loop_bod_div(6), loop_bod_div(7)
+        ), axis=0) 
 
 
         # For the projections, we don't worry about "duplicates" since there are
@@ -798,8 +820,9 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # )
         
         def nvp_loop_bod(i_ind):
-            i = self._non_crackles[i_ind]
-            prev_i = i - 1
+            # i = self._non_crackles[i_ind]
+            i = i_ind + 1
+            prev_i = i_ind
             mag_i = non_vel_mags[prev_i]
             proj_val = tf.math.divide_no_nan(tri_dots[prev_i, :i], mag_i)
             # Flatten to 1D: shape (i, n_ins) -> (i * n_ins,)
@@ -821,8 +844,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
             nvp_loop_bod(2), #non_vel_projs2.read(2),
             nvp_loop_bod(3), #non_vel_projs2.read(3),
             nvp_loop_bod(4), #non_vel_projs2.read(4),
-            nvp_loop_bod(5) #, non_vel_projs2.read(5),
-            # nvp_loop_bod(6) #, non_vel_projs2.read(0),
+            nvp_loop_bod(5), #, non_vel_projs2.read(5),
+            nvp_loop_bod(6) #, non_vel_projs2.read(0),
         ), axis=0)
         # Concatenate all flattened pieces into one 1D tensor, then reshape to (total_elements, n_ins)
         # non_vel_projs_flat = non_vel_projs.concat()
@@ -834,19 +857,38 @@ class PointsToInputsConstStep(keras.layers.Layer):
         )
         remaining_proj_with_curr_rel = tf.einsum(
             'ijk,jbk->ibj', all_curr_vecs[2:], curr_ortho_mats[:, 1:]
-        )
+        ) # shape: 6, ?, n_ins
+
+        def unitDotToAng(tensorVal):
+            return tf.acos(tf.clip_by_value(tensorVal, -1.0, 1.0))
 
         tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
+        tri_nms_lower = tf.gather_nd(tri_norm_muls, self._tril_indices)
+        tri_angs_lower = unitDotToAng(
+            tf.math.divide_no_nan(tri_dots_lower, tri_nms_lower)
+        )
+
+        a_ang_with_curr_rel = (
+            unitDotToAng(tf.math.divide_no_nan(a_ortho_v, non_vel_mags[0])),
+        )
+
+        remaining_ang_with_curr_rel = unitDotToAng(
+            tf.math.divide_no_nan(
+                remaining_proj_with_curr_rel, tf.reshape(non_vel_mags[1:], (self._n_vec_kinds - 2, 1, n_ins))
+            )
+        )
         ret = tf.transpose(tf.concat(
             (
                 tf.cast(tf.fill((1, n_ins), self.step), tf.float32),
-                tf.reshape(all_dots_with_prev, [-1, n_ins]),
-                tf.reshape(all_proj_with_prev, [-1, n_ins]),
-                tf.reshape(vel_mags, (1, n_ins)), non_vel_mags, tri_dots_lower,
+                # tf.reshape(all_dots_with_prev, [-1, n_ins]),
+                # tf.reshape(all_proj_with_prev, [-1, n_ins]),
+                tf.reshape(vel_mags, (1, n_ins)), non_vel_mags, tri_angs_lower,
                 acc_vel_proj, other_projs_on_vel, 
                 non_vel_projs_stacked,
                 a_proj_with_curr_rel,
-                tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins])
+                tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins]),
+                a_ang_with_curr_rel,
+                tf.reshape(remaining_ang_with_curr_rel, [-1, n_ins])
             ), axis=0
         ))
         # missing_zeros = tf.zeros((n_ins, 227))

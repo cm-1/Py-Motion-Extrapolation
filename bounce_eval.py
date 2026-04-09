@@ -1,5 +1,4 @@
 import numpy as np
-from bayes_opt import BayesianOptimization
 
 from gtCommon import PoseLoaderBCOT
 import gtCommon as gtc
@@ -8,11 +7,8 @@ import posemath as pm
 import matplotlib.pyplot as plt
 
 
-combos = []
-for b in range(len(gtc.BCOT_BODY_NAMES)):
-    for s in range(len(gtc.BCOT_SEQ_NAMES)):
-        if PoseLoaderBCOT.isBodySeqPairValid(b, s):
-            combos.append((b,s))
+_, combos_with_mk = PoseLoaderBCOT.trainTestByBody(0.2)
+combos = [c[:2] for c in combos_with_mk]
 
 combo_translations = dict()
 for combo in combos:
@@ -22,9 +18,11 @@ for combo in combos:
 #%%
 def getBounceScore(thresh: float, skip_amt: int):
     step = skip_amt + 1
-    all_err_means = []
-    all_vel_err_means = []
-    all_opt_vel_err_means = []
+    bounce_err_sum = 0.0
+    vel_err_sum = 0.0
+    quad_err_sum = 0.0
+    optimal_err_sum = 0.0
+    errs_count = 0
     for combo in combos:
         translations = combo_translations[combo][::step]
         vels_deg1 = np.diff(translations[:-1], 1, axis=0)
@@ -33,6 +31,8 @@ def getBounceScore(thresh: float, skip_amt: int):
         t_quad_preds[0] = translations[0]
         t_quad_preds[1] = t_vel_preds[0]
         t_quad_preds[2:] = 3 * vels_deg1[1:] + translations[:-3]
+
+        num_errs_to_keep = len(translations) - 4 # Same as "CUT_FOR_JERK" in motionExperiments.py
         
         t_poly_preds = t_quad_preds.copy()
         unit_vels = pm.safelyNormalizeArray(vels_deg1)
@@ -41,12 +41,10 @@ def getBounceScore(thresh: float, skip_amt: int):
         t_poly_preds[2:][vel_bounce] = t_vel_preds[1:][vel_bounce]
         t_errs = translations[1:] - t_poly_preds
         t_err_norms = np.linalg.norm(t_errs, axis = -1)
-        mean_t_err_norm = t_err_norms.mean()
-        all_err_means.append(mean_t_err_norm)
+        bounce_err_sum += t_err_norms[-num_errs_to_keep:].sum()
         just_vel_err_norms = np.linalg.norm(
             (translations[2:] - t_vel_preds), axis = -1
         )
-        all_vel_err_means.append(just_vel_err_norms.mean())
 
         t_quad_err_norms = np.linalg.norm(
             translations[1:] - t_quad_preds, axis = -1
@@ -56,20 +54,28 @@ def getBounceScore(thresh: float, skip_amt: int):
         t_opt_vel_preds[1:][vel_better_inds] = t_vel_preds[vel_better_inds]
         t_opt_vel_err_norms = np.linalg.norm(
             translations[1:] - t_opt_vel_preds, axis = -1
-        ) 
-        all_opt_vel_err_means.append(t_opt_vel_err_norms.mean())
+        )
+        vel_err_sum += just_vel_err_norms[-num_errs_to_keep:].sum()
+        quad_err_sum += t_quad_err_norms[-num_errs_to_keep:].sum()
+        optimal_err_sum += t_opt_vel_err_norms[-num_errs_to_keep:].sum()
+        errs_count += num_errs_to_keep
 
     # Negating so that higher values are better.
-    return (-np.mean(all_err_means), -np.mean(all_vel_err_means), -np.mean(all_opt_vel_err_means))
+    return -np.array([
+        vel_err_sum, quad_err_sum, bounce_err_sum, optimal_err_sum
+    ]) / errs_count
 
 #%%
 
 PLOTTING_SKIP = 2
 thresholds = np.linspace(-1, 1, 100)
-scores = np.array([getBounceScore(th, PLOTTING_SKIP) for th in thresholds])
+scores = np.array([getBounceScore(th, PLOTTING_SKIP) for th in thresholds])[::-1]
 
-plt.plot(thresholds, scores[:, 0], label="using bounce")
-plt.plot(thresholds, scores[:, 1], label="just vel")
-plt.plot(thresholds, scores[:, 2], label="opt vel")
+angs = (1.0 - thresholds[::-1]) * np.pi/2
+
+plt.plot(angs, -scores[:, 2], label="using bounce")
+plt.plot(angs[[0, -1]], -scores[:, 1][[0, -1]], label="just acc")
+plt.plot(angs[[0, -1]], -scores[:, 3][[0, -1]], label="opt vel")
 plt.legend()
 plt.show()
+#%%

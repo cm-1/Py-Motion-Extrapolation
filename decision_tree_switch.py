@@ -19,9 +19,11 @@ import gtCommon as gtc
 
 # MOTION_MODEL is an enum that represents some physical non-ML motion prediction
 # schemes like constant-velocity, constant-acceleration, etc.
-from motiontools.key_and_vec_specs import MOTION_MODEL, MOTION_DATA
+from motiontools.key_and_vec_specs import MOTION_MODEL, SpecifiedMotionData
 
-from motiontools.dataorg import DataOrganizer, SkipSubsetKind, UnitAwareScaler
+from motiontools.dataorg import (
+    DataOrganizer, SkipSubsetKind, UnitAwareScaler, SUBSET_PRESET
+)
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -31,8 +33,9 @@ from datatools.data_splitting import DataSubsetKind
 TRAIN_NEW = False
 
 USE_WEIGHTED_CRIT = True
+USE_NOISE = False
 
-dog = DataOrganizer.load(PoseLoaderBCOT) # Load our data.
+dog = DataOrganizer.load(PoseLoaderBCOT, USE_NOISE) # Load our data.
 
 bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 
@@ -235,13 +238,16 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
     class_errs_shape[0], 1, class_errs_shape[1]
 ))
 mc.set_y_errs(y_errs_reshape)
-nonco_cols = np.asarray([
-    (not isinstance(k, MOTION_DATA)) or k == MOTION_DATA.TIMESTEP
-    for k in dog.motion_data_keys
-])
-nonco_col_ks = [k for i, k in enumerate(dog.motion_data_keys) if nonco_cols[i]]
+
+nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.FAST_TO_EXPLAIN)
+
+non_smd_key_names = [
+    k.name for k in nonco_col_ks if not isinstance(k, SpecifiedMotionData)
+]
+print("\n".join(non_smd_key_names))
 
 bcs_scaler = UnitAwareScaler(nonco_col_ks)
+bcs_scaler.fakeFit()
 dog.setPickAndTransform(nonco_cols, bcs_scaler)
 
 #%% Training decision tree at max depth.
@@ -361,9 +367,9 @@ plt.show()
 # Again, we'll replace old code with a trimming of our main tree.
 #         mclf = sk_tree.DecisionTreeClassifier(max_depth=4, criterion=mc)
 #         mclf = mclf.fit(concat_train_data, concat_train_labels)
-mclf = trim_to_depth(big_tree, 4)
+mclf = trim_to_depth(big_tree, 3)
 
-mclfps = mclf.predict(dog.concat_test_data).copy()
+mclfps = mclf.predict(dog.col_subset_test).copy()
 
 #%%
 
@@ -383,7 +389,7 @@ from sklearn.tree import export_graphviz
 import pathlib
 
 tree_path = pathlib.Path(__file__).parent.resolve() / "results" / "tree.dot"
-feature_names = [e.name for e in dog.motion_data_keys]
+feature_names = [e.name for e in nonco_col_ks]
 class_names = [str(i) for i in range(1, len(MOTION_MODEL) + 1)]
 
 export_graphviz(

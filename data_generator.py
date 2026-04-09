@@ -15,6 +15,8 @@ from motiontools.dataorg import DataOrganizer
 # Function for getting JAV data
 import motiontools.shared_constants
 
+USE_NOISE = True
+
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary
 STRAIGHT_LINE_ANG_THRESH_DEG = 30.0 # 30deg as arbitrary max "straight" angle.
@@ -36,15 +38,15 @@ print("Calculating input data. This may take a minute or two.")
 nametup_ids, bcot_loaders = PoseLoaderBCOT.getAllMinimalIDsAndLoaders(True)
 
 cfc = CalcsForVideo(
-    obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
+    USE_NOISE, obj_static_thresh_mm=OBJ_IS_STATIC_THRESH_MM, 
     straight_angle_thresh_deg=STRAIGHT_LINE_ANG_THRESH_DEG,
     err_na_val=motiontools.shared_constants.ERR_NA_VAL,
     min_jerk_opt_iter_lim=MAX_MIN_JERK_OPT_ITERS,
     split_min_jerk_opt_iter_lim = MAX_SPLIT_MIN_JERK_OPT_ITERS,
-    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH
-    # exclude_axis_angs=False, exclude_bidir=False, exclude_circ_data=False,
-    # exclude_onehots=False, exclude_past_muls=False, exclude_timescaled=False,
-    # exclude_vel_deg2=False
+    err_radius_ratio_thresh=CIRC_ERR_RADIUS_RATIO_THRESH,
+    exclude_axis_angs=False, exclude_axis_dots=True, exclude_bidir=True,
+    exclude_circ_data=False, exclude_onehots=False, exclude_past_muls=False,
+    exclude_timescaled=False, exclude_vel_deg2=True
 )
 cfc.getAll(bcot_loaders)
 
@@ -68,7 +70,7 @@ train_ids_c2 = [c[:2] for c in train_ids]
 test_ids_c2 = [c[:2] for c in test_ids] # Get the unique part of each.
 
 dog = DataOrganizer.FromCalcs(
-    PoseLoaderBCOT, all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
+    PoseLoaderBCOT, USE_NOISE, all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
     train_ids_c2, test_ids_c2
 )
 
