@@ -30,7 +30,7 @@ from datatools.data_splitting import DataSubsetKind
 
 # End of imports
 # ==============================================================================
-TRAIN_NEW = False
+TRAIN_NEW = True
 
 USE_WEIGHTED_CRIT = True
 USE_NOISE = False
@@ -102,11 +102,11 @@ import datetime
 
 
 
-dog.concat_train_data = dog.concat_train_data.astype(np.float32)
-dog.concat_test_data = dog.concat_train_data.astype(np.float32)
+dog.col_subset_train = dog.col_subset_train.astype(np.float32)
+dog.col_subset_test = dog.col_subset_test.astype(np.float32)
 #%%
 # Settings that I'll just edit manually on each run for now.
-auto_train_seconds = 3600*24
+auto_train_seconds = 3600*5
 really_max_mem = False
 
 import psutil
@@ -129,6 +129,10 @@ if not really_max_mem:
     # Cap to 8GB for now. Part of motivation: running on multi-user computer.
     # Another possibility: I'm concerned that more RAM leads to overfitting.
     avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
+
+# TEMPORARY HARD-CODED OVERRIDE!
+avail_mem_safe_mb = 1750
+
 
 # Ensure local tmp folder does not already exist, or else auto-sklearn will
 # throw an exception.
@@ -163,7 +167,7 @@ print("Auto-sklearn fit started at {} and will last {} seconds!".format(
 ))
 
 if TRAIN_NEW:
-    automl.fit(dog.concat_train_data, dog.concat_train_labels)
+    automl.fit(dog.col_subset_train, dog.concat_train_labels)
 
 print("Done auto-sklearn fit!")
 
@@ -188,9 +192,9 @@ else:
     pickle.dump(automl, open(auto_fname, "wb"))
 
 
-asklabs = automl.predict(dog.concat_test_data)
+asklabs = automl.predict(dog.col_subset_test)
 auto_test_score = dog.getClassScoresTest(asklabs)
-asklabs = automl.predict(dog.concat_train_data)
+asklabs = automl.predict(dog.col_subset_train)
 auto_train_score = dog.getClassScoresTrain(asklabs)
 print("Train data score:")
 print(auto_train_score)
@@ -378,10 +382,10 @@ print("Error for my decision tree=", mc_errs)
 print("Done!", mclfps)
 
 def getTreeDataTrainScore(tree, data_organizer: DataOrganizer):
-    p = tree.predict(data_organizer.concat_train_data)
+    p = tree.predict(data_organizer.col_subset_train)
     return data_organizer.getClassScoresTrain(p)
 def getTreeDataTestScore(tree, data_organizer: DataOrganizer):
-    p = tree.predict(data_organizer.concat_test_data)
+    p = tree.predict(data_organizer.col_subset_test)
     return data_organizer.getClassScoresTest(p)
 
 #%%
