@@ -486,8 +486,8 @@ class CalcsForVideo:
         aa_rotations = pose_loader.getRotationsGTNP()
         all_rotation_mats = None
         if self.has_noise_added:
-            all_translations = pose_loader.getNoisyTranslation(1.0)
-            aa_rotations = pose_loader.getNoisyRotation(3.5)
+            all_translations = pose_loader.getNoisyTranslation(4.5)
+            aa_rotations = pose_loader.getNoisyRotation(3.0)
         else:
             all_rotation_mats = pose_loader.getRotationMatsGTNP()
 
@@ -1386,7 +1386,7 @@ def dataForCombosJAV(pose_loaders: PoseLoaderList, vec_order: OrderForJAV,
         curr_translations = calc_obj.getTranslationsGTNP()
         noisy_translations = None
         if apply_noise:
-            noisy_translations = calc_obj.getNoisyTranslation(1.0)
+            noisy_translations = calc_obj.getNoisyTranslation(4.5)
 
         # Only applicable if we want to return associated rotations.
         curr_rotation_mats: typing.Optional[NDArray] = None

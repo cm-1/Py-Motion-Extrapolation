@@ -828,7 +828,7 @@ for i, combo in enumerate(combos):
     translations = translations_gt #+ np.random.uniform(-4, 4, translations_gt.shape)
     rotations_quats = rotations_gt_quats # pm.applyRandomQuatNoise(...)
     if USE_NOISE:
-        translations = calculator.getNoisyTranslation(1.0)[::(skipAmount + 1)]
+        translations = calculator.getNoisyTranslation(4.5)[::(skipAmount + 1)]
 
 
     rotations = rotations_aa_gt # TODO: Apply quat error to these.

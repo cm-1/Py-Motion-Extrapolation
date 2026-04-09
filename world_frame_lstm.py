@@ -73,6 +73,7 @@ lstm_skip = DATASET_SKIP_FRAMES # "Renaming" var.
 train_translations_in, train_translations_out = rnnDataWindows(
     all_translations, train_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
+train_translations_out = train_translations_out - train_translations_in[:, -1]
 
 #%%
 ################################################################################
@@ -116,6 +117,7 @@ lstm_hist = lstm_model.fit(
 test_translations_in, test_translations_out = rnnDataWindows(
     all_translations, test_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
+test_translations_out = test_translations_out - test_translations_in[:, -1]
 
 lstm_test_pred = lstm_model.predict(test_translations_in)
 
@@ -140,8 +142,9 @@ print("Above score is for skip{} data.".format(lstm_skip))
 # To show a weakness of trying to use an LSTM to predict coordinates in 
 # "world space", we will imagine all input coordinates were shifted by a 
 # constant vec3 and see that accuracy degrades.
-shift_in = 1.0 - test_translations_in #+ 0.015 * np.arange(1,4)
-shift_out = 1.0 - test_translations_out #+ 0.015 * np.arange(1,4)
+shift_in = 0.1 + test_translations_in #+ 0.015 * np.arange(1,4)
+shift_out = test_translations_out #+ 0.015 * np.arange(1,4)
+shift_constvel = 1 * shift_in[:, -1, :] - shift_in[:, -2, :]
 shift_pred = lstm_model.predict(shift_in)
 
 scaled_shift_pred = translation_scaler.inverse_transform(shift_pred)
