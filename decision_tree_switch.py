@@ -94,6 +94,9 @@ print("Classification MAE limit:", error_lim)
 # A tree depth of 8 is already way beyond "human-readable", and I think the
 # graphs don't show miraculous improvements past 8, so 8 seems like a good max.
 max_depth = 8
+
+nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.FAST_TO_EXPLAIN)
+
 #%%
 import autosklearn.classification
 import datetime
@@ -243,7 +246,6 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
 ))
 mc.set_y_errs(y_errs_reshape)
 
-nonco_cols, nonco_col_ks = dog.maskAndKeysForSubsetPreset(SUBSET_PRESET.FAST_TO_EXPLAIN)
 
 non_smd_key_names = [
     k.name for k in nonco_col_ks if not isinstance(k, SpecifiedMotionData)
