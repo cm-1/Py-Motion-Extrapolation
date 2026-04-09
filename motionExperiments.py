@@ -25,7 +25,7 @@ TRANSLATION_THRESH = None #20.0#50.0
 
 ROTATION_THRESH_RAD = np.deg2rad(2.0)#5.0)
 
-skipAmount = 0
+skipAmount = 2
 WEIGHT_SCORES_BY_LEN = True
 CUT_FOR_JERK = True
 
@@ -278,7 +278,7 @@ class ConsolidatedResults:
         diffs = values[1:] - full_predictions
         diffStart = 0
         if CUT_FOR_JERK:
-            diffStart = 3
+            diffStart = 1 #3
         return diffs[diffStart:]
     
     def updateGroundTruth(self, translations, axisangles, quats, angvels,

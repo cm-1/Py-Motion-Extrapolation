@@ -256,7 +256,6 @@ y_errs_reshape = dog.concat_train_class_errs.reshape((
 mc.set_y_errs(y_errs_reshape)
 
 
-
 #%% Training decision tree at max depth.
 # ---
 # We'll train a tree at max depth and then trim it to smaller depths to evaluate

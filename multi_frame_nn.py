@@ -611,9 +611,9 @@ class DataForJAV:
         rs = self.rot_scale
         _ts = self._cache_help.translations_JAV
         coords = self._worldvec_helper(1, use_translation=True)
-        coords_tm1 = self._worldvec_helper(2, use_translation=True)
-        coords_tm2 = self._worldvec_helper(3, use_translation=True)
-        coords_tm3 = self._worldvec_helper(4, use_translation=True)
+        # coords_tm1 = self._worldvec_helper(2, use_translation=True)
+        # coords_tm2 = self._worldvec_helper(3, use_translation=True)
+        # coords_tm3 = self._worldvec_helper(4, use_translation=True)
         vels = self._worldvec_helper(1, 1, scale=scs, vecs = _ts)
         accs = self._worldvec_helper(1, 2, scale=scs, vecs = _ts)
         jerks = self._worldvec_helper(1, 3, scale=scs, vecs = _ts)
@@ -633,7 +633,7 @@ class DataForJAV:
         w2ls_concat: NDArray = self._concat_per_id_data_by_dsk(
             self._cache_help.w2ls_JAV
         )
-        other_coords = (coords_tm1, coords_tm2, coords_tm3)
+        other_coords = tuple([]) #(coords_tm1, coords_tm2, coords_tm3)
         derivs = (vels, accs, jerks, rot_vels, rot_accs, rot_jerks)
         aas_tup = (aas, )
         other_vecs = derivs + aas_tup
@@ -847,7 +847,7 @@ else:
     latest_models = loadLatestModels((chosen_mode.name, "HOT3D_JM"), chosen_preset, USE_NOISE)
     bcs_model = latest_models[chosen_mode.name]
 #%% Evaluate network on test data.
-
+print("Results for mode:", chosen_mode.name)
 bcs_pred = bcs_model.predict(bcotjav.in_test, batch_size = 1024)
 bcotjav.getScoresTest(bcs_pred) #scaledAAs(bcotjav.in_test[:, -30:-27]))
 
