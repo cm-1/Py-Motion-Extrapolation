@@ -118,7 +118,7 @@ dog.col_subset_train = dog.col_subset_train.astype(np.float32)
 dog.col_subset_test = dog.col_subset_test.astype(np.float32)
 #%%
 # Settings that I'll just edit manually on each run for now.
-auto_train_seconds = 3600*5
+auto_train_seconds = 3600*3
 really_max_mem = False
 
 import psutil
@@ -143,7 +143,7 @@ if not really_max_mem:
     avail_mem_safe_mb = min(avail_mem_safe_mb, 8 * 1024)
 
 # TEMPORARY HARD-CODED OVERRIDE!
-avail_mem_safe_mb = 1750
+avail_mem_safe_mb = int(6.5*1024)
 
 
 # Ensure local tmp folder does not already exist, or else auto-sklearn will
