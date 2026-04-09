@@ -5,7 +5,8 @@
 # data for the selected STEP value.
 from motiontools.posefeatures import CalcsForVideo
 from motiontools.dataorg import DataOrganizer
-cfc = CalcsForVideo()
+HAS_NOISE_ADDED = True
+cfc = CalcsForVideo(HAS_NOISE_ADDED)
 single_loader = PoseLoaderBCOT(*(bcot_id_split[-1][-1]))
 cfc.getAll([single_loader], 1)
 
