@@ -223,6 +223,7 @@ class PoseLoader(ABC):
             self._translationsCalcNP = calcMatData.translations
             self._rotationMatsCalcNP = calcMatData.mat_rotations
             self._rotationsCalcNP = calcMatData.aa_rotations
+        self._dataLoaded = True
 
         # This was a test for "bad" flips in the axis angle creation from
         # matrix arrays. I say "bad" flips because "small" flips from, say,
@@ -254,7 +255,6 @@ class PoseLoader(ABC):
         #             if wj_unexplained:
         #                 unexplained_jumps.append(wj)
         #         if len(unexplained_jumps) > 0:
-            self._dataLoaded = True
         
 
     # Returns (rotation mat data, translation data) tuple, where each element is
@@ -512,7 +512,7 @@ class SyntheticPoseLoader(PoseLoader):
 
         if self.helix:
             rotations, translations = self.getHelixRotationMatsAndPositions(
-                self.helix
+                self.const_rot_accel
             )
         elif self.const_rot_accel:
             rotations = self.getConstAngAccelMats()
