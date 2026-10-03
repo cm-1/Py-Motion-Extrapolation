@@ -936,7 +936,7 @@ for i, combo in enumerate(combos):
     # is used to decide whether to "accept" that the motion is in fact circular.
     # Keep the existence of these default values in mind!
     cma = pex.CircularMotionAnalysis(
-        translations, translation_diffs, t_quadratic_preds
+        translations, translation_diffs, backup_preds=t_quadratic_preds
     )
     t_c_vel_deg1_preds = cma.vel_deg1_preds_3D
     t_c_vel_deg2_preds = cma.vel_deg2_preds_3D
@@ -987,19 +987,20 @@ for i, combo in enumerate(combos):
         cma.disp_angles_vel_deg1, cma.disp_angles_vel_deg2, cma.disp_angles_acc
     )
     for _disp_angles in cma_disp_angles:
-        circle_rot_quats = np.empty(
-            cma.circle_plane_info.normals.shape[:-1] + (4,)
-        )
+        _circ_normals = cma.circle_plane_info.normals
+        circle_rot_quats = np.empty(_circ_normals.shape[:-1] + (4,))
         _half_c_pred_angles = _disp_angles / 2.0
         circle_rot_quats[:, 0] = np.cos(_half_c_pred_angles)
         circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
-            np.sin(_half_c_pred_angles), cma.circle_plane_info.normals
+            np.sin(_half_c_pred_angles), _circ_normals
         )
         _r_c_arm_preds = pm.multiplyQuatLists(circle_rot_quats, rotations_quats[2:-1])
         # _r_c_arm_preds = getArmRotPreds(circle_rot_quats)
         _r_c_arm_preds[cma.invalid_circ_indices] = \
             r_vel_preds[1:][cma.invalid_circ_indices]
         r_c_arm_preds_d1d2a.append(_r_c_arm_preds)
+
+
     # unit_vel_test = pm.rotateVecsByQuats(min_vel_rot_qs, unit_vels[:-1])
     # if np.max(np.abs(unit_vel_test - unit_vels[1:])) > 0.0001:
     #     raise Exception("Made a mistake!")

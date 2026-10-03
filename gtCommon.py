@@ -601,6 +601,7 @@ class SyntheticPoseLoader(PoseLoader):
     
     def getHelixRotationMatsAndPositions(self, useAccel: bool):
         rot_rate = self._randFloat(np.pi / 18)
+        loc_rot_rate = self._randFloat(np.pi / 18)
         radius = self._randFloat(32)
         accel = 0.0
         if useAccel:
@@ -612,8 +613,16 @@ class SyntheticPoseLoader(PoseLoader):
             np.arange(self.num_frames), np.array([0.0, 0.0, 1.0]),
             rot_rate, accel
         )
-        
+
         thetas = thetas.flatten()
+
+        loc_ax = np.random.uniform(-1.0, 1.0, 3)
+        loc_ax /= np.linalg.norm(loc_ax)
+        loc_rot_mats, _ = self._constAngAccelRotMats(
+            np.arange(self.num_frames), loc_ax, loc_rot_rate, 0.0
+        )
+
+        rot_mats = pm.einsumMatMatMul(rot_mats, loc_rot_mats)
 
         c = np.cos(thetas)
         s = np.sin(thetas)
