@@ -598,9 +598,42 @@ class SyntheticPoseLoader(PoseLoader):
         )
 
         return self._applyRandRotToAll(delta_mats)[1]
-            
-
+    
     def getHelixRotationMatsAndPositions(self, useAccel: bool):
+        rot_rate = self._randFloat(np.pi / 18)
+        radius = self._randFloat(32)
+        accel = 0.0
+        if useAccel:
+            # Ensure Acceleration doesn't make angles ambiguous
+            accel = self._randFloat(
+                (np.pi * 0.5 - rot_rate) / (self.num_frames ** 2)
+            )
+        rot_mats, thetas = self._constAngAccelRotMats(
+            np.arange(self.num_frames), np.array([0.0, 0.0, 1.0]),
+            rot_rate, accel
+        )
+        
+        thetas = thetas.flatten()
+
+        c = np.cos(thetas)
+        s = np.sin(thetas)
+        
+        xs = radius * c
+        ys = radius * s
+        zs = np.full_like(xs, self._randFloat(10))
+        
+        centred_spiral = np.stack((xs, ys, zs), axis=-1)
+
+        spiral_shift = np.random.uniform(-50, 50, 3)
+        vertical_spiral = centred_spiral + spiral_shift
+
+        spiral_tilt, final_rot_mats = self._applyRandRotToAll(rot_mats)
+        final_translations = vertical_spiral @ spiral_tilt.transpose()
+
+        return (final_rot_mats, final_translations)
+        
+
+    def _oldgetHelixRotationMatsAndPositions(self, useAccel: bool):
         retVal: typing.Tuple[NDArray, NDArray]
         if useAccel:
             retVal = self._spiralHelixHelper(self._spiralHelixWithAccXY)

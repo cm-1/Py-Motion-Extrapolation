@@ -633,9 +633,10 @@ class ConsolidatedResults:
         # Filter out nan values, because the easiest temporary way to skip the 
         # "duplicate" 2nd camera sequences was to leave their values as nan 
         # rather than work with skipped indices.
-        ordered_score_means = [
-            ms[np.invert(np.isnan(ms))] for ms in ordered_score_means
-        ]
+        if mean_ax is not None:
+            ordered_score_means = [
+                ms[np.invert(np.isnan(ms))] for ms in ordered_score_means
+            ]
 
         # We will exclude columns for up to two conditions:
         #   1. The params explicitly say to exclude them.
@@ -832,7 +833,7 @@ maxTimestamps = 0
 maxTimestampsWhenSkipped = 0
 max_angle = 0
 for i, combo in enumerate(combos):
-    calculator = PoseLoaderBCOT(combo[0], combo[1])
+    calculator = PoseLoaderBCOT(combo[0], combo[1]) # SyntheticPoseLoader(35, True, True) #
 
     translations_gt = calculator.getTranslationsGTNP()[::(skipAmount + 1)].astype(np.float32)
     rotations_aa_gt = calculator.getRotationsGTNP()[::(skipAmount + 1)]
