@@ -982,7 +982,7 @@ for i, combo in enumerate(combos):
         return r_arm_preds
 
     # r_v_arm_preds = getArmRotPreds(min_vel_rot_qs)
-    r_c_arm_preds_d1d2a = []
+    r_c_arm_disp_quats = []
     cma_disp_angles = (
         cma.disp_angles_vel_deg1, cma.disp_angles_vel_deg2, cma.disp_angles_acc
     )
@@ -994,7 +994,28 @@ for i, combo in enumerate(combos):
         circle_rot_quats[:, 1:] = pm.scalarsVecsMul(
             np.sin(_half_c_pred_angles), _circ_normals
         )
-        _r_c_arm_preds = pm.multiplyQuatLists(circle_rot_quats, rotations_quats[2:-1])
+        r_c_arm_disp_quats.append(circle_rot_quats)
+
+    '''
+    Math scratch notes:
+        qs_k = circ_k x circ^K-1 x local^k
+            = circ_k x qs_k-1 x local
+        local = (cirk_k x qs_k-1)^-1 x qs_k
+
+        qs_k+1 = circ_k+1 x qs_k x local
+    '''
+    prev_circ_quats = r_c_arm_disp_quats[0]
+    non_local_arm_prev = pm.multiplyQuatLists(
+        prev_circ_quats, rotations_quats[1:-2]
+    )
+    non_local_arm_prev_inv = pm.conjugateQuats(non_local_arm_prev)
+    local_arm = pm.multiplyQuatLists(non_local_arm_prev_inv, rotations_quats[2:-1])
+    prev_with_local_arm = pm.multiplyQuatLists(rotations_quats[2:-1], local_arm)
+    
+    r_c_arm_preds_d1d2a = []
+    for circle_rot_quats in r_c_arm_disp_quats:
+
+        _r_c_arm_preds = pm.multiplyQuatLists(circle_rot_quats, prev_with_local_arm)
         # _r_c_arm_preds = getArmRotPreds(circle_rot_quats)
         _r_c_arm_preds[cma.invalid_circ_indices] = \
             r_vel_preds[1:][cma.invalid_circ_indices]
