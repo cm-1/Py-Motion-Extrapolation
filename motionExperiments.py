@@ -100,8 +100,9 @@ def numericalIdeas(angles, fixed_axes, angle_diffs, bcfas, next_bcfas, rotations
     interp_ang_vels = np.linspace(ang_vel_vecs[1:], extrap_ang_vel_vecs, 33, axis=1)
 
     rk_preds = pm.integrateAngularVelocityRK(interp_ang_vels, rotations_quats[2:-1], 4)
+    rk_accSLERP = pm.quatSlerp(rotations_quats[2:-1], rk_preds, 0.95)
     return {
-        "RK": rk_preds
+        "RK": rk_preds, "RK-AccSLERP": rk_accSLERP
     }
 
     constspeed_extrap_vecs = pm.scalarsVecsMul(
@@ -448,7 +449,7 @@ class ConsolidatedResults:
                 raise ValueError("Ampersand issue in name mapping")
             cols_for_row_names += ampers[0]
 
-        print_str = "\\begin{table}[h]\n\\centering\n\\caption{...}\n"
+        print_str = "\\begin{table*}[h]\n\\centering\n\\caption{...}\n"
         print_str += "\\begin{tabular}"
         num_cs = len(table_info.col_names) + cols_for_row_names
         cs = ' '.join(['c' for _ in range(num_cs)])
@@ -527,7 +528,17 @@ class ConsolidatedResults:
                 print_str += sub_name + " & " + row_strings[row_key]
             print_str += AVG_ROW_NAME + " & " + row_strings[AVG_ROW_NAME]
 
-        print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table}"
+        print_str += "\\hline\n\\end{tabular}\n\\label{table:...}\n\\end{table*}"
+
+        # For the heatmap stuff:
+        hData = table_info.column_major_data
+        if data_func is not None:
+            hData = data_func(hData)
+        nonStatic = (table_info.col_names != "Static")
+        hmin = float(hData.min())
+        hmax = float(hData[nonStatic].max())
+        print_str = f"\\renewcommand{{\\heatMax}}{{{hmax:.2f}}}\n" + print_str
+        print_str = f"\\renewcommand{{\\heatMin}}{{{hmin:.2f}}}\n" + print_str
         print(print_str)
 
     @staticmethod
@@ -1261,7 +1272,6 @@ for i, combo in enumerate(combos):
 
     allResultsObj.addAxisAngleResult("Static", rotations[:-1])
     allResultsObj.addQuaternionResult("QuatVel", r_vel_preds)
-    allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
 
     # allResultsObj.addAxisAngleResult("AA_Vel", r_aa_vel_preds)
     # allResultsObj.addAxisAngleResult("AA_Acc", r_aa_acc_preds)
@@ -1273,6 +1283,7 @@ for i, combo in enumerate(combos):
     # allResultsObj.addAxisAngleResult("Wahba_acc", wahba_pred)
     # allResultsObj.addQuaternionResult("Sigmoid", sigmoid_pred)
 
+    numerical_r_dict = dict()
     if ADD_NUMERICAL_TESTS:
         numerical_res_dict = numericalIdeas(
             angles, fixed_axes, angle_diffs, r_fixed_axis_closest_angs,
@@ -1283,16 +1294,16 @@ for i, combo in enumerate(combos):
                 raise Exception("Expected a quaternion result here!")
             numerical_r_full = pm.replaceAtEnd(r_vel_preds, numerical_r, 1)
 
-            allResultsObj.addQuaternionResult(numerical_k, numerical_r_full)
+            numerical_r_dict[numerical_k] = numerical_r_full
 
-        rk_dec_only = r_vel_preds.copy()
-        diffs_of_abs_angles = np.diff(abs_angles, 1, axis=0)
-        ang_dec_inds = diffs_of_abs_angles[:-1] < 0.0
-        rk_dec_only[1:][ang_dec_inds] = numerical_res_dict["RK"][ang_dec_inds]
-
-
+        # rk_dec_only = r_vel_preds.copy()
+        # diffs_of_abs_angles = np.diff(abs_angles, 1, axis=0)
+        # ang_dec_inds = diffs_of_abs_angles[:-1] < 0.0
+        # rk_dec_only[1:][ang_dec_inds] = numerical_res_dict["RK"][ang_dec_inds]
 
         # allResultsObj.addQuaternionResult("RKdeconly", rk_dec_only)
+
+    allResultsObj.addQuaternionResult("RK", numerical_r_dict["RK"])
 
     # allResultsObj.addQuaternionResult("SQUAD", r_squad_preds)
     # allResultsObj.addQuaternionResult("Arm v", r_v_arm_preds)
@@ -1301,6 +1312,12 @@ for i, combo in enumerate(combos):
     allResultsObj.addQuaternionResult("Arm c ad2", r_c_arm_preds_d1d2a[2])
     # allResultsObj.addQuaternionResult("camobj", camobj_preds)
     # allResultsObj.addQuaternionResult("naiveLin", r_naive_lin_preds)
+
+    allResultsObj.addQuaternionResult("QuatVelSLERP", r_slerp_preds)
+    allResultsObj.addQuaternionResult(
+        "RK-AccSLERP", numerical_r_dict["RK-AccSLERP"]
+    )
+
 
     # Dumb comment.
     allResultsObj.addTranslationResult("Static", translations[:-1])
