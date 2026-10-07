@@ -6,6 +6,7 @@ import typing
 
 import numpy as np
 
+import tensorflow as tf
 import keras
 
 # We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
@@ -19,12 +20,17 @@ from data_by_combo_functions import rnnDataWindows
 # Functions to get all combos and to split combos into train/test sets:
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
+from nn_utilities.nn_losses import poseLossRotVec3CL, poseLossRotVec3CL2, poseLossVec3
+import posemath as pm
 
 WIN_SIZE = 6
 
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
+
+MODE_IS_ROTATION = False
+USE_RESIDUAL = True
 
 combos = PoseLoaderBCOT.getAllIDs()
 
@@ -46,7 +52,10 @@ all_translations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 # all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 for combo in combos:
     calculator = PoseLoaderBCOT(combo[0], combo[1], 0)
-    all_translations[combo[:2]] = calculator.getTranslationsGTNP()
+    if MODE_IS_ROTATION:
+        all_translations[combo[:2]] = calculator.getRotationsGTNP()
+    else:
+        all_translations[combo[:2]] = calculator.getTranslationsGTNP()
     # aa_rotations = calculator.getRotationsGTNP(False)
     # quats = pm.quatsFromAxisAngleVec3s(aa_rotations)
     # all_rotations[combo[:2]] = quats
@@ -57,9 +66,25 @@ all_translations_concat = np.concatenate(
 )
 translation_scaler = MinMaxScaler(feature_range=(0,1))
 translation_scaler.fit(all_translations_concat)
-# Scale all 3 axes by uniform amount and centre to 0 for later simplicity
-translation_scaler.scale_[-3:] = 10 * np.max(translation_scaler.scale_) #[-1]
-translation_scaler.min_[-3:] = 0.0
+if MODE_IS_ROTATION:
+    translation_scaler.scale_[:] = 1.0
+    translation_scaler.min_[:] = 0.0
+else:
+    # Scale all 3 axes by uniform amount and centre to 0 for later simplicity
+    translation_scaler.scale_[-3:] = 10 * np.max(translation_scaler.scale_) #[-1]
+    translation_scaler.min_[-3:] = 0.0
+
+def outputModeTransform(vecs_in, vecs_out):
+    ret_vecs_out = vecs_out
+    if USE_RESIDUAL and not MODE_IS_ROTATION:
+        ret_vecs_out = vecs_out - vecs_in[:, -1]
+    elif USE_RESIDUAL:
+        prev_vec_quats = pm.quatsFromAxisAngleVec3s(vecs_in[:, -1])
+        out_quats = pm.quatsFromAxisAngleVec3s(vecs_out)
+        rev_prev_rot = pm.conjugateQuats(prev_vec_quats)
+        resid_out = pm.multiplyQuatLists(out_quats, rev_prev_rot)
+        ret_vecs_out = pm.axisAngleVec3sFromQuats(resid_out, True)
+    return ret_vecs_out
 
 #%%
 ################################################################################
@@ -73,7 +98,7 @@ lstm_skip = DATASET_SKIP_FRAMES # "Renaming" var.
 train_translations_in, train_translations_out = rnnDataWindows(
     all_translations, train_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
-train_translations_out = train_translations_out - train_translations_in[:, -1]
+train_translations_out = outputModeTransform(train_translations_in, train_translations_out)
 
 #%%
 ################################################################################
@@ -96,8 +121,10 @@ lstm_logger = UnscaledDistanceLogger(
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
 
-
-lstm_model.compile(optimizer='adam', loss='mse')#tf_loss_fn)
+loss = poseLossVec3
+if MODE_IS_ROTATION:
+    loss = poseLossRotVec3CL2
+lstm_model.compile(optimizer='adam', loss=loss)#tf_loss_fn)
 #%%
 ################################################################################
 # TRAINING THE NETWORK
@@ -117,7 +144,7 @@ lstm_hist = lstm_model.fit(
 test_translations_in, test_translations_out = rnnDataWindows(
     all_translations, test_combos, WIN_SIZE, lstm_skip, translation_scaler
 )
-test_translations_out = test_translations_out - test_translations_in[:, -1]
+test_translations_out = outputModeTransform(test_translations_in, test_translations_out)
 
 lstm_test_pred = lstm_model.predict(test_translations_in)
 
@@ -131,26 +158,31 @@ lstm_test_pred = lstm_model.predict(test_translations_in)
 unscaled_lstm_test_pred = translation_scaler.inverse_transform(lstm_test_pred)
 unscaled_lstm_test_gt = translation_scaler.inverse_transform(test_translations_out)
 
+# %%
 lstm_test_errs = np.linalg.norm(
     unscaled_lstm_test_pred - unscaled_lstm_test_gt, axis=-1
 )
+lstm_test_errs2 = poseLossVec3(unscaled_lstm_test_gt, unscaled_lstm_test_pred)
+score2 = float(tf.reduce_mean(lstm_test_errs2))
 print("\n\nLSTM score (millimeters) on test data:", lstm_test_errs.mean())
+print("\n\nLSTM score2 (millimeters) on test data:", score2)
 print("Above score is for skip{} data.".format(lstm_skip))
 
 #%% 
 
-# To show a weakness of trying to use an LSTM to predict coordinates in 
-# "world space", we will imagine all input coordinates were shifted by a 
-# constant vec3 and see that accuracy degrades.
-shift_in = 0.1 + test_translations_in #+ 0.015 * np.arange(1,4)
-shift_out = test_translations_out #+ 0.015 * np.arange(1,4)
-shift_constvel = 1 * shift_in[:, -1, :] - shift_in[:, -2, :]
-shift_pred = lstm_model.predict(shift_in)
+if not MODE_IS_ROTATION:
+    # To show a weakness of trying to use an LSTM to predict coordinates in 
+    # "world space", we will imagine all input coordinates were shifted by a 
+    # constant vec3 and see that accuracy degrades.
+    shift_in = 0.1 + test_translations_in #+ 0.015 * np.arange(1,4)
+    shift_out = test_translations_out #+ 0.015 * np.arange(1,4)
+    shift_constvel = 1 * shift_in[:, -1, :] - shift_in[:, -2, :]
+    shift_pred = lstm_model.predict(shift_in)
 
-scaled_shift_pred = translation_scaler.inverse_transform(shift_pred)
-scaled_shift_gt = translation_scaler.inverse_transform(shift_out)
-shift_lstm_errs = np.linalg.norm(scaled_shift_pred - scaled_shift_gt, axis=-1)
-print("LSTM err when all inputs translated by constant amount:", shift_lstm_errs.mean())
+    scaled_shift_pred = translation_scaler.inverse_transform(shift_pred)
+    scaled_shift_gt = translation_scaler.inverse_transform(shift_out)
+    shift_lstm_errs = np.linalg.norm(scaled_shift_pred - scaled_shift_gt, axis=-1)
+    print("LSTM err when all inputs translated by constant amount:", shift_lstm_errs.mean())
 
 #%%
 
