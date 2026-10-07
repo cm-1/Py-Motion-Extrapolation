@@ -932,6 +932,10 @@ def multiplyLoneQuats(q0, q1):
 
     return e
 
+def quatsToFrom(toQuats, fromQuats):
+    inv_from = conjugateQuats(fromQuats)
+    return multiplyQuatLists(toQuats, inv_from)
+
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
 def matFromAxisAngle(scaledAxis):

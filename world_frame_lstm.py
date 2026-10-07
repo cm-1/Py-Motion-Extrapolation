@@ -81,8 +81,7 @@ def outputModeTransform(vecs_in, vecs_out):
     elif USE_RESIDUAL:
         prev_vec_quats = pm.quatsFromAxisAngleVec3s(vecs_in[:, -1])
         out_quats = pm.quatsFromAxisAngleVec3s(vecs_out)
-        rev_prev_rot = pm.conjugateQuats(prev_vec_quats)
-        resid_out = pm.multiplyQuatLists(out_quats, rev_prev_rot)
+        resid_out = pm.quatsToFrom(out_quats, prev_vec_quats)
         ret_vecs_out = pm.axisAngleVec3sFromQuats(resid_out, True)
     return ret_vecs_out
 

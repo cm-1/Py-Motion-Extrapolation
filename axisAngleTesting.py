@@ -237,9 +237,8 @@ interp_rk_vels = np.linspace(const_a_ang_vels[:-1], const_a_ang_vels[1:], rk_det
 
 const_a_angles = pm.anglesBetweenQuats(gt_const_a_qs[1:], gt_const_a_qs[:-1]).flatten()
 
-const_a_q_diffs = pm.multiplyQuatLists(
-    gt_const_a_qs[1:], pm.conjugateQuats( gt_const_a_qs[:-1])
-)
+const_a_q_diffs = pm.quatsToFrom(gt_const_a_qs[1:], gt_const_a_qs[:-1])
+
 fixed_axes = const_a_q_diffs[:, 1:] / np.linalg.norm(const_a_q_diffs[:, 1:], axis=-1, keepdims=True)# np.sin(angles/2)[..., np.newaxis]
 ang_vel_vecs = pm.scalarsVecsMul(const_a_angles, fixed_axes)
 ang_acc_vecs = np.diff(ang_vel_vecs, 1, axis=0)
