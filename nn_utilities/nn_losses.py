@@ -1,5 +1,6 @@
 import tensorflow as tf
 import keras
+import numpy as np # For reporting losses, not training!
 import math
 
 @keras.saving.register_keras_serializable()
@@ -155,3 +156,31 @@ def poseLossRotVec3CL2(y_true, y_pred):
 
     # Outer where
     return tf.where(tf.squeeze(small, -1), fallback, main)
+
+# %%
+# Rather than adding epsilons, branching, etc. we want to make sure that the
+# reported loss of our neural network is as true as possible.
+def poseLossRotVec3NP(y_true, y_pred):
+    np_y_true = np.array(y_true)
+    np_y_pred = np.array(y_pred)
+    n_true = np.linalg.norm(np_y_true, axis=-1)
+    n_pred = np.linalg.norm(np_y_pred, axis=-1)
+    hn_true = n_true / 2.0
+    hn_pred = n_pred / 2.0
+    w_true = np.reshape(np.cos(hn_true), (-1, 1))
+    w_pred = np.reshape(np.cos(hn_pred), (-1, 1))
+    true_isnt0 = n_true != 0.0
+    pred_isnt0 = n_pred != 0.0
+    s_true = np.ones_like(n_true)
+    s_pred = np.ones_like(s_true)
+    s_true[true_isnt0] = np.sin(hn_true) / n_true
+    s_pred[pred_isnt0] = np.sin(hn_pred) / n_pred
+    v_true = np.reshape(s_true, (-1, 1)) * np_y_true
+    v_pred = np.reshape(s_pred, (-1, 1)) * np_y_pred
+
+    w_rel = w_true * w_pred + np.einsum('...j,...j->...', v_true, v_pred)
+    v_rel = - w_true * v_pred + w_pred * v_true - np.cross(v_true, v_pred)
+    v_rel_norm = np.linalg.norm(v_rel, axis=-1)
+
+    # abs() handles the q / -q double cover; atan2 is more stable than acos
+    return 2.0 * np.atan2(v_rel_norm, np.abs(w_rel))

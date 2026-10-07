@@ -20,7 +20,7 @@ from data_by_combo_functions import rnnDataWindows
 # Functions to get all combos and to split combos into train/test sets:
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
-from nn_utilities.nn_losses import poseLossRotVec3CL, poseLossRotVec3CL2, poseLossVec3
+from nn_utilities.nn_losses import poseLossRotVec3CL, poseLossRotVec3CL2, poseLossVec3, poseLossRotVec3NP
 import posemath as pm
 
 WIN_SIZE = 6
@@ -159,14 +159,20 @@ unscaled_lstm_test_pred = translation_scaler.inverse_transform(lstm_test_pred)
 unscaled_lstm_test_gt = translation_scaler.inverse_transform(test_translations_out)
 
 # %%
-lstm_test_errs = np.linalg.norm(
+np_test_score = np.linalg.norm(
     unscaled_lstm_test_pred - unscaled_lstm_test_gt, axis=-1
-)
-lstm_test_errs2 = poseLossVec3(unscaled_lstm_test_gt, unscaled_lstm_test_pred)
-score2 = float(tf.reduce_mean(lstm_test_errs2))
-print("\n\nLSTM score (millimeters) on test data:", lstm_test_errs.mean())
-print("\n\nLSTM score2 (millimeters) on test data:", score2)
-print("Above score is for skip{} data.".format(lstm_skip))
+).mean()
+lstm_test_errs2 = loss(unscaled_lstm_test_gt, unscaled_lstm_test_pred)
+tf_score = float(tf.reduce_mean(lstm_test_errs2))
+if (MODE_IS_ROTATION):
+    _lstm_test_errs = poseLossRotVec3NP(unscaled_lstm_test_gt, unscaled_lstm_test_pred)
+    np_test_score = np.mean(np.rad2deg(_lstm_test_errs))
+    tf_score = np.rad2deg(tf_score)
+unit_str = "degs" if MODE_IS_ROTATION else "millimeters"
+
+print("\n\nTF LSTM score ({}) on test data: {}".format(unit_str, np_test_score))
+print("NP LSTM score ({}) on test data: {}".format(unit_str, tf_score))
+print("Above scoring is for skip{} data.".format(lstm_skip))
 
 #%% 
 
