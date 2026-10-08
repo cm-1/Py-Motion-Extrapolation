@@ -9,6 +9,8 @@ from sklearn.preprocessing import MinMaxScaler
 
 import rnn_models as rnnm
 
+from nn_utilities.nn_losses import *
+
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
 import gtCommon as gtc
@@ -24,6 +26,8 @@ WIN_SIZE = 6
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
+
+APPLY_NOISE = False
 
 ONE_FRAME_PER_WINDOW: bool = True
 
@@ -49,7 +53,7 @@ print("Reading/normalizing data.")
 # thus, can create our data windows without having a window erroneously overlap
 # two separate videos.
 all_jav, w2ls, jav_translations = dataForCombosJAV(
-    loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), True, True
+    loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), APPLY_NOISE, True, True
 )
 
 #%% 
@@ -100,7 +104,7 @@ for skip in range(3):
     # Scaler for just the last three columns, the "displacement" ones.
     jav_scalers_3[skip].fit(all_train_vec3s)
     # Ensure this scaler matches the other one.
-    jav_scalers_3[skip].scale_[-3:] = jav_scalers_3[skip].scale_[-1]
+    jav_scalers_3[skip].scale_[-3:] = 10 * np.max(jav_scalers_3[skip].scale_) #jav_scalers_3[skip].scale_[-1]
     jav_scalers_3[skip].min_[-3:] = 0.0
 
 selected_scaler = jav_scalers_3[jav_lstm_skip]
@@ -118,8 +122,8 @@ print("Building the NN.")
 
 
 input_win_len = WIN_SIZE - int(ONE_FRAME_PER_WINDOW)
-jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None, 'mse')
-# jav_lstm_model = rnnm.get_simple_lstm(3, 'adam', 'mse')
+# jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
+jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam')
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
@@ -134,7 +138,7 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 ################################################################################
 
 jav_lstm_hist = jav_lstm_model.fit(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=256,
+    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=32,
     callbacks=[jav_lstm_logger]
 )
 

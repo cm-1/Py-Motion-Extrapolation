@@ -30,6 +30,7 @@ def get_fcnn_rnn(loss, win_size: int, vec_dims: int, out_size: int = 3,
 def get_simple_lstm(loss, out_size = 3, optimizer = 'adam'):
     model = keras.Sequential([
         # keras.layers.LSTM(128, return_sequences=True),
+        keras.layers.LSTM(50, return_sequences=True),
         keras.layers.LSTM(50),
         keras.layers.Dense(out_size) #num_classes, activation='sigmoid')
     ])
