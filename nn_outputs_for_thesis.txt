@@ -1,28 +1,60 @@
-Results for mode: WORLD_DISP
-
-skip0: 1.8495251177458523
-skip1: 4.831629279168576
-skip2: 10.039642847776657
-all: 4.139395675301313
-
 
 Results for mode: WORLD_VEC3
-28/28 ━━━━━━━━━━━━━━━━━━━━ 0s 2ms/step
 skip0: 10.839965299457557
 skip1: 11.004272046384907
 skip2: 14.885920768062208
-all: 11.614706932888945
 
+
+Results for mode: (residual) WORLD_DISP
+skip0: 1.8495251177458523
+skip1: 4.831629279168576
+skip2: 10.039642847776657
+
+Results for mode: Local (i.e. rotation-aligned)
+skip0: 1.9479727222003975
+skip1: 5.276611034343721
+skip2: 10.96302952313626
+all: 4.481060559736453
+
+Results for mode: VelAligned
+skip0: 1.542623872426908
+skip1: 4.4615962839191905
+skip2: 9.730735151628439
+
+Results for mode: Poly-L
+skip0: 1.466413246966158
+skip1: 4.49063624326478
+skip2: 9.587440024043456
+
+Results for mode: Poly-N
+skip0: 1.4317253193641966
+skip1: 4.276811343895018
+skip2: 9.186771986981226
+
+
+
+
+
+# WORLD LSTM:
+LSTM score (millimeters) on test data: 2.257927568032992
+Above score is for skip0 data.
+LSTM score (millimeters) on test data: 5.172957050575089
+Above score is for skip1 data.
 LSTM score (millimeters) on test data: 10.358235507396893
 Above score is for skip2 data.
-153/153 ━━━━━━━━━━━━━━━━━━━━ 0s 925us/step
+
 LSTM err when all inputs translated by constant amount: 440.90460813628096
 
+# RESIDUAL LSTM:
+LSTM score (millimeters) on test data: 1.5804189196456617
+Above score is for skip0 data.
+LSTM score (millimeters) on test data: 4.605523240621995
+Above score is for skip1 data.
 LSTM score (millimeters) on test data: 9.837568003971114
 Above score is for skip2 data.
-153/153 ━━━━━━━━━━━━━━━━━━━━ 0s 939us/step
+
 LSTM err when all inputs translated by constant amount: 9.868001474198717
-LSTM err when all inputs reflected by constant amount: 54.93753491372697
+LSTM err when all inputs reflected: 54.93753491372697
 
 
 
