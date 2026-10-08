@@ -146,6 +146,9 @@ test_translations_in, test_translations_out = rnnDataWindows(
 test_translations_out = outputModeTransform(test_translations_in, test_translations_out)
 
 lstm_test_pred = lstm_model.predict(test_translations_in)
+phys_pred = 3 * test_translations_in[:, -1] - 3 * test_translations_in[:, -2] + test_translations_in[:, -3]
+if USE_RESIDUAL:
+    phys_pred -= test_translations_in[:, -1]
 
 # lstm_test_pred_labs = np.argmax(lstm_test_pred, axis=1)
 # lstm_test_errs = rnnErrsForCombos(test_combos, WIN_SIZE, 2)
@@ -155,11 +158,15 @@ lstm_test_pred = lstm_model.predict(test_translations_in)
 # Transform the coordinates back into non-normalized form to get the errors
 # in millimeters.
 unscaled_lstm_test_pred = translation_scaler.inverse_transform(lstm_test_pred)
+unscaled_phys_pred = translation_scaler.inverse_transform(phys_pred)
 unscaled_lstm_test_gt = translation_scaler.inverse_transform(test_translations_out)
 
 # %%
 np_test_score = np.linalg.norm(
     unscaled_lstm_test_pred - unscaled_lstm_test_gt, axis=-1
+).mean()
+phys_score = np.linalg.norm(
+    unscaled_phys_pred - unscaled_lstm_test_gt, axis=-1
 ).mean()
 lstm_test_errs2 = loss(unscaled_lstm_test_gt, unscaled_lstm_test_pred)
 tf_score = float(tf.reduce_mean(lstm_test_errs2))
@@ -169,6 +176,7 @@ if (MODE_IS_ROTATION):
     tf_score = np.rad2deg(tf_score)
 unit_str = "degs" if MODE_IS_ROTATION else "millimeters"
 
+print("\n\nSanity check phys-based score ({}) on test data: {}".format(unit_str, phys_score))
 print("\n\nTF LSTM score ({}) on test data: {}".format(unit_str, np_test_score))
 print("NP LSTM score ({}) on test data: {}".format(unit_str, tf_score))
 print("Above scoring is for skip{} data.".format(lstm_skip))

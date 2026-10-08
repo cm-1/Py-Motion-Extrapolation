@@ -161,12 +161,19 @@ jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
     test_jav_out[:, -3:]
 )
 
+const_acc_pred = -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
+
+const_acc_errs = getErrsLSTM(
+    jav_scalers_3[jav_lstm_skip], const_acc_pred, jav_scaled_lstm_gt_test
+)
+
 # jav_scaled_lstm_gt_train = jav_scalers_3[jav_lstm_skip].inverse_transform(
 #     train_jav_out[:, -3:]
 # )
 jav_lstm_test_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], jav_lstm_test_pred, jav_scaled_lstm_gt_test
 )
+print("\n\nAcc score (millimeters) on test data:", const_acc_errs.mean())
 print("\n\nJAV LSTM score (millimeters) on test data:", jav_lstm_test_errs.mean())
 print("Above score is for skip{} data.".format(jav_lstm_skip))
 #%%
