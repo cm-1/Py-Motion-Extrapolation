@@ -1,5 +1,7 @@
 import tensorflow as tf
 import keras
+import numpy as np # For reporting losses, not training!
+import math
 
 @keras.saving.register_keras_serializable()
 def poseLossVec3(y_true, y_pred):
@@ -88,3 +90,97 @@ def poseLossResidualJAV(y_true, y_pred):
 
     err_vec3 = true_disp - pred_disp
     return tf.norm(err_vec3, axis=-1)
+
+# Below are some temporary Claude functions.
+# Might still experiment with other ways of handling cases where the gradient's
+# undefined
+def _axis_angle_to_quat(v, eps=1e-8):
+    """Convert axis-angle (rotation vector) to unit quaternion (w, xyz)."""
+    theta_sq = tf.reduce_sum(tf.square(v), axis=-1, keepdims=True)
+    theta = tf.sqrt(theta_sq + eps ** 2)  # safe sqrt (avoids NaN gradient at 0)
+    half = 0.5 * theta
+
+    # sin(theta/2) / theta, with a Taylor expansion for small angles
+    small = theta < 1e-3
+    scale = tf.where(small, 0.5 - theta_sq / 48.0, tf.sin(half) / theta)
+
+    w = tf.cos(half)
+    xyz = v * scale
+    return w, xyz
+
+
+@keras.saving.register_keras_serializable()
+def poseLossRotVec3CL(y_true, y_pred):
+    """Geodesic angle (radians) between two axis-angle rotations."""
+    y_true = tf.cast(y_true, y_pred.dtype)
+
+    w1, v1 = _axis_angle_to_quat(y_true)
+    w2, v2 = _axis_angle_to_quat(y_pred)
+
+    # Relative rotation q_rel = conj(q1) * q2
+    w_rel = tf.squeeze(w1 * w2, -1) + tf.reduce_sum(v1 * v2, axis=-1)
+    v_rel = w1 * v2 - w2 * v1 - tf.linalg.cross(v1, v2)
+    v_rel_norm = tf.sqrt(tf.reduce_sum(tf.square(v_rel), axis=-1) + 1e-12)
+
+    # abs() handles the q / -q double cover; atan2 is more stable than acos
+    return 2.0 * tf.atan2(v_rel_norm, tf.abs(w_rel))
+
+
+@keras.saving.register_keras_serializable()
+def poseLossRotVec3CL2(y_true, y_pred):
+    a = tf.cast(y_true, y_pred.dtype)
+    b = y_pred
+    two_pi = tf.constant(2.0 * math.pi, dtype=b.dtype)
+
+    na_sq = tf.reduce_sum(tf.square(a), axis=-1, keepdims=True)
+    nb_sq = tf.reduce_sum(tf.square(b), axis=-1, keepdims=True)
+    small = (na_sq < 1e-8) | (nb_sq < 1e-8)          # shape [..., 1]
+
+    # Inner where: the main branch never sees a zero-norm vector
+    ones = tf.ones_like(a)
+    safe_a = tf.where(small, ones, a)
+    safe_b = tf.where(small, ones, b)
+
+    # Main branch: your simple_angle_acos formula
+    na = tf.norm(safe_a, axis=-1)
+    nb = tf.norm(safe_b, axis=-1)
+    cos_phi = tf.reduce_sum(safe_a * safe_b, axis=-1) / (na * nb)
+    w_rel = (tf.cos(na / 2) * tf.cos(nb / 2)
+             + cos_phi * tf.sin(na / 2) * tf.sin(nb / 2))
+    c = tf.clip_by_value(tf.abs(w_rel), 0.0, 1.0 - 1e-7)
+    main = 2.0 * tf.acos(c)
+
+    # Fallback: ||a - b||, wrapped to [0, pi]; smoothed norm keeps the gradient finite
+    n = tf.sqrt(tf.reduce_sum(tf.square(a - b), axis=-1) + 1e-12)
+    fallback = tf.abs(n - two_pi * tf.stop_gradient(tf.round(n / two_pi)))
+
+    # Outer where
+    return tf.where(tf.squeeze(small, -1), fallback, main)
+
+# %%
+# Rather than adding epsilons, branching, etc. we want to make sure that the
+# reported loss of our neural network is as true as possible.
+def poseLossRotVec3NP(y_true, y_pred):
+    np_y_true = np.array(y_true)
+    np_y_pred = np.array(y_pred)
+    n_true = np.linalg.norm(np_y_true, axis=-1)
+    n_pred = np.linalg.norm(np_y_pred, axis=-1)
+    hn_true = n_true / 2.0
+    hn_pred = n_pred / 2.0
+    w_true = np.reshape(np.cos(hn_true), (-1, 1))
+    w_pred = np.reshape(np.cos(hn_pred), (-1, 1))
+    true_isnt0 = n_true != 0.0
+    pred_isnt0 = n_pred != 0.0
+    s_true = np.ones_like(n_true)
+    s_pred = np.ones_like(s_true)
+    s_true[true_isnt0] = np.sin(hn_true) / n_true
+    s_pred[pred_isnt0] = np.sin(hn_pred) / n_pred
+    v_true = np.reshape(s_true, (-1, 1)) * np_y_true
+    v_pred = np.reshape(s_pred, (-1, 1)) * np_y_pred
+
+    w_rel = w_true * w_pred + np.einsum('...j,...j->...', v_true, v_pred)
+    v_rel = - w_true * v_pred + w_pred * v_true - np.cross(v_true, v_pred)
+    v_rel_norm = np.linalg.norm(v_rel, axis=-1)
+
+    # abs() handles the q / -q double cover; atan2 is more stable than acos
+    return 2.0 * np.atan2(v_rel_norm, np.abs(w_rel))

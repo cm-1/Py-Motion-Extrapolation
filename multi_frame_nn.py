@@ -59,11 +59,11 @@ from motiontools.dataorg import (
 # ==============================================================================
 
 # Global parameters.
-TRAIN_NEW_MODEL = True
+TRAIN_NEW_MODEL = False
 
 NO_LAGRANGE_MEM_SAVE = False
 
-USE_NOISE = True
+USE_NOISE = False
 
 print("Starting to load data!")
 dog = DataOrganizer.load(PoseLoaderBCOT, USE_NOISE) # Load our data.
@@ -116,7 +116,7 @@ ROT_VEC_MODES = (
 # JAV_MULTIPLIERS, VEL_ALIGNED_VEC3, WORLD_VEC3, WORLD_DISP, ROT_ALIGNED_VEC3
 # ROT_AA, ROT_VEL_AA, ROT_FIXED_AX
 
-chosen_mode = OutVecMode.JAV_MULTIPLIERS
+chosen_mode = OutVecMode.ROT_FIXED_AX
 
 def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
                    nodes_per_layer: int = 128):
@@ -784,38 +784,39 @@ bcotjav = DataForJAV(
 print("Reference scores for whole dataset (i.e., no train/test split).")
 print("Reference method:", bcotjav.ref_prediction_name)
 print("Reference scores:")
-bcotjav.getScoresSubset(DataSubsetKind.WHOLE, bcotjav.ref_predictions[DataSubsetKind.WHOLE], True)
+bcotjav.getScoresSubset(DataSubsetKind.TEST, bcotjav.ref_predictions[DataSubsetKind.TEST], True)
 
 
 #%%
 # import tikzplotlib
-# import matplotlib.pyplot as plt
-# acc_ratios = np.linspace(0, 1, 101)
-# res = np.zeros((3, 101))
-# for ir, r in enumerate(acc_ratios):
-#     ratio_errs = bcotjav.getScoresSubset(
-#         DataSubsetKind.TEST,
-#         r * np.array([[1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
-#     )
-#     for i in range(3):
-#         res[i, ir] = ratio_errs[i]
+import matplotlib.pyplot as plt
+acc_ratios = np.linspace(0, 1, 101)
+res = np.zeros((3, 101))
+for ir, r in enumerate(acc_ratios):
+    ratio_errs = bcotjav.getScoresSubset(
+        DataSubsetKind.TEST,
+        r * np.array([[1.]]), False #, 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
+    )
+    for i in range(3):
+        res[i, ir] = ratio_errs[i]
 
-# # Source: https://stackoverflow.com/questions/75900239/attributeerror-occurs-with-tikzplotlib-when-legend-is-plotted
-# def tikzplotlib_fix_ncols(obj):
-#     """
-#     workaround for matplotlib 3.6 renamed legend's _ncol to _ncols, which breaks tikzplotlib
-#     """
-#     if hasattr(obj, "_ncols"):
-#         obj._ncol = obj._ncols
-#     for child in obj.get_children():
-#         tikzplotlib_fix_ncols(child)
+# Source: https://stackoverflow.com/questions/75900239/attributeerror-occurs-with-tikzplotlib-when-legend-is-plotted
+def tikzplotlib_fix_ncols(obj):
+    """
+    workaround for matplotlib 3.6 renamed legend's _ncol to _ncols, which breaks tikzplotlib
+    """
+    if hasattr(obj, "_ncols"):
+        obj._ncol = obj._ncols
+    for child in obj.get_children():
+        tikzplotlib_fix_ncols(child)
 
-# start_ratio = 70
-# fig = plt.figure()
-# plt.plot(acc_ratios[start_ratio:], res[0, start_ratio:], label="skip 0")
-# plt.plot(acc_ratios[start_ratio:], res[1, start_ratio:], label="skip 1")
-# plt.plot(acc_ratios[start_ratio:], res[2, start_ratio:], label="skip 2")
-# plt.legend()
+start_ratio = 70
+fig = plt.figure()
+plt.grid(True)
+plt.plot(acc_ratios[start_ratio:], res[0, start_ratio:], label="skip 0")
+plt.plot(acc_ratios[start_ratio:], res[1, start_ratio:], label="skip 1")
+plt.plot(acc_ratios[start_ratio:], res[2, start_ratio:], label="skip 2")
+plt.legend()
 # tikzplotlib_fix_ncols(fig)
 # tikzplotlib.save("mytikz.tex")
 

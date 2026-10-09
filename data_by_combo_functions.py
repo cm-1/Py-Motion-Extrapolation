@@ -51,7 +51,7 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
     for combo in combo_subset:
         combo_data = data[combo][::step]
         if scaler is not None:
-            scaler.transform(combo_data)
+            combo_data = scaler.transform(combo_data)
         w2l_data = None
         # There might not be frames for the first data points.
         # This should be fine, as there still should be at least one per window

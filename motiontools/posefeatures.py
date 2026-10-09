@@ -1312,7 +1312,7 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
     _, third_orth = pm.parallelAndOrthoParts(
         jerks[second_ortho_is_0], mats[second_ortho_is_0, 0], True
     )
-    mats[second_ortho_is_0, 2] = pm.normalizeAll(third_orth)
+    mats[second_ortho_is_0, 2] = pm.safelyNormalizeArray(third_orth, vec_for_zero_norms=np.zeros(3))
 
     where_first_zero = np.where(first_are_zero)[0]            
     # Transform each third vector and to-next-frame displacement into

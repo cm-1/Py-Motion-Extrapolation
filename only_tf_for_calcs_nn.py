@@ -67,8 +67,8 @@ for combo in train_ids + test_ids:
     curr_translations = calculator.getTranslationsGTNP()[::custom_step]
     curr_rotations = calculator.getRotationsGTNP()[::custom_step]
     if USE_NOISE:
-        curr_translations = calculator.getNoisyTranslation(1.0)[::custom_step]
-        curr_rotations = calculator.getNoisyRotation(3.5)[::custom_step]
+        curr_translations = calculator.getNoisyTranslation(4.5)[::custom_step]
+        curr_rotations = calculator.getNoisyRotation(3.0)[::custom_step]
     curr_poses = np.concatenate(
         (curr_translations, curr_rotations), axis=-1
     )

@@ -9,8 +9,8 @@ def _finishBuildingRNN(model, optimizer, loss):
 # Wang, Juxing, and Shen, Linyong. "Semi-Adaptable Human Hand Motion Prediction 
 # Based on Neural Networks and Kalman Filter." Journal of Physics: Conference 
 # Series. Vol. 2029. No. 1. IOP Publishing, 2021.
-def get_fcnn_rnn(win_size: int, vec_dims: int, out_size: int = 3,
-                 optimizer = None, loss = 'mse'):
+def get_fcnn_rnn(loss, win_size: int, vec_dims: int, out_size: int = 3,
+                 optimizer = None):
     if optimizer is None:
         optimizer = keras.optimizers.Adam(0.0001)
 
@@ -27,9 +27,10 @@ def get_fcnn_rnn(win_size: int, vec_dims: int, out_size: int = 3,
 
 
 
-def get_simple_lstm(out_size = 3, optimizer = 'adam', loss='mse'):
+def get_simple_lstm(loss, out_size = 3, optimizer = 'adam'):
     model = keras.Sequential([
         # keras.layers.LSTM(128, return_sequences=True),
+        keras.layers.LSTM(50, return_sequences=True),
         keras.layers.LSTM(50),
         keras.layers.Dense(out_size) #num_classes, activation='sigmoid')
     ])

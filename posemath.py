@@ -644,8 +644,11 @@ def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
         vecs0 = normalizeAll(vecs0)
         vecs1 = normalizeAll(vecs1)
 
+    # atan2 is more precise for small angles but worse for angles closer to pi/2
+    # But the nature of our work makes smaller angles more likely.
     vals_preds_dot = einsumDot(vecs0, vecs1)
-    return np.arccos(np.clip(vals_preds_dot, -1, 1))
+    vals_preds_sin = np.linalg.norm(np.linalg.cross(vecs0, vecs1), axis=-1)
+    return np.atan2(vals_preds_sin, vals_preds_dot)
 
 # The 2acos(abs(dot(q0, q1))) between quaternions is the angle (rad) between the
 # two rotations (i.e., the angle of the rotation from one to another). If you
@@ -657,7 +660,18 @@ def anglesBetweenVecs(vecs0, vecs1, normalization_needed = True):
 # will be the correct angle between 0 and pi.
 def anglesBetweenQuats(quats0, quats1):
     vals_preds_dot = einsumDot(quats0, quats1)
-    half_angle = np.arccos(np.clip(np.abs(vals_preds_dot), -1, 1))
+    # atan2 is more precise for small angles but worse for angles closer to pi/2
+    # But the nature of our work makes smaller angles more likely.
+    # Thus, we need the sin and cos of theta/2 for (q0*q1^-1)
+    cos_half_angle = np.abs(vals_preds_dot)
+    w0 = quats0[:, :1]
+    w1 = quats1[:, :1]
+    v0 = quats0[:, 1:]
+    v1 = quats1[:, 1:]
+    xyz_rel = - w0 * v1 + w1 * v0 - np.cross(v0, v1)
+    sin_half_angle = np.linalg.norm(xyz_rel, axis=-1)
+    
+    half_angle = np.atan2(sin_half_angle, cos_half_angle)
     return half_angle + half_angle
 
 def quatSlerp(quats0, quats1, t: typing.Union[int, float, NDArray],
@@ -917,6 +931,10 @@ def multiplyLoneQuats(q0, q1):
     e[3] = q0w*q1z + q0x*q1y - q0y*q1x + q0z*q1w
 
     return e
+
+def quatsToFrom(toQuats, fromQuats):
+    inv_from = conjugateQuats(fromQuats)
+    return multiplyQuatLists(toQuats, inv_from)
 
 # Makes rotation matrix from an axis (with angle being encoded in axis length).
 # Uses common formula that you can google if need-be.
