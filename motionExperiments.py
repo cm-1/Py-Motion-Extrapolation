@@ -267,7 +267,7 @@ class ConsolidatedResults:
         gts = values[1:]
         diffStart = 0
         if CUT_FOR_JERK:
-            diffStart = 3
+            diffStart = 5 # 5 matches LSTM windows for now.
         return pm.anglesBetweenQuats(gts[diffStart:], full_predictions[diffStart:])
 
     # Note: returns errors in radians!
@@ -286,7 +286,7 @@ class ConsolidatedResults:
         diffs = values[1:] - full_predictions
         diffStart = 0
         if CUT_FOR_JERK:
-            diffStart = 3
+            diffStart = 5 # 5 matches LSTM windows for now.
         return diffs[diffStart:]
     
     def updateGroundTruth(self, translations, axisangles, quats, angvels,
