@@ -13,6 +13,8 @@ def loadLatestModels(model_prefixes, preset: SUBSET_PRESET, noise_resistant: boo
         if noise_resistant:
             fname += "--noised"
         matching_models = glob.glob(fname + "*.keras")
+        if not noise_resistant:
+            matching_models = [m for m in matching_models if "--noised" not in m]
         # Get most recent model (filenames are known to be timestamped).
         if len(matching_models) > 0:
             chosen_model_fname = sorted(matching_models)[-1] 
