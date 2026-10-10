@@ -15,7 +15,7 @@ from motiontools.dataorg import DataOrganizer
 # Function for getting JAV data
 import motiontools.shared_constants
 
-USE_NOISE = True
+USE_NOISE = False
 
 # Some consts used in calculating the input features.
 OBJ_IS_STATIC_THRESH_MM = 10.0 # 10 millimeters; semi-arbitrary

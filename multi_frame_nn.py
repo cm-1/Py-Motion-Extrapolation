@@ -59,7 +59,7 @@ from motiontools.dataorg import (
 # ==============================================================================
 
 # Global parameters.
-TRAIN_NEW_MODEL = False
+TRAIN_NEW_MODEL = True
 
 NO_LAGRANGE_MEM_SAVE = False
 
@@ -116,7 +116,7 @@ ROT_VEC_MODES = (
 # JAV_MULTIPLIERS, VEL_ALIGNED_VEC3, WORLD_VEC3, WORLD_DISP, ROT_ALIGNED_VEC3
 # ROT_AA, ROT_VEL_AA, ROT_FIXED_AX
 
-chosen_mode = OutVecMode.ROT_FIXED_AX
+chosen_mode = OutVecMode.JAV_MULTIPLIERS
 
 def getUntrainedNN(in_dim: int, out_dim: int, loss = None, n_layers: int = 3,
                    nodes_per_layer: int = 128):
@@ -786,6 +786,7 @@ print("Reference method:", bcotjav.ref_prediction_name)
 print("Reference scores:")
 bcotjav.getScoresSubset(DataSubsetKind.TEST, bcotjav.ref_predictions[DataSubsetKind.TEST], True)
 
+print(dog.col_subset_test[dog.col_subset_test[:, 0] > 1].shape)
 
 #%%
 # import tikzplotlib
