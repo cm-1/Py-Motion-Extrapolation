@@ -498,6 +498,11 @@ class CalcsForVideo:
 
         return (pose_loader.getVidID(), res)
 
+    @staticmethod
+    def trimDataDict(d_dict: typing.Dict[MOTION_DATA_KEY_TYPE, NDArray], trim_amt: int):
+        for k, v in d_dict.items():
+            d_dict[k] = v[trim_amt:]
+        return
 
 
     def getInputFeatures(self, all_translations: NDArray, aa_rotations: NDArray,
@@ -1228,11 +1233,24 @@ class CalcsForVideo:
 
             if check_key_completeness:
                 self.validateKeys(motion_data.keys())
-                
+
+            # TODO: Right now the LSTM networks have a window size of 6.
+            # Also, right now, we trim predictions for which we don't have a
+            # "true" jerk calculation. This is all a little arbitrary and needs
+            # to be consistent. The below trimming makes this return match the
+            # LSTM num of predictions but perhaps the LSTMs should be padded,
+            # or a number other than 6 chosen, etc. So this code could probably
+            # be better because almost anything's better than hardcoding.
+            # Note: 6 is not ENTIRELY arbitrary. The shortest skip2 video in
+            # BCOT is 7 frames, allowing for at least one prediction per vid.
+            # Also, it allows non-padded crackle to be calculated for all.
+            _TRIM_AMT = 2
+            self.trimDataDict(motion_data, _TRIM_AMT)
+            self.trimDataDict(curr_err_norms_dict, _TRIM_AMT)
             motion_datas.append(motion_data)
-            min_err_labels.append(curr_min_norm_labels[1:])
+            min_err_labels.append(curr_min_norm_labels[(_TRIM_AMT + 1):]) #[1:])
             all_err_norms.append(curr_err_norms_dict)
-            min_err_vecs.append(curr_min_norm_vecs)
+            min_err_vecs.append(curr_min_norm_vecs[_TRIM_AMT:])
 
         return FeaturesAndResultsForVid(
             motion_datas, all_err_norms, min_err_labels, min_err_vecs

@@ -5,7 +5,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 # We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 import rnn_models as rnnm
 
@@ -102,16 +102,17 @@ else:
 ################################################################################
 # NORMALIZING THE DATA
 ################################################################################
-jav_scalers_3 = [MinMaxScaler(feature_range=(0,1)) for _ in range(3)]
+jav_scalers_3 = [StandardScaler() for _ in range(3)]# (feature_range=(0,1)) for _ in range(3)]
 
 for skip in range(3):
     all_train_vec3s = train_jav_in.reshape(-1, 3)
+    _temp_scaler = StandardScaler().fit(all_train_vec3s.reshape(-1, 1))
 
     # Scaler for just the last three columns, the "displacement" ones.
     jav_scalers_3[skip].fit(all_train_vec3s)
     # Ensure this scaler matches the other one.
-    jav_scalers_3[skip].scale_[-3:] = 10 * np.max(jav_scalers_3[skip].scale_) #jav_scalers_3[skip].scale_[-1]
-    jav_scalers_3[skip].min_[-3:] = 0.0
+    jav_scalers_3[skip].scale_[-3:] = _temp_scaler.scale_ #10 * np.max(jav_scalers_3[skip].scale_) #jav_scalers_3[skip].scale_[-1]
+    jav_scalers_3[skip].mean_[-3:] = 0.0
 
 selected_scaler = jav_scalers_3[jav_lstm_skip]
 train_jav_in = scaleWindows(train_jav_in, selected_scaler)
@@ -167,7 +168,7 @@ jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
     test_jav_out[:, -3:]
 )
 
-const_acc_pred = -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
+const_acc_pred = -3 * jav_scalers_3[2].mean_ / jav_scalers_3[2].scale_ -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
 
 const_acc_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], const_acc_pred, jav_scaled_lstm_gt_test
