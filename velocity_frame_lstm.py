@@ -56,10 +56,11 @@ all_jav, w2ls, jav_translations = dataForCombosJAV(
     loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), APPLY_NOISE, True, True
 )
 
-# Ensure no padding when using windows of six:
-for skip in range(3):
-    for k, v in jav_translations[skip].items():
-        jav_translations[skip][k] = v[2:]
+# # Ensure no padding when using windows of six:
+# EDIT: No longer needed, since we're not padding dataForCombosJAV output ATM.
+# for skip in range(3):
+#     for k, v in jav_translations[skip].items():
+#         jav_translations[skip][k] = v[2:]
 
 #%% 
 ################################################################################

@@ -62,8 +62,9 @@ for combo in combos:
     # all_rotation_mats[combo[:2]] = calculator.getRotationMatsGTNP(False)
 
 all_translations_concat = np.concatenate(
-    [all_translations[c[:2]] for c in combos], axis=0
+    [all_translations[c[:2]] for c in combos if c[:2] in train_combos], axis=0
 )
+# %%
 translation_scaler = MinMaxScaler(feature_range=(0,1))
 translation_scaler.fit(all_translations_concat)
 if MODE_IS_ROTATION:
