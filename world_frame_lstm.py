@@ -10,7 +10,7 @@ import tensorflow as tf
 import keras
 
 # We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import RobustScaler
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
@@ -65,15 +65,17 @@ all_translations_concat = np.concatenate(
     [all_translations[c[:2]] for c in combos if c[:2] in train_combos], axis=0
 )
 # %%
-translation_scaler = MinMaxScaler(feature_range=(0,1))
+translation_scaler = RobustScaler()
 translation_scaler.fit(all_translations_concat)
+all_train_vec3s = all_translations_concat.reshape(-1, 3)
+_temp_scaler = RobustScaler().fit(all_train_vec3s.reshape(-1, 1))
 if MODE_IS_ROTATION:
     translation_scaler.scale_[:] = 1.0
-    translation_scaler.min_[:] = 0.0
+    translation_scaler.center_[:] = 0.0
 else:
     # Scale all 3 axes by uniform amount and centre to 0 for later simplicity
-    translation_scaler.scale_[-3:] = 10 * np.max(translation_scaler.scale_) #[-1]
-    translation_scaler.min_[-3:] = 0.0
+    translation_scaler.scale_[-3:] = _temp_scaler.scale_
+    # translation_scaler.mean_[-3:] = 0.0
 
 def outputModeTransform(vecs_in, vecs_out):
     ret_vecs_out = vecs_out
@@ -178,8 +180,8 @@ if (MODE_IS_ROTATION):
 unit_str = "degs" if MODE_IS_ROTATION else "millimeters"
 
 print("\n\nSanity check phys-based score ({}) on test data: {}".format(unit_str, phys_score))
-print("\n\nTF LSTM score ({}) on test data: {}".format(unit_str, np_test_score))
-print("NP LSTM score ({}) on test data: {}".format(unit_str, tf_score))
+print("\n\nTF LSTM score ({}) on test data: {}".format(unit_str, tf_score))
+print("NP LSTM score ({}) on test data: {}".format(unit_str, np_test_score))
 print("Above scoring is for skip{} data.".format(lstm_skip))
 
 #%% 
