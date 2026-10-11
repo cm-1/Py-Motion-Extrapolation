@@ -10,7 +10,7 @@ import tensorflow as tf
 import keras
 
 # We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import StandardScaler
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
@@ -65,10 +65,10 @@ all_translations_concat = np.concatenate(
     [all_translations[c[:2]] for c in combos if c[:2] in train_combos], axis=0
 )
 # %%
-translation_scaler = RobustScaler()
+translation_scaler = StandardScaler()
 translation_scaler.fit(all_translations_concat)
 all_train_vec3s = all_translations_concat.reshape(-1, 3)
-_temp_scaler = RobustScaler().fit(all_train_vec3s.reshape(-1, 1))
+_temp_scaler = StandardScaler().fit(all_train_vec3s.reshape(-1, 1))
 if MODE_IS_ROTATION:
     translation_scaler.scale_[:] = 1.0
     translation_scaler.center_[:] = 0.0
