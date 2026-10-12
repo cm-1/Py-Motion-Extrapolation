@@ -20,6 +20,8 @@ from data_by_combo_functions import rnnDataWindows
 # Functions to get all combos and to split combos into train/test sets:
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 
+import rnn_models as rnnm
+
 from nn_utilities.nn_losses import poseLossRotVec3CL, poseLossRotVec3CL2, poseLossVec3, poseLossRotVec3NP
 import posemath as pm
 
@@ -35,9 +37,10 @@ USE_RESIDUAL = True
 combos = PoseLoaderBCOT.getAllIDs()
 
 print("Getting train-test split.")
-train_combos, test_combos = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
-train_combos = PoseLoaderBCOT.prepIDsForConstructor(train_combos)
-test_combos = PoseLoaderBCOT.prepIDsForConstructor(test_combos)
+all_combos = PoseLoaderBCOT.trainValidationTestByBody(test_ratio=0.2, random_seed=0)
+train_combos = PoseLoaderBCOT.prepIDsForConstructor(all_combos[0])
+val_combos = PoseLoaderBCOT.prepIDsForConstructor(all_combos[1])
+test_combos = PoseLoaderBCOT.prepIDsForConstructor(all_combos[2])
 
 #%%
 ################################################################################
@@ -62,7 +65,7 @@ for combo in combos:
     # all_rotation_mats[combo[:2]] = calculator.getRotationMatsGTNP(False)
 
 all_translations_concat = np.concatenate(
-    [all_translations[c[:2]] for c in combos if c[:2] in train_combos], axis=0
+    [all_translations[tc] for tc in train_combos], axis=0
 )
 # %%
 translation_scaler = StandardScaler()
@@ -102,19 +105,24 @@ train_translations_in, train_translations_out = rnnDataWindows(
 )
 train_translations_out = outputModeTransform(train_translations_in, train_translations_out)
 
+val_translations_in, val_translations_out = rnnDataWindows(
+    all_translations, val_combos, WIN_SIZE, lstm_skip, translation_scaler
+)
+val_translations_out = outputModeTransform(val_translations_in, val_translations_out)
+
+
 #%%
 ################################################################################
 # BUILDING THE NETWORK
 ################################################################################
 print("Building the NN.")
 
-lstm_model = keras.Sequential([
-    keras.layers.LSTM(50, return_sequences=True),
-    keras.layers.LSTM(50),
-    keras.layers.Dense(3)#num_classes, activation='sigmoid')
-])
+loss = poseLossVec3
+if MODE_IS_ROTATION:
+    loss = poseLossRotVec3CL2
 
-lstm_model.summary()
+lstm_model = rnnm.get_simple_lstm(loss, 3, 'adam', units=(512, 512, 512))
+
 
 # Log the loss in mm, rather than just scaled coordinates.
 lstm_logger = UnscaledDistanceLogger(
@@ -123,18 +131,20 @@ lstm_logger = UnscaledDistanceLogger(
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
 
-loss = poseLossVec3
-if MODE_IS_ROTATION:
-    loss = poseLossRotVec3CL2
-lstm_model.compile(optimizer='adam', loss=loss)#tf_loss_fn)
+
 #%%
 ################################################################################
 # TRAINING THE NETWORK
 ################################################################################
 
+early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+                                      restore_best_weights=True)
+plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+
 lstm_hist = lstm_model.fit(
-    train_translations_in, train_translations_out, epochs=32, 
-    callbacks=[lstm_logger]
+    train_translations_in, train_translations_out, epochs=100,
+    validation_data=(val_translations_in, val_translations_out),
+    callbacks=[lstm_logger, early, plateau]
 )
 
 

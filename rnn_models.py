@@ -27,15 +27,19 @@ def get_fcnn_rnn(loss, win_size: int, vec_dims: int, out_size: int = 3,
 
 
 
-def get_simple_lstm(loss, out_size = 3, optimizer = 'adam'):
-    model = keras.Sequential([
-        # keras.layers.LSTM(128, return_sequences=True),
-        keras.layers.LSTM(50, return_sequences=True),
-        keras.layers.LSTM(50),
-        keras.layers.Dense(out_size) #num_classes, activation='sigmoid')
-    ])
-
-    return _finishBuildingRNN(model, optimizer, loss)
+def get_simple_lstm(loss, out_size=3, optimizer='adam',
+                    units=(32, 32), dropout=0.1, noise=0.0):
+    layers = []  # win_size may be None
+    if noise > 0:
+        layers.append(keras.layers.GaussianNoise(noise))  # only active in training
+    for i, u in enumerate(units):
+        last = (i == len(units) - 1)
+        layers.append(keras.layers.LSTM(u, return_sequences=not last))
+        if dropout > 0:
+            layers.append(keras.layers.Dropout(dropout))
+    layers.append(keras.layers.Dense(out_size))
+    
+    return _finishBuildingRNN(keras.Sequential(layers), optimizer, loss)
 
 
 

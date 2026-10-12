@@ -32,9 +32,10 @@ APPLY_NOISE = False
 ONE_FRAME_PER_WINDOW: bool = True
 
 print("Getting train-test split.")
-bcot_train_combos, bcot_test_combos = gtc.PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
-train_combos = [c[:2] for c in bcot_train_combos]
-test_combos = [c[:2] for c in bcot_test_combos] # Get the unique part of each.
+all_combos = gtc.PoseLoaderBCOT.trainValidationTestByBody(test_ratio=0.2, random_seed=0)
+train_combos = gtc.PoseLoaderBCOT.prepIDsForConstructor(all_combos[0])
+val_combos = gtc.PoseLoaderBCOT.prepIDsForConstructor(all_combos[1])
+test_combos = gtc.PoseLoaderBCOT.prepIDsForConstructor(all_combos[2])
 
 #%%
 ################################################################################
@@ -75,6 +76,8 @@ train_jav_in: NDArray
 train_jav_out: NDArray
 test_jav_in: NDArray
 test_jav_out: NDArray
+val_jav_in: NDArray
+val_jav_out: NDArray
 
 if ONE_FRAME_PER_WINDOW:
     train_jav_in, train_jav_out = rnnDataWindows(
@@ -84,6 +87,11 @@ if ONE_FRAME_PER_WINDOW:
     )
     test_jav_in, test_jav_out = rnnDataWindows(
         jav_translations[jav_lstm_skip], test_combos, WIN_SIZE,
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        None, w2ls[jav_lstm_skip], True
+    )
+    val_jav_in, val_jav_out = rnnDataWindows(
+        jav_translations[jav_lstm_skip], val_combos, WIN_SIZE,
         0, # Always a window "skip" of 0 in this case because the frame is rotating...
         None, w2ls[jav_lstm_skip], True
     )
@@ -117,9 +125,11 @@ for skip in range(3):
 selected_scaler = jav_scalers_3[jav_lstm_skip]
 train_jav_in = scaleWindows(train_jav_in, selected_scaler)
 test_jav_in = scaleWindows(test_jav_in, selected_scaler)
+val_jav_in = scaleWindows(val_jav_in, selected_scaler)
 
 train_jav_out = selected_scaler.transform(train_jav_out)
 test_jav_out = selected_scaler.transform(test_jav_out)
+val_jav_out = selected_scaler.transform(val_jav_out)
 
 #%%
 ################################################################################
@@ -130,7 +140,7 @@ print("Building the NN.")
 
 input_win_len = WIN_SIZE - int(ONE_FRAME_PER_WINDOW)
 # jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
-jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam')
+jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam', units=(512, 512, 512))
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
@@ -144,9 +154,14 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
+early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+                                      restore_best_weights=True)
+plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+
 jav_lstm_hist = jav_lstm_model.fit(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=32,
-    callbacks=[jav_lstm_logger]
+    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=100,
+    validation_data=(val_jav_in, val_jav_out),
+    callbacks=[jav_lstm_logger, early, plateau]
 )
 
 #%%
