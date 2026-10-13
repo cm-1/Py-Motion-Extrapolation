@@ -70,7 +70,8 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
             if centre_subsets:
                 centre_ref = curr_in[-1]
                 curr_in = curr_in[:-1] - centre_ref
-                curr_out -= centre_ref
+                # Can't use -= in next line! It would edit combo_data values!
+                curr_out = curr_out - centre_ref
             data_in.append(curr_in)
             data_out.append(curr_out)
     data_in_np = np.array(data_in)
