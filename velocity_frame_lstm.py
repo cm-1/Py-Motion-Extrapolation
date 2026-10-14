@@ -80,22 +80,23 @@ test_jav_out: NDArray
 val_jav_in: NDArray
 val_jav_out: NDArray
 
+def getWindowsForVelLSTM(combo_subset, use_vel_frame: bool):
+    w2ls_param = None
+    centring_param = False
+    if use_vel_frame:
+        w2ls_param = w2ls[jav_lstm_skip]
+        centring_param = True
+    return rnnDataWindows(
+        jav_translations[jav_lstm_skip], combo_subset, WIN_SIZE,
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        None, w2ls_param, centring_param
+    )
+
 if ONE_FRAME_PER_WINDOW:
-    train_jav_in, train_jav_out = rnnDataWindows(
-        jav_translations[jav_lstm_skip], train_combos, WIN_SIZE,
-        0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        None, w2ls[jav_lstm_skip], True
-    )
-    test_jav_in, test_jav_out = rnnDataWindows(
-        jav_translations[jav_lstm_skip], test_combos, WIN_SIZE,
-        0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        None, w2ls[jav_lstm_skip], True
-    )
-    val_jav_in, val_jav_out = rnnDataWindows(
-        jav_translations[jav_lstm_skip], val_combos, WIN_SIZE,
-        0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        None, w2ls[jav_lstm_skip], True
-    )
+    train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, True)
+    test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, True)
+    val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, True)
+
 else:
     train_jav_in, train_jav_out = rnnDataWindows(
         all_jav[jav_lstm_skip], train_combos, WIN_SIZE, 
@@ -170,7 +171,7 @@ if USE_CONTEXT:
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], jav_scalers_3[jav_lstm_skip]
+    train_in, train_jav_out, jav_scalers_3[jav_lstm_skip]
 )
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
@@ -187,7 +188,7 @@ plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
 jav_lstm_hist = jav_lstm_model.fit(
     train_in, train_jav_out[:, -3:], epochs=100,
     validation_data=[val_in, val_jav_out],
-    callbacks=[early, plateau]
+    callbacks=[jav_lstm_logger, early, plateau]
 )
 
 #%%
