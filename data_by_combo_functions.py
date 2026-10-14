@@ -64,7 +64,7 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
             curr_in = combo_data[i:(i + window_size)]
             curr_out = combo_data[i + window_size]
             if world2local_frames is not None:
-                curr_frame = w2l_data[i + window_size - 1 - w2l_shift]
+                curr_frame = w2l_data[i + window_size - w2l_shift]
                 curr_in = curr_in @ curr_frame.transpose()
                 curr_out = curr_frame @ curr_out
             if centre_subsets:

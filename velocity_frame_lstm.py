@@ -22,6 +22,7 @@ from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 from data_by_combo_functions import rnnDataWindows, scaleWindows
 
 WIN_SIZE = 6
+USE_CONTEXT = False
 
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
@@ -131,6 +132,29 @@ train_jav_out = selected_scaler.transform(train_jav_out)
 test_jav_out = selected_scaler.transform(test_jav_out)
 val_jav_out = selected_scaler.transform(val_jav_out)
 
+
+w2l_trim = WIN_SIZE - 4
+t_trim = WIN_SIZE - 1
+curr_step_w2ls = w2ls[jav_lstm_skip]
+# curr_step_ts = jav_translations[jav_lstm_skip]
+def getContextData(combo_subset):
+    concat_w2ls = np.concatenate([curr_step_w2ls[c][w2l_trim:] for c in combo_subset])
+    concat_w2ls = concat_w2ls.reshape(-1, 9)
+    return concat_w2ls
+    # concat_origins = np.concatenate([curr_step_ts[c][t_trim:-1] for c in combo_subset])
+    # concat_origins = selected_scaler.transform(concat_origins)
+    # return np.concatenate((concat_w2ls, concat_origins), axis=-1)
+
+train_in = train_jav_in
+val_in = val_jav_in
+test_in = test_jav_in
+if USE_CONTEXT:
+    train_context = getContextData(train_combos)
+    val_context = getContextData(val_combos)
+    test_context = getContextData(test_combos)
+    train_in = (train_jav_in, train_context)
+    val_in = (val_jav_in, val_context)
+    test_in = (test_jav_in, test_context)
 #%%
 ################################################################################
 # BUILDING THE NETWORK
@@ -140,7 +164,9 @@ print("Building the NN.")
 
 input_win_len = WIN_SIZE - int(ONE_FRAME_PER_WINDOW)
 # jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
-jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam', units=(512, 512, 512))
+jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam')#, units=(512, 512, 512))
+if USE_CONTEXT:
+    jav_lstm_model = rnnm.get_frame_context_lstm(poseLossVec3, WIN_SIZE - 1, 9)
 
 # Log the loss in mm, rather than just scaled coordinates.
 jav_lstm_logger = UnscaledDistanceLogger(
@@ -159,9 +185,9 @@ early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
 plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
 
 jav_lstm_hist = jav_lstm_model.fit(
-    train_jav_in[..., -3:], train_jav_out[:, -3:], epochs=100,
-    validation_data=(val_jav_in, val_jav_out),
-    callbacks=[jav_lstm_logger, early, plateau]
+    train_in, train_jav_out[:, -3:], epochs=100,
+    validation_data=[val_in, val_jav_out],
+    callbacks=[early, plateau]
 )
 
 #%%
@@ -171,7 +197,7 @@ jav_lstm_hist = jav_lstm_model.fit(
 
 
 
-jav_lstm_test_pred = jav_lstm_model.predict(test_jav_in[..., -3:])
+jav_lstm_test_pred = jav_lstm_model.predict(test_in)
 
 def getErrsLSTM(scaler, unscaled_preds, scaled_gt):
     scaled_preds = scaler.inverse_transform(unscaled_preds)
