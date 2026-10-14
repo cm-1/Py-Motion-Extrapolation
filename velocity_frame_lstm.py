@@ -22,7 +22,9 @@ from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 from data_by_combo_functions import rnnDataWindows, scaleWindows
 
 WIN_SIZE = 6
-USE_CONTEXT = False
+USE_CONTEXT = True
+USE_JAV15_OUT = True
+USE_VEL_IN = True
 
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
@@ -91,23 +93,24 @@ def getWindowsForVelLSTM(combo_subset, use_vel_frame: bool):
         0, # Always a window "skip" of 0 in this case because the frame is rotating...
         None, w2ls_param, centring_param
     )
+def getWindowsJAV(combo_subset, window_size = WIN_SIZE):
+    return rnnDataWindows(
+        all_jav[jav_lstm_skip], combo_subset, window_size, 
+        0, # Always a window "skip" of 0 in this case because the frame is rotating...
+        None
+    )
 
 if ONE_FRAME_PER_WINDOW:
-    train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, True)
-    test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, True)
-    val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, True)
-
+    train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, USE_VEL_IN)
+    test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, USE_VEL_IN)
+    val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, USE_VEL_IN)
+    if USE_JAV15_OUT:
+        _, train_jav_out = getWindowsJAV(train_combos, 2)
+        _, test_jav_out = getWindowsJAV(test_combos, 2)
+        _, val_jav_out = getWindowsJAV(val_combos, 2)
 else:
-    train_jav_in, train_jav_out = rnnDataWindows(
-        all_jav[jav_lstm_skip], train_combos, WIN_SIZE, 
-        0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        None
-    )
-    test_jav_in, test_jav_out = rnnDataWindows(
-        all_jav[jav_lstm_skip], test_combos, WIN_SIZE, 
-        0, # Always a window "skip" of 0 in this case because the frame is rotating...
-        None
-    )
+    train_jav_in, train_jav_out = getWindowsJAV(train_combos)
+    test_jav_in, test_jav_out = getWindowsJAV(test_combos)
 #%%
 ################################################################################
 # NORMALIZING THE DATA
@@ -122,16 +125,18 @@ for skip in range(3):
     jav_scalers_3[skip].fit(all_train_vec3s)
     # Ensure this scaler matches the other one.
     jav_scalers_3[skip].scale_[-3:] = _temp_scaler.scale_ #10 * np.max(jav_scalers_3[skip].scale_) #jav_scalers_3[skip].scale_[-1]
-    jav_scalers_3[skip].mean_[-3:] = 0.0
+    if USE_VEL_IN:
+        jav_scalers_3[skip].mean_[-3:] = 0.0
 
 selected_scaler = jav_scalers_3[jav_lstm_skip]
 train_jav_in = scaleWindows(train_jav_in, selected_scaler)
 test_jav_in = scaleWindows(test_jav_in, selected_scaler)
 val_jav_in = scaleWindows(val_jav_in, selected_scaler)
 
-train_jav_out = selected_scaler.transform(train_jav_out)
-test_jav_out = selected_scaler.transform(test_jav_out)
-val_jav_out = selected_scaler.transform(val_jav_out)
+if not USE_JAV15_OUT:
+    train_jav_out = selected_scaler.transform(train_jav_out)
+    test_jav_out = selected_scaler.transform(test_jav_out)
+    val_jav_out = selected_scaler.transform(val_jav_out)
 
 
 w2l_trim = WIN_SIZE - 4
@@ -162,16 +167,22 @@ if USE_CONTEXT:
 ################################################################################
 print("Building the NN.")
 
-
-input_win_len = WIN_SIZE - int(ONE_FRAME_PER_WINDOW)
+out_dims = 12 if USE_JAV15_OUT else 3
+loss_to_use = poseLossJAV if USE_JAV15_OUT else poseLossVec3
+input_win_len = WIN_SIZE
+if USE_VEL_IN:
+    input_win_len = WIN_SIZE - 1
 # jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
-jav_lstm_model = rnnm.get_simple_lstm(poseLossVec3, 3, 'adam')#, units=(512, 512, 512))
+jav_lstm_model = rnnm.get_simple_lstm(loss_to_use, out_dims, 'adam')#, units=(512, 512, 512))
 if USE_CONTEXT:
-    jav_lstm_model = rnnm.get_frame_context_lstm(poseLossVec3, WIN_SIZE - 1, 9)
+    jav_lstm_model = rnnm.get_frame_context_lstm(
+        loss_to_use, input_win_len, 9, out_size=out_dims
+    )
 
 # Log the loss in mm, rather than just scaled coordinates.
+logger_scaler = None if USE_JAV15_OUT else jav_scalers_3[jav_lstm_skip]
 jav_lstm_logger = UnscaledDistanceLogger(
-    train_in, train_jav_out, jav_scalers_3[jav_lstm_skip]
+    train_in, train_jav_out, logger_scaler, loss_func=loss_to_use
 )
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
@@ -186,7 +197,7 @@ early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
 plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
 
 jav_lstm_hist = jav_lstm_model.fit(
-    train_in, train_jav_out[:, -3:], epochs=100,
+    train_in, train_jav_out, epochs=100,
     validation_data=[val_in, val_jav_out],
     callbacks=[jav_lstm_logger, early, plateau]
 )
@@ -201,17 +212,27 @@ jav_lstm_hist = jav_lstm_model.fit(
 jav_lstm_test_pred = jav_lstm_model.predict(test_in)
 
 def getErrsLSTM(scaler, unscaled_preds, scaled_gt):
-    scaled_preds = scaler.inverse_transform(unscaled_preds)
-    return np.linalg.norm(scaled_preds - scaled_gt, axis=-1)
+
+    scaled_preds = unscaled_preds
+    if not USE_JAV15_OUT:
+        scaled_preds = scaler.inverse_transform(unscaled_preds)
+
+    return loss_to_use(scaled_gt, scaled_preds)
 
 # Transform the coordinates back into non-normalized form to get the errors
 # in millimeters.
-jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
-    test_jav_out[:, -3:]
-)
+jav_scaled_lstm_gt_test = test_jav_out
+if not USE_JAV15_OUT:
+    jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
+        test_jav_out
+    )
 
-scaler_at_0 = -3 * jav_scalers_3[2].mean_ / jav_scalers_3[2].scale_
-const_acc_pred = scaler_at_0 -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
+const_acc_pred = np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
+if not USE_JAV15_OUT:
+    scaler_at_0 = -3 * jav_scalers_3[2].mean_ / jav_scalers_3[2].scale_
+    const_acc_pred = scaler_at_0 -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
+    if not USE_VEL_IN:
+        const_acc_pred = 3 * test_jav_in[:, -1] - 3 * test_jav_in[:, -2] + test_jav_in[:, -3]
 
 const_acc_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], const_acc_pred, jav_scaled_lstm_gt_test
@@ -223,8 +244,8 @@ const_acc_errs = getErrsLSTM(
 jav_lstm_test_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], jav_lstm_test_pred, jav_scaled_lstm_gt_test
 )
-print("\n\nAcc score (millimeters) on test data:", const_acc_errs.mean())
-print("\n\nJAV LSTM score (millimeters) on test data:", jav_lstm_test_errs.mean())
+print("\n\nAcc score (millimeters) on test data:", np.mean(const_acc_errs))
+print("\n\nJAV LSTM score (millimeters) on test data:", np.mean(jav_lstm_test_errs))
 print("Above score is for skip{} data.".format(jav_lstm_skip))
 #%%
 

@@ -41,8 +41,9 @@ def get_simple_lstm(loss, out_size=3, optimizer='adam',
     
     return _finishBuildingRNN(keras.Sequential(layers), optimizer, loss)
 
-def get_frame_context_lstm(loss, win_size, ctx_dims, units=(50, 50), optimizer='adam'):
-    seq_in = keras.layers.Input((win_size, 3), name="local_window")
+def get_frame_context_lstm(loss, win_size, ctx_dims, out_size = 3, in_dims = 3,
+                           units=(50, 50), optimizer='adam'):
+    seq_in = keras.layers.Input((win_size, in_dims), name="local_window")
     ctx_in = keras.layers.Input((ctx_dims,), name="global_ctx")
 
     x = seq_in
@@ -52,7 +53,7 @@ def get_frame_context_lstm(loss, win_size, ctx_dims, units=(50, 50), optimizer='
     c = keras.layers.Dense(16, activation='relu')(ctx_in)   # small, so it can't dominate
     h = keras.layers.Concatenate()([x, c])
     h = keras.layers.Dense(32, activation='relu')(h)         # lets motion and context interact
-    out = keras.layers.Dense(3)(h)
+    out = keras.layers.Dense(out_size)(h)
 
     model = keras.Model([seq_in, ctx_in], out)
     return _finishBuildingRNN(model, optimizer, loss)

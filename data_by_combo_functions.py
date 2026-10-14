@@ -104,24 +104,40 @@ class UnscaledDistanceLogger(tf.keras.callbacks.Callback):
 
     Class originally written by ChatGPT. Verified/modified/commented manually.
     '''
-    def __init__(self, X_val_scaled, y_val_scaled, scaler, y_val_unscaled = None):
+    def __init__(self, X_val_scaled, y_val_scaled, scaler,
+                 y_val_unscaled = None, loss_func = None, scale_preds = True):
         super().__init__()
         self.X_val_scaled = X_val_scaled
         self.y_val_scaled = y_val_scaled
         self.scaler = scaler
         self.y_val_unscaled = y_val_unscaled
+        self.loss_func = loss_func
         if y_val_unscaled is None:
-            self.y_val_unscaled = self.scaler.inverse_transform(self.y_val_scaled)
+            self.y_val_unscaled = self.applyScalerInv(self.y_val_scaled)
         self.mean_distances = []  # Store distances for plotting
+
+    def applyScalerInv(self, data):
+        data_unscaled = data
+        if self.scaler is not None and not isinstance(self.scaler, float):
+            data_unscaled = self.scaler.inverse_transform(data)
+        elif self.scaler is not None and isinstance(self.scaler, float):
+            data_unscaled = self.scaler * data
+        return data_unscaled
 
     def on_epoch_end(self, epoch, logs=None):
         # Use a large batch size so prediction goes faster.
         y_pred_scaled = self.model.predict(
             self.X_val_scaled, verbose=0, batch_size=1024
         )
-        y_pred_unscaled = self.scaler.inverse_transform(y_pred_scaled)
+        y_pred_unscaled = self.applyScalerInv(y_pred_scaled)
+
+        mean_distance = 0.0
+        distances = np.empty(0)
+        if self.loss_func is None:
+            distances = np.linalg.norm(y_pred_unscaled - self.y_val_unscaled, axis=-1)
+        else:
+            distances = self.loss_func(self.y_val_unscaled, y_pred_unscaled)
         
-        distances = np.linalg.norm(y_pred_unscaled - self.y_val_unscaled, axis=-1)
         mean_distance = np.mean(distances)
         
         self.mean_distances.append(mean_distance)
