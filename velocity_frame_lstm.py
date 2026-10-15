@@ -21,17 +21,24 @@ from motiontools.posefeatures import JAV # Enum
 from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 from data_by_combo_functions import rnnDataWindows, scaleWindows
 
+# Input configuration:
 WIN_SIZE = 6
-USE_CONTEXT = True
-USE_JAV15_OUT = True
-USE_VEL_IN = True
+USE_CONTEXT = False
+USE_VEL_IN = False
 
+# Output configuration:
+USE_JAV15_OUT = False
+
+# General configuration:
 # How many frames to skip when going over the pose dataset; skipping more frames
 # simulates larger motions or smaller fps. Typical values are 0, 1, 2.
 DATASET_SKIP_FRAMES = 2
 
 APPLY_NOISE = False
 
+# This variable was controlling whether the 15-column JAV was used as input.
+# However, if re-enabling, would have to reduce window size so that total num
+# of train/test samples is consistent. Or pad it somehow...
 ONE_FRAME_PER_WINDOW: bool = True
 
 print("Getting train-test split.")
@@ -101,6 +108,7 @@ def getWindowsJAV(combo_subset, window_size = WIN_SIZE):
     )
 
 if ONE_FRAME_PER_WINDOW:
+    train_velframe_in, _ = getWindowsForVelLSTM(train_combos, True)
     train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, USE_VEL_IN)
     test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, USE_VEL_IN)
     val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, USE_VEL_IN)
@@ -118,8 +126,8 @@ else:
 jav_scalers_3 = [StandardScaler() for _ in range(3)]# (feature_range=(0,1)) for _ in range(3)]
 
 for skip in range(3):
+    _temp_scaler = StandardScaler().fit(train_velframe_in.reshape(-1, 1))
     all_train_vec3s = train_jav_in.reshape(-1, 3)
-    _temp_scaler = StandardScaler().fit(all_train_vec3s.reshape(-1, 1))
 
     # Scaler for just the last three columns, the "displacement" ones.
     jav_scalers_3[skip].fit(all_train_vec3s)
@@ -138,6 +146,9 @@ if not USE_JAV15_OUT:
     test_jav_out = selected_scaler.transform(test_jav_out)
     val_jav_out = selected_scaler.transform(val_jav_out)
 
+    train_jav_out -= train_jav_in[:, -1]
+    test_jav_out -= test_jav_in[:, -1]
+    val_jav_out -= val_jav_in[:, -1]
 
 w2l_trim = WIN_SIZE - 4
 t_trim = WIN_SIZE - 1
@@ -173,7 +184,7 @@ input_win_len = WIN_SIZE
 if USE_VEL_IN:
     input_win_len = WIN_SIZE - 1
 # jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
-jav_lstm_model = rnnm.get_simple_lstm(loss_to_use, out_dims, 'adam')#, units=(512, 512, 512))
+jav_lstm_model = rnnm.get_simple_lstm(loss_to_use, out_dims, 'adam', units=(100,100))#, units=(512, 512, 512))
 if USE_CONTEXT:
     jav_lstm_model = rnnm.get_frame_context_lstm(
         loss_to_use, input_win_len, 9, out_size=out_dims
@@ -232,7 +243,7 @@ if not USE_JAV15_OUT:
     scaler_at_0 = -3 * jav_scalers_3[2].mean_ / jav_scalers_3[2].scale_
     const_acc_pred = scaler_at_0 -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
     if not USE_VEL_IN:
-        const_acc_pred = 3 * test_jav_in[:, -1] - 3 * test_jav_in[:, -2] + test_jav_in[:, -3]
+        const_acc_pred = 2 * test_jav_in[:, -1] - 3 * test_jav_in[:, -2] + test_jav_in[:, -3]
 
 const_acc_errs = getErrsLSTM(
     jav_scalers_3[jav_lstm_skip], const_acc_pred, jav_scaled_lstm_gt_test
