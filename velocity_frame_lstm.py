@@ -7,7 +7,7 @@ import enum
 import numpy as np
 from numpy.typing import NDArray
 
-# We'll use a MinMax scaler to "normalize" the data, as per a tutorial.
+# StandardScaler seems to perform better than others, like MinMax.
 from sklearn.preprocessing import StandardScaler
 
 import rnn_models as rnnm
@@ -78,12 +78,6 @@ all_jav, w2ls, jav_translations = dataForCombosJAV(
     loaders, (JAV.VELOCITY, JAV.ACCELERATION, JAV.JERK), APPLY_NOISE, True, True
 )
 
-# # Ensure no padding when using windows of six:
-# EDIT: No longer needed, since we're not padding dataForCombosJAV output ATM.
-# for skip in range(3):
-#     for k, v in jav_translations[skip].items():
-#         jav_translations[skip][k] = v[2:]
-
 #%% 
 ################################################################################
 # CALCULATING THE DATA WINDOWS
@@ -118,20 +112,21 @@ def getWindowsJAV(combo_subset, window_size = WIN_SIZE):
         None
     )
 
-if ONE_FRAME_PER_WINDOW:
-    train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, USE_VEL_IN)
-    test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, USE_VEL_IN)
-    val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, USE_VEL_IN)
-    train_velframe_in = train_jav_in
-    if not USE_VEL_IN and FORCE_VEL_SCALING:
-        train_velframe_in, _ = getWindowsForVelLSTM(train_combos, True)
-    if CHOSEN_OUT == LSTM_OUT_MODE.JAV15:
-        _, train_jav_out = getWindowsJAV(train_combos, 2)
-        _, test_jav_out = getWindowsJAV(test_combos, 2)
-        _, val_jav_out = getWindowsJAV(val_combos, 2)
-else:
-    train_jav_in, train_jav_out = getWindowsJAV(train_combos)
-    test_jav_in, test_jav_out = getWindowsJAV(test_combos)
+if not ONE_FRAME_PER_WINDOW:
+    # TODO: try an architecture that uses JAV vec15s as input. However, a window
+    # size of W would need either >w prev positions known or some padding....
+    raise NotImplementedError("ONE_FRAME_PER_WINDOW=False is not implemented yet.")
+
+train_jav_in, train_jav_out = getWindowsForVelLSTM(train_combos, USE_VEL_IN)
+test_jav_in, test_jav_out = getWindowsForVelLSTM(test_combos, USE_VEL_IN)
+val_jav_in, val_jav_out = getWindowsForVelLSTM(val_combos, USE_VEL_IN)
+train_velframe_in = train_jav_in
+if not USE_VEL_IN and FORCE_VEL_SCALING:
+    train_velframe_in, _ = getWindowsForVelLSTM(train_combos, True)
+if CHOSEN_OUT == LSTM_OUT_MODE.JAV15:
+    _, train_jav_out = getWindowsJAV(train_combos, 2)
+    _, test_jav_out = getWindowsJAV(test_combos, 2)
+    _, val_jav_out = getWindowsJAV(val_combos, 2)
 #%%
 ################################################################################
 # NORMALIZING THE DATA
@@ -195,17 +190,17 @@ if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
         test_jav_out -= test_jav_in[:, -1]
         val_jav_out -= val_jav_in[:, -1]
 
+# The context must use the same frame as rnnDataWindows applies to each window,
+# i.e. w2ls index (i + WIN_SIZE - shift) for window i, where shift is the number
+# of leading frames that w2ls lacks relative to the translations. The "4" here
+# encodes that shift, so the first window's frame is w2ls[WIN_SIZE - 4].
+# If the shift ever changes, the length assertion below will fail.
 w2l_trim = WIN_SIZE - 4
-t_trim = WIN_SIZE - 1
 curr_step_w2ls = w2ls[jav_lstm_skip]
-# curr_step_ts = jav_translations[jav_lstm_skip]
 def getContextData(combo_subset):
     concat_w2ls = np.concatenate([curr_step_w2ls[c][w2l_trim:] for c in combo_subset])
     concat_w2ls = concat_w2ls.reshape(-1, 9)
     return concat_w2ls
-    # concat_origins = np.concatenate([curr_step_ts[c][t_trim:-1] for c in combo_subset])
-    # concat_origins = selected_scaler.transform(concat_origins)
-    # return np.concatenate((concat_w2ls, concat_origins), axis=-1)
 
 train_in = train_jav_in
 val_in = val_jav_in
@@ -214,6 +209,9 @@ if USE_CONTEXT:
     train_context = getContextData(train_combos)
     val_context = getContextData(val_combos)
     test_context = getContextData(test_combos)
+    assert len(train_context) == len(train_jav_out)
+    assert len(val_context) == len(val_jav_out)
+    assert len(test_context) == len(test_jav_out)
     train_in = (train_jav_in, train_context)
     val_in = (val_jav_in, val_context)
     test_in = (test_jav_in, test_context)
@@ -229,11 +227,14 @@ loss_to_use = poseLossJAV if _mode_is_jav15 else poseLossVec3
 input_win_len = WIN_SIZE
 if USE_VEL_IN:
     input_win_len = WIN_SIZE - 1
-# jav_lstm_model = rnnm.get_fcnn_rnn(input_win_len, 3, 3, None)
-jav_lstm_model = rnnm.get_simple_lstm(loss_to_use, out_dims, 'adam', units=(100,100))#, units=(512, 512, 512))
+LSTM_UNITS = (100, 100)
 if USE_CONTEXT:
     jav_lstm_model = rnnm.get_frame_context_lstm(
-        loss_to_use, input_win_len, 9, out_size=out_dims
+        loss_to_use, input_win_len, 9, units=LSTM_UNITS, out_size=out_dims
+    )
+else:
+    jav_lstm_model = rnnm.get_simple_lstm(
+        loss_to_use, out_dims, 'adam', units=LSTM_UNITS
     )
 
 # Log the loss in mm, rather than just scaled coordinates.
@@ -293,6 +294,8 @@ if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
     else:
         scaler_at_0 = -3 * scaler_obj.mean_ / scaler_obj.scale_
         const_acc_pred = scaler_at_0 -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
+        if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
+            const_acc_pred = const_acc_pred - test_jav_in[:, -1]
 
 const_acc_errs = getErrsLSTM(
     scaler_obj, const_acc_pred, jav_scaled_lstm_gt_test
