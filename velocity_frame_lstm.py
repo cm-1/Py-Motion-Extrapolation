@@ -159,13 +159,13 @@ def scalerForWindows(translation_groups, dim):
     return ret
 
 ts_vel = [train_velframe_in[:, -1], train_velframe_in[0, :-1]]
-ts_world: typing.List[NDArray] = []
+ts_world = [jav_translations[0][c] for c in train_combos]
 # all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 # all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
-for combo in train_combos:
-    calculator = gtc.PoseLoaderBCOT(combo[0], combo[1], 0)
-    ts_world.append(calculator.getTranslationsGTNP())
-
+# for combo in train_combos:
+#     calculator = gtc.PoseLoaderBCOT(combo[0], combo[1], 0)
+#     ts_world.append(calculator.getTranslationsGTNP())
+#%%
 ts_main = ts_vel if USE_VEL_IN else ts_world
 ts_mag = ts_vel if FORCE_VEL_SCALING else ts_main
 
