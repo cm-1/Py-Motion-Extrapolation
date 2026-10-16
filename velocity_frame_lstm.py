@@ -1,6 +1,7 @@
 ################################################################################
 # Velocity-Aligned-Frame Networks
 ################################################################################
+import typing
 import enum
 
 import numpy as np
@@ -135,31 +136,59 @@ else:
 ################################################################################
 # NORMALIZING THE DATA
 ################################################################################
-jav_scalers_3 = [StandardScaler() for _ in range(3)]# (feature_range=(0,1)) for _ in range(3)]
 
-for skip in range(3):
-    _data_for_mag = train_jav_in
-    if FORCE_VEL_SCALING:
-        _data_for_mag = train_velframe_in
-    _temp_mag_scaler = StandardScaler().fit(_data_for_mag.reshape(-1, 1))
-    all_train_vec3s = train_jav_in.reshape(-1, 3)
+# For world-frame translations, would like to just use *all* translations to
+# set scaler so that scaler is same regardless of skip-sampling.
+# For velocity frame, this is not possible. Instead, would like to get all the
+# values that the neural network will see from the training data.
+# To avoid duplicates, this would be the end of every window plus... nvm, I
+# realized just adding the front of window [0] won't cut it because this won't
+# include the first frames for any video but the first, nor will it include the
+# final "out" frames... depending on how the paper goes, this is something I'll
+# need to fix eventually but there's no point spending time to fix it in advance
+# now, since it will barely change the scaling and these results may not even
+# make it into the paper. The most memory-efficient fix that I can think of is
+# to have the RNN window function return the indices of windows where new videos
+# start and then use those indices to get necessary slices.
 
-    # Scaler for just the last three columns, the "displacement" ones.
-    jav_scalers_3[skip].fit(all_train_vec3s)
-    # Ensure this scaler matches the other one.
-    jav_scalers_3[skip].scale_[-3:] = _temp_mag_scaler.scale_ #10 * np.max(jav_scalers_3[skip].scale_) #jav_scalers_3[skip].scale_[-1]
-    if USE_VEL_IN:
-        jav_scalers_3[skip].mean_[-3:] = 0.0
 
-selected_scaler = jav_scalers_3[jav_lstm_skip]
-train_jav_in = scaleWindows(train_jav_in, selected_scaler)
-test_jav_in = scaleWindows(test_jav_in, selected_scaler)
-val_jav_in = scaleWindows(val_jav_in, selected_scaler)
+# Rather than concatenate all data for scaling into a numpy array of the
+# required (n, d) shape, it's more memory-efficient to just pass in a list
+# of old arrays or slices, and then use partial_fit for those. 
+def scalerForWindows(translation_groups, dim):
+    ret = StandardScaler()
+    new_shape = (-1, dim)
+    ret.fit(np.reshape(translation_groups[0], new_shape))
+    for tg in translation_groups[1:]:
+        ret.partial_fit(np.reshape(tg, new_shape))
+    return ret
+
+ts_vel = [train_velframe_in[:, -1], train_velframe_in[0, :-1]]
+ts_world: typing.List[NDArray] = []
+# all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+# all_rotation_mats: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
+for combo in train_combos:
+    calculator = gtc.PoseLoaderBCOT(combo[0], combo[1], 0)
+    ts_world.append(calculator.getTranslationsGTNP())
+
+ts_main = ts_vel if USE_VEL_IN else ts_world
+ts_mag = ts_vel if FORCE_VEL_SCALING else ts_main
+
+temp_mag_scaler = scalerForWindows(ts_mag, dim=1)
+scaler_obj = scalerForWindows(ts_main, dim=3)
+
+scaler_obj.scale_[-3:] = temp_mag_scaler.scale_
+if USE_VEL_IN:
+    scaler_obj.mean_[-3:] = 0.0
+
+train_jav_in = scaleWindows(train_jav_in, scaler_obj)
+test_jav_in = scaleWindows(test_jav_in, scaler_obj)
+val_jav_in = scaleWindows(val_jav_in, scaler_obj)
 
 if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
-    train_jav_out = selected_scaler.transform(train_jav_out)
-    test_jav_out = selected_scaler.transform(test_jav_out)
-    val_jav_out = selected_scaler.transform(val_jav_out)
+    train_jav_out = scaler_obj.transform(train_jav_out)
+    test_jav_out = scaler_obj.transform(test_jav_out)
+    val_jav_out = scaler_obj.transform(val_jav_out)
 
     if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
         train_jav_out -= train_jav_in[:, -1]
@@ -208,7 +237,7 @@ if USE_CONTEXT:
     )
 
 # Log the loss in mm, rather than just scaled coordinates.
-logger_scaler = None if _mode_is_jav15 else jav_scalers_3[jav_lstm_skip]
+logger_scaler = None if _mode_is_jav15 else scaler_obj
 jav_lstm_logger = UnscaledDistanceLogger(
     train_in, train_jav_out, logger_scaler, loss_func=loss_to_use
 )
@@ -251,7 +280,7 @@ def getErrsLSTM(scaler, unscaled_preds, scaled_gt):
 # in millimeters.
 jav_scaled_lstm_gt_test = test_jav_out
 if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
-    jav_scaled_lstm_gt_test = jav_scalers_3[jav_lstm_skip].inverse_transform(
+    jav_scaled_lstm_gt_test = scaler_obj.inverse_transform(
         test_jav_out
     )
 
@@ -262,18 +291,18 @@ if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
         if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
             const_acc_pred = const_acc_pred - test_jav_in[:, -1]
     else:
-        scaler_at_0 = -3 * jav_scalers_3[2].mean_ / jav_scalers_3[2].scale_
+        scaler_at_0 = -3 * scaler_obj.mean_ / scaler_obj.scale_
         const_acc_pred = scaler_at_0 -3 * test_jav_in[:, -1, -3:] + test_jav_in[:, -2, -3:]
 
 const_acc_errs = getErrsLSTM(
-    jav_scalers_3[jav_lstm_skip], const_acc_pred, jav_scaled_lstm_gt_test
+    scaler_obj, const_acc_pred, jav_scaled_lstm_gt_test
 )
 
-# jav_scaled_lstm_gt_train = jav_scalers_3[jav_lstm_skip].inverse_transform(
+# jav_scaled_lstm_gt_train = scaler_obj.inverse_transform(
 #     train_jav_out[:, -3:]
 # )
 jav_lstm_test_errs = getErrsLSTM(
-    jav_scalers_3[jav_lstm_skip], jav_lstm_test_pred, jav_scaled_lstm_gt_test
+    scaler_obj, jav_lstm_test_pred, jav_scaled_lstm_gt_test
 )
 print("\n\nAcc score (millimeters) on test data:", np.mean(const_acc_errs))
 print("\n\nJAV LSTM score (millimeters) on test data:", np.mean(jav_lstm_test_errs))
