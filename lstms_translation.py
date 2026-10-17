@@ -13,6 +13,9 @@ from sklearn.preprocessing import StandardScaler
 import rnn_models as rnnm
 
 from nn_utilities.nn_losses import *
+from nn_utilities.lstm_io import (
+    saveRun, loadRun, findRun, makeRunDir, comboHash
+)
 
 # Local code imports ===========================================================
 # For reading the dataset into numpy arrays:
@@ -51,6 +54,18 @@ FORCE_VEL_SCALING = True
 DATASET_SKIP_FRAMES = 2
 
 APPLY_NOISE = False
+
+# Saving/loading trained models (see nn_utilities/lstm_io.py). Newly trained
+# models are saved under SAVE_RUNS_DIR (None disables saving and loading). If
+# LOAD_SAVED_RUN is True and a saved run there matches the current settings,
+# it's loaded instead of training. If several match, the newest is used (or the
+# newest one trained with SEED, if SEED isn't None).
+LOAD_SAVED_RUN = True
+SAVE_RUNS_DIR = "results/lstms"
+
+# Random seed for model initialization and training. None picks a new seed each
+# run; it's printed, included in the run's name, and saved with the run.
+SEED = None
 
 print("Getting train-test split.")
 all_combos = gtc.PoseLoaderBCOT.trainValidationTestByBody(test_ratio=0.2, random_seed=0)
@@ -228,14 +243,57 @@ input_win_len = WIN_SIZE
 if USE_VEL_IN:
     input_win_len = WIN_SIZE - 1
 LSTM_UNITS = (100, 100)
-if USE_CONTEXT:
-    jav_lstm_model = rnnm.get_frame_context_lstm(
-        loss_to_use, input_win_len, 9, units=LSTM_UNITS, out_size=out_dims
-    )
+
+# Settings that define the data and model. Saved with each run and checked when
+# loading one. (The random seed is recorded with the run but not checked.)
+run_meta = {
+    "script": "lstms_translation",
+    "win_size": WIN_SIZE,
+    "skip": DATASET_SKIP_FRAMES,
+    "use_vel_in": USE_VEL_IN,
+    "use_context": USE_CONTEXT,
+    "out_mode": CHOSEN_OUT.name,
+    "force_vel_scaling": FORCE_VEL_SCALING,
+    "apply_noise": APPLY_NOISE,
+    "lstm_units": list(LSTM_UNITS),
+    # Hashes of the video IDs in each split, to catch changes to the splitting.
+    "train_split": comboHash(train_combos),
+    "val_split": comboHash(val_combos),
+    "test_split": comboHash(test_combos),
+}
+# Scaler parameters; also checked when loading a run.
+run_arrays = {"scaler_mean": scaler_obj.mean_, "scaler_scale": scaler_obj.scale_}
+
+loaded_run_dir = None
+if LOAD_SAVED_RUN and SAVE_RUNS_DIR:
+    loaded_run_dir = findRun(SAVE_RUNS_DIR, run_meta, run_arrays, seed=SEED)
+    if loaded_run_dir is None:
+        print("No saved run matches the current settings; training a new model.")
+
+if loaded_run_dir:
+    jav_lstm_model = loadRun(loaded_run_dir, run_meta, run_arrays)
 else:
-    jav_lstm_model = rnnm.get_simple_lstm(
-        loss_to_use, out_dims, 'adam', units=LSTM_UNITS
+    if SEED is None:
+        SEED = int(np.random.default_rng().integers(2**31))
+    keras.utils.set_random_seed(SEED)
+    print("Random seed:", SEED)
+
+    _frame_str = "vel" if USE_VEL_IN else "world"
+    _ctx_str = "_ctx" if USE_CONTEXT else ""
+    _units_str = "x".join(str(u) for u in LSTM_UNITS)
+    run_tag = "trans_{}in_skip{}_{}{}_u{}_s{}".format(
+        _frame_str, DATASET_SKIP_FRAMES, CHOSEN_OUT.name.lower(), _ctx_str,
+        _units_str, SEED
     )
+
+    if USE_CONTEXT:
+        jav_lstm_model = rnnm.get_frame_context_lstm(
+            loss_to_use, input_win_len, 9, units=LSTM_UNITS, out_size=out_dims
+        )
+    else:
+        jav_lstm_model = rnnm.get_simple_lstm(
+            loss_to_use, out_dims, 'adam', units=LSTM_UNITS
+        )
 
 # Log the loss in mm, rather than just scaled coordinates.
 logger_scaler = None if _mode_is_jav15 else scaler_obj
@@ -250,15 +308,21 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
-early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
-                                      restore_best_weights=True)
-plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+if not loaded_run_dir:
+    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+                                          restore_best_weights=True)
+    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
 
-jav_lstm_hist = jav_lstm_model.fit(
-    train_in, train_jav_out, epochs=100,
-    validation_data=[val_in, val_jav_out],
-    callbacks=[jav_lstm_logger, early, plateau]
-)
+    jav_lstm_hist = jav_lstm_model.fit(
+        train_in, train_jav_out, epochs=100,
+        validation_data=[val_in, val_jav_out],
+        callbacks=[jav_lstm_logger, early, plateau]
+    )
+    if SAVE_RUNS_DIR:
+        saveRun(
+            makeRunDir(SAVE_RUNS_DIR, run_tag), jav_lstm_model, run_meta,
+            run_arrays, info={"seed": SEED}
+        )
 
 #%%
 ################################################################################
@@ -317,12 +381,13 @@ print("Above score is for skip{} data.".format(jav_lstm_skip))
 ################################################################################
 import matplotlib.pyplot as plt
 
-plt.plot(jav_lstm_logger.mean_distances)
+if not loaded_run_dir: # No training curve when a saved model was loaded.
+    plt.plot(jav_lstm_logger.mean_distances)
 
-plt.xlabel("Epoch")
-plt.ylabel("MAE (mm)")
-plt.title("Loss for skip{} dataset train".format(jav_lstm_skip))
-plt.grid(True)
-plt.show()
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE (mm)")
+    plt.title("Loss for skip{} dataset train".format(jav_lstm_skip))
+    plt.grid(True)
+    plt.show()
 
 print("Done program.")

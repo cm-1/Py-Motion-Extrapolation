@@ -22,6 +22,9 @@ from data_by_combo_functions import UnscaledDistanceLogger # Custom callback
 import rnn_models as rnnm
 
 from nn_utilities.nn_losses import poseLossRotVec3CL, poseLossRotVec3CL2, poseLossRotVec3NP
+from nn_utilities.lstm_io import (
+    saveRun, loadRun, findRun, makeRunDir, comboHash
+)
 import posemath as pm
 
 WIN_SIZE = 6
@@ -31,6 +34,18 @@ WIN_SIZE = 6
 DATASET_SKIP_FRAMES = 2
 
 USE_RESIDUAL = True
+
+# Saving/loading trained models (see nn_utilities/lstm_io.py). Newly trained
+# models are saved under SAVE_RUNS_DIR (None disables saving and loading). If
+# LOAD_SAVED_RUN is True and a saved run there matches the current settings,
+# it's loaded instead of training. If several match, the newest is used (or the
+# newest one trained with SEED, if SEED isn't None).
+LOAD_SAVED_RUN = False
+SAVE_RUNS_DIR = "results/lstms"
+
+# Random seed for model initialization and training. None picks a new seed each
+# run; it's printed, included in the run's name, and saved with the run.
+SEED = None
 
 combos = PoseLoaderBCOT.getAllIDs()
 
@@ -107,7 +122,47 @@ print("Building the NN.")
 
 loss = poseLossRotVec3CL2
 
-lstm_model = rnnm.get_simple_lstm(loss, 3, 'adam', units=(100, 100))
+LSTM_UNITS = (100, 100)
+
+# Settings that define the data and model. Saved with each run and checked when
+# loading one. (The random seed is recorded with the run but not checked.)
+run_meta = {
+    "script": "lstms_with_rotation",
+    "win_size": WIN_SIZE,
+    "skip": DATASET_SKIP_FRAMES,
+    "use_residual": USE_RESIDUAL,
+    "lstm_units": list(LSTM_UNITS),
+    # Hashes of the video IDs in each split, to catch changes to the splitting.
+    "train_split": comboHash(train_combos),
+    "val_split": comboHash(val_combos),
+    "test_split": comboHash(test_combos),
+}
+# Scaler parameters; also checked when loading a run.
+run_arrays = {
+    "scaler_mean": rotation_scaler.mean_, "scaler_scale": rotation_scaler.scale_
+}
+
+loaded_run_dir = None
+if LOAD_SAVED_RUN and SAVE_RUNS_DIR:
+    loaded_run_dir = findRun(SAVE_RUNS_DIR, run_meta, run_arrays, seed=SEED)
+    if loaded_run_dir is None:
+        print("No saved run matches the current settings; training a new model.")
+
+if loaded_run_dir:
+    lstm_model = loadRun(loaded_run_dir, run_meta, run_arrays)
+else:
+    if SEED is None:
+        SEED = int(np.random.default_rng().integers(2**31))
+    keras.utils.set_random_seed(SEED)
+    print("Random seed:", SEED)
+
+    _resid_str = "resid" if USE_RESIDUAL else "abs"
+    _units_str = "x".join(str(u) for u in LSTM_UNITS)
+    run_tag = "rot_skip{}_{}_u{}_s{}".format(
+        DATASET_SKIP_FRAMES, _resid_str, _units_str, SEED
+    )
+
+    lstm_model = rnnm.get_simple_lstm(loss, 3, 'adam', units=LSTM_UNITS)
 
 
 # Log the loss in mm, rather than just scaled coordinates.
@@ -123,15 +178,21 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
-early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
-                                      restore_best_weights=True)
-plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+if not loaded_run_dir:
+    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+                                          restore_best_weights=True)
+    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
 
-lstm_hist = lstm_model.fit(
-    train_rotations_in, train_rotations_out, epochs=100,
-    validation_data=(val_rotations_in, val_rotations_out),
-    callbacks=[lstm_logger, early, plateau]
-)
+    lstm_hist = lstm_model.fit(
+        train_rotations_in, train_rotations_out, epochs=100,
+        validation_data=(val_rotations_in, val_rotations_out),
+        callbacks=[lstm_logger, early, plateau]
+    )
+    if SAVE_RUNS_DIR:
+        saveRun(
+            makeRunDir(SAVE_RUNS_DIR, run_tag), lstm_model, run_meta,
+            run_arrays, info={"seed": SEED}
+        )
 
 
 #%%
@@ -180,10 +241,11 @@ print("Above scoring is for skip{} data.".format(lstm_skip))
 ################################################################################
 import matplotlib.pyplot as plt
 
-plt.plot(lstm_logger.mean_distances)
-plt.xlabel("Epoch")
-plt.ylabel("MAE (mm)")
-plt.title("Loss for skip{} train".format(lstm_skip))
-plt.show()
+if not loaded_run_dir: # No training curve when a saved model was loaded.
+    plt.plot(lstm_logger.mean_distances)
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE (mm)")
+    plt.title("Loss for skip{} train".format(lstm_skip))
+    plt.show()
 
 print("Done program.")
