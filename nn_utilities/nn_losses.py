@@ -178,7 +178,7 @@ def poseLossRotVec3NP(y_true, y_pred):
     v_true = np.reshape(s_true, (-1, 1)) * np_y_true
     v_pred = np.reshape(s_pred, (-1, 1)) * np_y_pred
 
-    w_rel = w_true * w_pred + np.einsum('...j,...j->...', v_true, v_pred)
+    w_rel = (w_true * w_pred).flatten() + np.einsum('...j,...j->...', v_true, v_pred)
     v_rel = - w_true * v_pred + w_pred * v_true - np.cross(v_true, v_pred)
     v_rel_norm = np.linalg.norm(v_rel, axis=-1)
 
