@@ -285,6 +285,13 @@ class DataForJAV:
                 loaders, JAV_order, USE_NOISE, True, True, True, True
             )
 
+            # Trim the jav_res values to match the LSTM window size of 6...
+            # TODO: Handle this better.
+            trimmed_jav_res = [
+                [{c: v[2:] for c, v in jrs.items()} for jrs in jfs ] for jfs in jav_res
+            ]
+            jav_res = trimmed_jav_res
+
             # In this section, we'll be creating some values that we only really
             # need if we're creating the to-cache data on our first run.
             # These values begin with "i_" for "init"
@@ -836,12 +843,17 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 latest_models = {}
 if TRAIN_NEW_MODEL:
     val_param = None
+    tr_s2_ind = np.where(bcotjav.in_train[:, 0] > 1)[0][0]
+    v_s2_ind = np.where(bcotjav.in_validation[:, 0] > 1)[0][0]
     bcot_validation_ids = dog.subset_ids[DataSubsetKind.VALIDATION]
     if bcot_validation_ids is not None and len(bcot_validation_ids) > 0:
-        val_param = (bcotjav.in_validation, bcotjav.gt_validation)
+        val_param = (bcotjav.in_validation[v_s2_ind:], bcotjav.gt_validation[v_s2_ind:])
+    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+                                          restore_best_weights=True)
+    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
     bcs_hist = bcs_model.fit(
-        bcotjav.in_train, bcotjav.gt_train, epochs=32, shuffle=True,
-        validation_data=val_param,
+        bcotjav.in_train[tr_s2_ind:], bcotjav.gt_train[tr_s2_ind:], epochs=100, shuffle=True,
+        validation_data=val_param, callbacks=[early, plateau]
         # batch_size = 1024
     )
     latest_models[chosen_mode.name] = bcs_model

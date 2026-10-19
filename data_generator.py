@@ -63,15 +63,16 @@ all_motion_data = cfc.all_motion_data
 # etc.
 
 
-train_ids, test_ids = PoseLoaderBCOT.trainTestByBody(
+train_ids, val_ids, test_ids = PoseLoaderBCOT.trainValidationTestByBody(
     test_ratio=0.2, random_seed=0
 )
 train_ids_c2 = [c[:2] for c in train_ids]
+val_ids_c2 = [c[:2] for c in val_ids]
 test_ids_c2 = [c[:2] for c in test_ids] # Get the unique part of each.
 
 dog = DataOrganizer.FromCalcs(
     PoseLoaderBCOT, USE_NOISE, all_motion_data, cfc.min_norm_labels, cfc.err_norm_lists,
-    train_ids_c2, test_ids_c2
+    train_ids_c2, test_ids_c2, validation_ids=val_ids_c2
 )
 
 

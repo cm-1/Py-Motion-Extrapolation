@@ -204,10 +204,12 @@ class UnitAwareScaler:
     
     def __init__(self, data_column_keys, scale_rots: bool = True):
         self.column_keys = data_column_keys
+        self._n_keys = len(self.column_keys)
         self.n_features_in_ = 0 # Because we haven't fitted yet.
         self.pos_scale = 0.0
         self.rot_scale = 0.0
         self.scale_rots = scale_rots
+        self._findIndexSubsets()
 
     @staticmethod
     def _is_positional(key):
@@ -223,33 +225,28 @@ class UnitAwareScaler:
             return key in UnitAwareScaler._rot_vec3_keys
         return False
 
-    def fit(self, X):
-        n_keys = len(self.column_keys)
-        if len(X) <= 0:
-            raise ValueError("No data provided to fit for!")
-        if len(X[0]) != n_keys:
-            raise ValueError("Number of data columns does not match keys!")
-        
+    
+    def _findIndexSubsets(self):    
         smd_cols = [
             (i, k) for i, k in enumerate(self.column_keys)
             if isinstance(k, SpecifiedMotionData)
         ]
 
-        nc_pos_proj_inds = [
+        self._nc_pos_proj_inds = [
             i for i, k in smd_cols
             if (
                 k.base_cat in UnitAwareScaler._pos_vec3_keys
                 and k.ang_or_mag == ANG_OR_MAG.MAG_PROJ
             )
         ]
-        nc_rot_proj_inds = [
+        self._nc_rot_proj_inds = [
             i for i, k in smd_cols
             if (
                 k.base_cat in UnitAwareScaler._rot_vec3_keys
                 and k.ang_or_mag == ANG_OR_MAG.MAG_PROJ
             )
         ]
-        nc_pos_pos_inds = [
+        self._nc_pos_pos_inds = [
             i for i, k in smd_cols
             if (
                 k.base_cat in UnitAwareScaler._pos_vec3_keys
@@ -257,7 +254,7 @@ class UnitAwareScaler:
                 and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
             )
         ]
-        nc_rot_rot_inds = [
+        self._nc_rot_rot_inds = [
             i for i, k in smd_cols
             if (
                 k.base_cat in UnitAwareScaler._rot_vec3_keys
@@ -265,7 +262,7 @@ class UnitAwareScaler:
                 and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
             )
         ]
-        nc_pos_rot_inds = [
+        self._nc_pos_rot_inds = [
             i for i, k in smd_cols
             if (
                 (
@@ -275,34 +272,44 @@ class UnitAwareScaler:
                 and k.ang_or_mag == ANG_OR_MAG.MAG_DOT
             )
         ]
-        nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
+        self._nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
 
-
-        self.pos_scale = np.mean(np.std(X[:, nc_pos_proj_inds], axis=0))
-        self.rot_scale = 1.0
+    def fit(self, X):
+        if len(X) <= 0:
+            raise ValueError("No data provided to fit for!")
+        if len(X[0]) != self._n_keys:
+            raise ValueError("Number of data columns does not match keys!")
+            
+        pos_scale = np.mean(np.std(X[:, self._nc_pos_proj_inds], axis=0))
+        rot_scale = 1.0
         if self.scale_rots:
-            self.rot_scale = np.mean(np.std(X[:, nc_rot_proj_inds], axis=0))
+            rot_scale = np.mean(np.std(X[:, self._nc_rot_proj_inds], axis=0))
+        self.fitWithScales(X, pos_scale, rot_scale)
 
-        self.scale_ = np.empty(n_keys)
-        self.scale_[nc_ang_inds] = 1.0
-        self.scale_[nc_pos_proj_inds] = self.pos_scale
-        self.scale_[nc_rot_proj_inds] = self.rot_scale
-        self.scale_[nc_pos_pos_inds] = self.pos_scale * self.pos_scale
-        self.scale_[nc_pos_rot_inds] = self.pos_scale * self.rot_scale
-        self.scale_[nc_rot_rot_inds] = self.rot_scale * self.rot_scale
+    def fitWithScales(self, X, pos_scale, rot_scale):
+        self.pos_scale = pos_scale
+        self.rot_scale = rot_scale
+        
+        self.scale_ = np.empty(self._n_keys)
+        self.scale_[self._nc_ang_inds] = 1.0
+        self.scale_[self._nc_pos_proj_inds] = self.pos_scale
+        self.scale_[self._nc_rot_proj_inds] = self.rot_scale
+        self.scale_[self._nc_pos_pos_inds] = self.pos_scale * self.pos_scale
+        self.scale_[self._nc_pos_rot_inds] = self.pos_scale * self.rot_scale
+        self.scale_[self._nc_rot_rot_inds] = self.rot_scale * self.rot_scale
 
-        self.mean_ = np.zeros(n_keys)
+        self.mean_ = np.zeros(self._n_keys)
 
-        scale_not_filled = np.full(n_keys, True)
+        scale_not_filled = np.full(self._n_keys, True)
         filled_int_inds = np.concatenate((
-            nc_ang_inds, nc_pos_proj_inds, nc_rot_proj_inds, nc_pos_pos_inds,
-            nc_pos_rot_inds, nc_rot_rot_inds
+            self._nc_ang_inds, self._nc_pos_proj_inds, self._nc_rot_proj_inds,
+            self._nc_pos_pos_inds, self._nc_pos_rot_inds, self._nc_rot_rot_inds
         )).astype(int)
         scale_not_filled[filled_int_inds] = False
 
         self.mean_[scale_not_filled] = np.mean(X[:, scale_not_filled], axis=0)
         self.scale_[scale_not_filled] = np.std(X[:, scale_not_filled], axis=0)
-        self.n_features_in_ = n_keys
+        self.n_features_in_ = self._n_keys # TODO: Get rid of this redundancy.
 
     def transform(self, X):
         return (X - self.mean_) / self.scale_
