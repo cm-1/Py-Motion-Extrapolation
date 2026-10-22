@@ -23,25 +23,11 @@ from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
+from nn_utilities.nn_modification import create_hardcoded_model
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
 CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
-USE_NOISE = True
-
-def create_hardcoded_model(refModel):
-    shp = refModel.get_config()['layers'][0]['config']['batch_shape'][1:]
-    oshp = refModel.compute_output_shape(shp)
-    inputs = tf.keras.Input(shape=shp)
-    
-    const_func = lambda x: (x * 0.0)[..., :12] + tf.constant([[
-        1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    ]])
-
-    outputs = tf.keras.layers.Lambda(const_func, output_shape=oshp)(inputs)
-    
-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
-    return model
+USE_NOISE = False
 
 # Custom Layer Mode: Attach preprocessing layer to model
 print("\n" + "="*60)
@@ -74,7 +60,7 @@ for combo in train_ids + test_ids:
     )
     # TODO: Better-comment this part, maybe make a switch to turn it on/off,
     # etc.
-    curr_poses = np.pad(curr_poses, ((2, 0), (0, 0)), mode="edge")
+    # curr_poses = np.pad(curr_poses, ((2, 0), (0, 0)), mode="edge")
 
     all_poses[combo[:2]] = curr_poses
 
@@ -112,7 +98,10 @@ print("Creating combined model with custom layer...")
 # Load saved FCNN .keras file.
 model_key = "JAV_MULTIPLIERS"
 bcs_model = loadLatestModels((model_key, ), SUBSET_PRESET.MINIMAL, USE_NOISE)[model_key]
-hardcoded_model = create_hardcoded_model(bcs_model)
+hardcoded_model = create_hardcoded_model(bcs_model, [
+    1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+])
 
 # Define the getVelFrameDisplacements function as a TensorFlow operation
 def getVelFrameDisplacements(y_true, y_pred):
@@ -268,7 +257,7 @@ print("Translation test score:", test_score)
 
 # %%
 test_aa_errs = pm.poseLossAngle(test_gt_pts[:, 3:], out_aas)
-print("AA test score:", np.mean(test_aa_errs))
+print("AA test score:", np.rad2deg(np.mean(test_aa_errs)))
 
 # %%
 # import datetime

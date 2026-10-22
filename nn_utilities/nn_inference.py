@@ -583,7 +583,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         crackles = all_pds.crackles[-1]
 
 
-        prev_vel_mags = tf.norm(all_prev_vels, axis=-1)
+        # prev_vel_mags = tf.norm(all_prev_vels, axis=-1)
         # # rev_prev_vel_mags = prev_vel_mags[..., ::-1]
         # # last_nonzero_vels = all_prev_vels[-1]
         

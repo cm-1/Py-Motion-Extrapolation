@@ -803,7 +803,7 @@ res = np.zeros((3, 101))
 for ir, r in enumerate(acc_ratios):
     ratio_errs = bcotjav.getScoresSubset(
         DataSubsetKind.TEST,
-        r * np.array([[1.]]), False #, 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
+        r * np.array([[1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]), False
     )
     for i in range(3):
         res[i, ir] = ratio_errs[i]
@@ -843,17 +843,17 @@ bcs_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss) #, 5, 2
 latest_models = {}
 if TRAIN_NEW_MODEL:
     val_param = None
-    tr_s2_ind = np.where(bcotjav.in_train[:, 0] > 1)[0][0]
-    v_s2_ind = np.where(bcotjav.in_validation[:, 0] > 1)[0][0]
+    tr_s2_ind = 0 # np.where(bcotjav.in_train[:, 0] > 1)[0][0] #0 #9999999 #
+    v_s2_ind = 0 #np.where(bcotjav.in_validation[:, 0] > 1)[0][0] #0 #9999999 #
     bcot_validation_ids = dog.subset_ids[DataSubsetKind.VALIDATION]
     if bcot_validation_ids is not None and len(bcot_validation_ids) > 0:
         val_param = (bcotjav.in_validation[v_s2_ind:], bcotjav.gt_validation[v_s2_ind:])
-    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=7,
                                           restore_best_weights=True)
-    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=5)
     bcs_hist = bcs_model.fit(
-        bcotjav.in_train[tr_s2_ind:], bcotjav.gt_train[tr_s2_ind:], epochs=100, shuffle=True,
-        validation_data=val_param, callbacks=[early, plateau]
+        bcotjav.in_train[tr_s2_ind:], bcotjav.gt_train[tr_s2_ind:], epochs=500,
+        shuffle=True, validation_data=val_param, callbacks=[early, plateau]
         # batch_size = 1024
     )
     latest_models[chosen_mode.name] = bcs_model

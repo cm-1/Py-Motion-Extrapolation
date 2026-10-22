@@ -242,7 +242,7 @@ loss_to_use = poseLossJAV if _mode_is_jav15 else poseLossVec3
 input_win_len = WIN_SIZE
 if USE_VEL_IN:
     input_win_len = WIN_SIZE - 1
-LSTM_UNITS = (100, 100)
+LSTM_UNITS = (128, 128, 128)
 
 # Settings that define the data and model. Saved with each run and checked when
 # loading one. (The random seed is recorded with the run but not checked.)
@@ -309,12 +309,12 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 ################################################################################
 
 if not loaded_run_dir:
-    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=5,
+    early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=7,
                                           restore_best_weights=True)
-    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=2)
+    plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=5)
 
     jav_lstm_hist = jav_lstm_model.fit(
-        train_in, train_jav_out, epochs=100,
+        train_in, train_jav_out, epochs=500,
         validation_data=[val_in, val_jav_out],
         callbacks=[jav_lstm_logger, early, plateau]
     )
