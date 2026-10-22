@@ -29,20 +29,16 @@ CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
 CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
 USE_NOISE = False
 
-# Custom Layer Mode: Attach preprocessing layer to model
-print("\n" + "="*60)
-print("CUSTOM LAYER MODE ACTIVATED")
-print("="*60)
-
-
-# Get train/test IDs
-train_ids, test_ids = PoseLoaderBCOT.trainTestByBody(test_ratio=0.2, random_seed=0)
-train_ids = sorted(PoseLoaderBCOT.prepIDsForConstructor(train_ids))
-test_ids = sorted(PoseLoaderBCOT.prepIDsForConstructor(test_ids))
 
 print(f"Loading test pose windows...")
 print(f"  Window size: {CUSTOM_LAYER_WINDOW_SIZE}")
 print(f"  Skip: {CUSTOM_LAYER_SKIP}")
+
+# Get train/test IDs
+all_ids = PoseLoaderBCOT.trainValidationTestByBody(test_ratio=0.2, random_seed=0)
+train_ids, val_ids, test_ids = [
+    sorted(PoseLoaderBCOT.prepIDsForConstructor(ids)) for ids in all_ids
+]
 
 all_poses: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
 # all_rotations: typing.Dict[typing.Tuple[int, int], np.ndarray] = dict()
@@ -105,8 +101,6 @@ hardcoded_model = create_hardcoded_model(bcs_model, [
 
 # Define the getVelFrameDisplacements function as a TensorFlow operation
 def getVelFrameDisplacements(y_true, y_pred):
-
-
     # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
     disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
