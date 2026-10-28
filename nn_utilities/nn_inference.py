@@ -189,6 +189,43 @@ def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor)
     # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
     return relative_axis_angles[0] * relative_axis_angles[1]
 
+def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
+    """
+    Computes the modification of an axis angle orientation by an axis angle
+    displacement rotation.
+
+    Args:
+        axis_angles_start: A tensor of shape (n, 3) representing the starting
+                           orientation axis angles.
+        axis_angles_disp:  A tensor of shape (n, 3) representing the
+                           displacement rotation.
+
+    Returns:
+        A tensor of shape (n, 3) representing the new axis-angle orientations.
+    """
+
+    angs_start = tf.norm(axis_angles_start, axis=-1, keepdims=True)
+    angs_disp = tf.norm(axis_angles_disp, axis=-1, keepdims=True)
+
+    units_start = tf.math.divide_no_nan(axis_angles_start, angs_start)
+    units_disp = tf.math.divide_no_nan(axis_angles_disp, angs_disp)
+
+    # Convert axis angles to quaternions
+    qs_start = tfg_transformation.quaternion.from_axis_angle(units_start, angs_start)
+    qs_disp = tfg_transformation.quaternion.from_axis_angle(units_disp, angs_disp)
+
+    qs_final = tfg_transformation.quaternion.multiply(
+        qs_disp, qs_start
+    )
+
+    # Convert the new quaternion back to axis angles
+    axis_angles_final = tfg_transformation.axis_angle.from_quaternion(
+        qs_final
+    )
+
+    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
+    return axis_angles_final[0] * axis_angles_final[1]
+
 def ang_vel_extrapolate(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
     """
     Computes the relative axis-angle rotations between two sets of axis-angle

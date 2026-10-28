@@ -149,7 +149,7 @@ if LOAD_SAVED_RUN and SAVE_RUNS_DIR:
         print("No saved run matches the current settings; training a new model.")
 
 if loaded_run_dir:
-    lstm_model = loadRun(loaded_run_dir, run_meta, run_arrays)
+    lstm_model = loadRun(loaded_run_dir, False, run_meta, run_arrays)
 else:
     if SEED is None:
         SEED = int(np.random.default_rng().integers(2**31))

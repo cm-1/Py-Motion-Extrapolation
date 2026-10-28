@@ -2,7 +2,6 @@
 # Velocity-Aligned-Frame Networks
 ################################################################################
 import typing
-import enum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,7 +13,8 @@ import rnn_models as rnnm
 
 from nn_utilities.nn_losses import *
 from nn_utilities.lstm_io import (
-    saveRun, loadRun, findRun, makeRunDir, comboHash
+    saveRun, loadRun, findRun, makeRunDir, comboHash, LSTM_OUT_MODE,
+    exportWorldFrameModel
 )
 
 # Local code imports ===========================================================
@@ -38,11 +38,6 @@ USE_VEL_IN = False
 # of train/test samples is consistent. Or pad it somehow...
 ONE_FRAME_PER_WINDOW: bool = True
 
-# Output configuration:
-class LSTM_OUT_MODE(enum.Enum):
-    DEFAULT = 0
-    JAV15 = 1
-    DISP = 2
 
 CHOSEN_OUT = LSTM_OUT_MODE.DISP
 
@@ -66,6 +61,12 @@ SAVE_RUNS_DIR = "results/lstms"
 # Random seed for model initialization and training. None picks a new seed each
 # run; it's printed, included in the run's name, and saved with the run.
 SEED = None
+
+# If True, also saves an export wrapper (export_model.keras, in the run's
+# directory) that takes raw positions in mm and returns the next position in mm,
+# with the scaling inside the model. See exportWorldFrameModel. Only valid for
+# world-frame, DISP-output, no-context models.
+EXPORT_MODEL = True
 
 print("Getting train-test split.")
 all_combos = gtc.PoseLoaderBCOT.trainValidationTestByBody(test_ratio=0.2, random_seed=0)
@@ -271,7 +272,7 @@ if LOAD_SAVED_RUN and SAVE_RUNS_DIR:
         print("No saved run matches the current settings; training a new model.")
 
 if loaded_run_dir:
-    jav_lstm_model = loadRun(loaded_run_dir, run_meta, run_arrays)
+    jav_lstm_model = loadRun(loaded_run_dir, False, run_meta, run_arrays)
 else:
     if SEED is None:
         SEED = int(np.random.default_rng().integers(2**31))
@@ -308,6 +309,7 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
+run_dir = loaded_run_dir # Stays None if a new model is trained but not saved.
 if not loaded_run_dir:
     early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=7,
                                           restore_best_weights=True)
@@ -319,10 +321,36 @@ if not loaded_run_dir:
         callbacks=[jav_lstm_logger, early, plateau]
     )
     if SAVE_RUNS_DIR:
+        run_dir = makeRunDir(SAVE_RUNS_DIR, run_tag)
         saveRun(
-            makeRunDir(SAVE_RUNS_DIR, run_tag), jav_lstm_model, run_meta,
-            run_arrays, info={"seed": SEED}
+            run_dir, jav_lstm_model, run_meta, run_arrays, info={"seed": SEED}
         )
+
+#%%
+################################################################################
+# EXPORTING THE NETWORK
+################################################################################
+
+def unrollLSTMs(model, win_len, dims=3):
+    cfg = model.get_config()
+    for lc in cfg["layers"]:
+        if lc["class_name"] == "LSTM":
+            lc["config"]["unroll"] = True
+    new_model = keras.Sequential.from_config(cfg)
+    new_model.build((None, win_len, dims))
+    new_model.set_weights(model.get_weights())
+    return new_model
+
+if EXPORT_MODEL:
+    if USE_VEL_IN or USE_CONTEXT or CHOSEN_OUT != LSTM_OUT_MODE.DISP:
+        raise NotImplementedError(
+            "Export is only implemented for world-frame, DISP, no-context models."
+        )
+    if run_dir is None:
+        raise ValueError("EXPORT_MODEL needs SAVE_RUNS_DIR set, to know where to save.")
+    export_model = exportWorldFrameModel(unrollLSTMs(
+        jav_lstm_model, 6, 3), scaler_obj, input_win_len, run_dir / "scaled_model.keras"
+    )
 
 #%%
 ################################################################################

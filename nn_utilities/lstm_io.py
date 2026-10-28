@@ -17,6 +17,8 @@ wrong numbers.
 The loss functions are registered with keras.saving.register_keras_serializable
 in nn_losses, so that module must be imported before loadRun() is called.
 '''
+import enum
+
 import datetime
 import hashlib
 import json
@@ -26,6 +28,11 @@ import typing
 import numpy as np
 import keras
 
+# Output configuration:
+class LSTM_OUT_MODE(enum.Enum):
+    DEFAULT = 0
+    JAV15 = 1
+    DISP = 2
 
 def comboHash(combos) -> str:
     '''Short hash of a collection of combo IDs, independent of their order.
@@ -129,7 +136,7 @@ def findRun(base_dir, expected_meta: dict,
     return max(matches, key=lambda d: (d / "model.keras").stat().st_mtime)
 
 
-def loadRun(run_dir, expected_meta: dict,
+def loadRun(run_dir, load_scaled: bool, expected_meta: dict,
             expected_arrays: typing.Optional[typing.Dict[str, np.ndarray]] = None,
             rtol: float = 1e-6, atol: float = 1e-8):
     '''Loads the model from run_dir, raising ValueError if the saved meta or
@@ -139,4 +146,31 @@ def loadRun(run_dir, expected_meta: dict,
     if reason is not None:
         raise ValueError("Saved run {} doesn't match: {}".format(d, reason))
     print("Loading run from {} (info: {})".format(d, _readMeta(d)["info"]))
-    return keras.models.load_model(str(d / "model.keras"))
+    scale_str = "scaled_" if load_scaled else ""
+    return keras.models.load_model(str(d / "{}model.keras".format(scale_str)))
+
+def exportWorldFrameModel(model, scaler, win_len, save_path=None, dims=3):
+    '''
+    Wraps a trained world-frame model (USE_VEL_IN=False, CHOSEN_OUT=DISP, no
+    context) so that it takes raw positions (mm) and returns the next raw
+    position (mm), with all scaling inside the model. Works for uniform and
+    per-axis scalers. If save_path is given, the wrapper is saved there (a
+    .keras path). Returns the wrapper.
+    '''
+    scale_vec = np.asarray(scaler.scale_, dtype=np.float32)
+    mean = np.asarray(scaler.mean_, dtype=np.float32)
+
+    # In DISP mode the scaled target is (next - last) / scale per axis, so the
+    # mean cancels: the real displacement is just d * scale (no mean added).
+    raw_in = keras.Input((win_len, dims), name="positions")
+    x = keras.layers.Normalization(
+        axis=-1, mean=mean, variance=scale_vec ** 2
+    )(raw_in)
+    d = model(x)
+    d_mm = keras.layers.Rescaling(scale_vec.tolist())(d)
+    next_pos = raw_in[:, -1, :] + d_mm
+    export_model = keras.Model(raw_in, next_pos, name="world_frame_export")
+
+    if save_path is not None:
+        export_model.save(str(save_path))
+    return export_model

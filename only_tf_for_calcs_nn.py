@@ -22,13 +22,20 @@ from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.nn_export import AbstractModelWrapper
-from nn_utilities.nn_inference import PointsToInputsConstStep, ang_vel_extrapolate
+from nn_utilities.nn_inference import (
+    PointsToInputsConstStep, ang_vel_extrapolate, ang_vel_displace
+)
 from nn_utilities.nn_modification import create_hardcoded_model
+from nn_utilities.nn_losses import getVelFrameDisplacements
+from nn_utilities.lstm_io import (
+    loadRun, findRun, comboHash, LSTM_OUT_MODE
+)
 
 CUSTOM_LAYER_WINDOW_SIZE = 6  # Number of consecutive pose frames
 CUSTOM_LAYER_SKIP = 2         # Frame skip (0=all frames, 1=every other, 2=every 3rd)
 USE_NOISE = False
 
+SAVE_RUNS_DIR = "results/lstms"
 
 print(f"Loading test pose windows...")
 print(f"  Window size: {CUSTOM_LAYER_WINDOW_SIZE}")
@@ -99,19 +106,21 @@ hardcoded_model = create_hardcoded_model(bcs_model, [
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 ])
 
-# Define the getVelFrameDisplacements function as a TensorFlow operation
-def getVelFrameDisplacements(y_true, y_pred):
-    # y_pred2 = y_pred + y_true[:, 9:15]
-    # Calculating the local displacement is the same as custom tf loss function.
-    disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
-        + y_true[:, 9] * y_pred[:, 9]
-    disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
-        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
-    disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
-        + y_true[:, 11] * y_pred[:, 11]
+run_meta = {
+    "script": "lstms_translation", "win_size": CUSTOM_LAYER_WINDOW_SIZE,
+    "skip": CUSTOM_LAYER_SKIP, "use_vel_in": False, "use_context": False,
+    "out_mode": LSTM_OUT_MODE.DISP.name, "force_vel_scaling": True,
+    "apply_noise": USE_NOISE, "lstm_units": [128, 128, 128],
+    "train_split": comboHash(train_ids),
+    "val_split": comboHash(val_ids),
+    "test_split": comboHash(test_ids),
+}
 
-    return tf.stack((disp_0, disp_1, disp_2), axis=-1)
+load_lstm_dir = findRun(SAVE_RUNS_DIR, run_meta)
+if load_lstm_dir is None:
+    raise Exception("No saved LSTM matches the current settings.")
+
+jav_lstm_model = loadRun(load_lstm_dir, True, run_meta)
 
 # Define the getWorldFrameDisplacements function as a TensorFlow operation
 def getWorldFrameDisplacements(y_true, y_pred, world2locals):
@@ -124,67 +133,43 @@ def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     mm = tf.matmul(local2worlds, disp_mats)
     return tf.reshape(mm, [-1, 3])
 
-class ModularKalmanWrapper(AbstractModelWrapper):
-    def __init__(self, preproc_layer, fcnn_model, input_shape):
+class AbstractKalmanWrapper(AbstractModelWrapper):
+    """
+    Shared logic for models that map a state of N/6 stacked vec6 poses to the
+    next state (shift the history by one pose, append a newly predicted pose).
+
+    Subclasses implement predict_translation and predict_rotation (each
+    returning [B, 3]). They may override predict_pose if the two halves
+    come from a single network call.
+    """
+
+    def __init__(self, input_shape):
         super().__init__(input_shape)
-        # Store components separately
-        self.preproc = preproc_layer
-        self.fcnn = fcnn_model
         self.num_prev_cells: int = input_shape[-1] - 6
-        
 
-    def predict_translation(self, x: tf.Tensor):
-        """
-        Reconstructs the full forward pass. 
-        """
-        
-        # 1. Preprocessing (PointsToInputsConstStep)
-        features = self.preproc(x)
-        
-        # 2. FCNN Inference (JAV_MULTIPLIERS)
-        # Apply loaded model
-        multiplier_predictions = self.fcnn(features[0])
-        if isinstance(multiplier_predictions, list):
-            multiplier_predictions = multiplier_predictions[0]
-            # I should've commented this better; I think switching tf versions
-            # requires this workaround? I forget the exact reason now....
-            print("Loaded model prediction was a list for whatever reason?")
-        
-        # Define the getVelFrameDisplacements function as a TensorFlow operation
-        y_true = features[1] #tf.cast(inputs[0], tf.float32)
-        y_pred = multiplier_predictions #tf.cast(inputs[1], tf.float32)
-        world2locals = features[2] #tf.cast(inputs[2], tf.float32)
-        
-        orig_pos = x[:, -6:-3]
+    # ---- hooks ----
+    def predict_translation(self, x: tf.Tensor) -> tf.Tensor:
+        raise NotImplementedError
 
-        disp = getWorldFrameDisplacements(y_true, y_pred, world2locals)
-        ret_pos = orig_pos + disp
-        return ret_pos
+    def predict_rotation(self, x: tf.Tensor) -> tf.Tensor:
+        raise NotImplementedError
 
-    def predict_rotation(self, x: tf.Tensor):
-        orig_aas_0 = x[:, -9:-6]
-        orig_aas_1 = x[:, -3:]
-        ret_aas = ang_vel_extrapolate(orig_aas_0, orig_aas_1)
-        return ret_aas
-        
+    # ---- shared ----
+    def predict_pose(self, x: tf.Tensor) -> tf.Tensor:
+        """New vec6 = [translation, rotation]."""
+        return tf.concat(
+            (self.predict_translation(x), self.predict_rotation(x)), axis=-1
+        )
+
     def forward(self, x: tf.Tensor):
         x.set_shape(self.input_shape)
-
-        ret_pos = self.predict_translation(x)
-        ret_aas = self.predict_rotation(x)
-        last_pose = tf.concat((ret_pos, ret_aas), axis=-1) 
-
         prev_pts = x[:, 6:]
-
-
-        full_new_state = tf.concat((prev_pts, last_pose), axis=1)
-
+        full_new_state = tf.concat((prev_pts, self.predict_pose(x)), axis=1)
         return full_new_state
+
 
     def jacobian_naive(self, x: tf.Tensor):
         x.set_shape(self.input_shape)
-
-        """Jacobian subgraph"""
         with tf.GradientTape(watch_accessed_variables=False) as tape:
             tape.watch(x)
             y = self.forward(x)
@@ -194,43 +179,106 @@ class ModularKalmanWrapper(AbstractModelWrapper):
 
     def jacobian(self, x: tf.Tensor):
         """
-        Optimal Jacobian: Runs only what is needed for each block.
+        Less naive Jacobian: Runs only what is needed for each block.
         """
         x.set_shape(self.input_shape)
 
         # The part that comes from shifting the five most recent poses within
         # the state vector.
-        eye_block = tf.eye(
-            self.num_prev_cells, dtype=tf.float32
-        )
+        eye_block = tf.eye(self.num_prev_cells, dtype=tf.float32)
         zeros_block = tf.zeros((self.num_prev_cells, 6), dtype=tf.float32)
         j_shift = tf.concat([zeros_block, eye_block], axis=-1)
 
-        # The part that comes from the new translation prediction.
-        with tf.GradientTape(persistent=True) as tape_f:
-            tape_f.watch(x)
-            y_t = self.predict_translation(x)
-        unflat_jac_t = tape_f.jacobian(y_t, x)
-        j_t = tf.reshape(unflat_jac_t, [-1, tf.shape(unflat_jac_t)[-1]])
+        # New-pose block: differentiate only predict_pose, not the whole forward.
+        with tf.GradientTape(watch_accessed_variables=False) as tape:
+            tape.watch(x)
+            y_new = self.predict_pose(x)
+        unflat = tape.jacobian(y_new, x)
+        j_new = tf.reshape(unflat, [-1, tf.shape(unflat)[-1]])
 
-        # The part that comes from the new rotation prediction.
-        with tf.GradientTape(persistent=True) as tape_j:
-            tape_j.watch(x)
-            y_r = self.predict_rotation(x)
-        unflat_jac_r = tape_j.jacobian(y_r, x)
-        j_r = tf.reshape(unflat_jac_r, [-1, tf.shape(unflat_jac_r)[-1]])
+        return tf.concat([j_shift, j_new], axis=0)
 
-        # Clean up
-        del tape_f
-        del tape_j
+def constant_angvel_rotation(x: tf.Tensor) -> tf.Tensor:
+    """Default rotation model: constant angular velocity from the last two poses."""
+    return ang_vel_extrapolate(x[:, -9:-6], x[:, -3:])
 
-        # Concatenate into square matrix.
-        return tf.concat([j_shift, j_t, j_r], axis=0)
+
+class FcnnKalmanWrapper(AbstractKalmanWrapper):
+    """Your original preproc + FCNN-multipliers pipeline."""
+
+    def __init__(self, preproc_layer, fcnn_model, input_shape):
+        super().__init__(input_shape)
+        self.preproc = preproc_layer
+        self.fcnn = fcnn_model
+
+    def predict_translation(self, x):
+        features = self.preproc(x)
+
+        multiplier_predictions = self.fcnn(features[0])
+        if isinstance(multiplier_predictions, list):
+            # I should've commented this better; I think switching tf versions
+            # requires this workaround? I forget the exact reason now....
+            # print("Loaded model prediction was a list for whatever reason?")
+            multiplier_predictions = multiplier_predictions[0]
+
+        y_true, world2locals = features[1], features[2]
+        orig_pos = x[:, -6:-3]
+        disp = getWorldFrameDisplacements(y_true, multiplier_predictions, world2locals)
+        return orig_pos + disp
+
+    def predict_rotation(self, x):
+        return constant_angvel_rotation(x)
+
+class LstmKalmanWrapper(AbstractKalmanWrapper):
+    def __init__(self, lstm_model, input_shape, lstm_vec_dim: int,
+                 predicts_delta: bool, rotation_fn=constant_angvel_rotation):
+        super().__init__(input_shape)
+        self.lstm = lstm_model
+        self.lstm_vec_dim = lstm_vec_dim
+        self.predicts_delta = predicts_delta
+        self.rotation_fn = rotation_fn
+        self.out_dim = lstm_model.output_shape[-1]
+        assert self.out_dim in (3, 6), f"Unexpected LSTM output dim {self.out_dim}"
+        assert self.lstm_vec_dim in (3, 6), f"Unexpected LSTM vec dim {self.lstm_vec_dim}"
+        self.timesteps = input_shape[-1] // 6
+
+    def _run_lstm(self, x):
+        seq_vec6 = tf.reshape(x, (-1, self.timesteps, 6))
+        seq = seq_vec6 if self.lstm_vec_dim == 6 else seq_vec6[..., -6:-3]
+        out = self.lstm(seq)
+        return out[0] if isinstance(out, list) else out
+
+    def predict_pose(self, x):
+        out = self._run_lstm(x)
+        orig_pos = x[:, -6:-3]
+        orig_rot = x[:, -3:]
+
+        if self.out_dim == 6:
+            out_t = out[..., -6:-3]
+            out_r = out[..., -3:]
+            trans = out_t + orig_pos if self.predicts_delta else out_t
+            rot = ang_vel_displace(orig_rot, out_r) if self.predicts_delta else out_r
+            return tf.concat((trans, rot), axis=-1)
+        elif self.out_dim == 3:
+            trans = out + orig_pos if self.predicts_delta else out       
+            # vec3 output: translation from the LSTM, rotation from rotation_fn
+            return tf.concat((trans, self.rotation_fn(x)), axis=-1)
+        else:
+            raise Exception("Bad out dimension!")
+
+    def predict_translation(self, x):
+        return self.predict_pose(x)[:, :3]
+
+    def predict_rotation(self, x):
+        return self.predict_pose(x)[:, 3:]
 
 # %%
 
-wrapper = ModularKalmanWrapper(custom_layer, bcs_model, (1, 36))
-wrapper_batch = ModularKalmanWrapper(custom_layer, bcs_model, (None, 36))
+wrapper = FcnnKalmanWrapper(custom_layer, bcs_model, (1, 36))
+wrapper_batch = FcnnKalmanWrapper(custom_layer, bcs_model, (None, 36))
+
+wrapper_l = LstmKalmanWrapper(jav_lstm_model, (1, 36), 3, False)
+wrapper_batch_l = LstmKalmanWrapper(jav_lstm_model, (None, 36), 3, False)
 
 print("="*60)
 print("Final model setup complete")
@@ -240,6 +288,8 @@ tf_const_input = tf.constant(test_windows_flatter.astype(np.float32))
 batch_out = wrapper_batch.forward(tf_const_input)
 print("First batch out:", batch_out[0])
 final_model_forward = wrapper_batch.get_frozen_func(wrapper_batch.forward)
+final_model_forward1 = wrapper.get_frozen_func(wrapper.forward)
+final_model_forward1_l = wrapper_l.get_frozen_func(wrapper_l.forward)
 test_out = final_model_forward(tf_const_input)[0]
 out_pts = test_out[..., -6:-3]
 out_aas = test_out[..., -3:]
@@ -266,8 +316,8 @@ wrapper.save_jacobian("./results/models/jacobian_graph.pb")
 wrapper.save_forward("./results/models/forward_graph.pb")
 
 # %%
-arange_dat = np.arange(36).reshape(wrapper.input_shape).astype(np.float32)
-print(final_model_forward(arange_dat))
+arange_dat = tf.constant(np.arange(36).reshape(wrapper.input_shape).astype(np.float32))
+print(final_model_forward1(arange_dat))
 #%%
 x = tf.constant(np.random.uniform(-1, 1, (1, 36)).astype(np.float32))
 j = wrapper.jacobian(x) #tf.constant(arange_dat, dtype=tf.float32))
