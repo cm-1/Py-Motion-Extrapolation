@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "script": "lstms_translation",
+    "win_size": 6,
+    "skip": 2,
+    "use_vel_in": false,
+    "use_context": false,
+    "out_mode": "DISP",
+    "force_vel_scaling": true,
+    "apply_noise": false,
+    "lstm_units": [
+      128,
+      128,
+      128
+    ],
+    "train_split": "704f89a7649c",
+    "val_split": "296635b60ef9",
+    "test_split": "131b24f0680c"
+  },
+  "info": {
+    "seed": 1038575871
+  }
+}

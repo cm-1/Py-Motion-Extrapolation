@@ -9,83 +9,7 @@ import tensorflow as tf
 import tensorflow_graphics.geometry.transformation as tfg_transformation
 import keras
 
-from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
-from motiontools.posefeatures import (
-    getWorldFrameDisplacements, MOTION_DATA, ALL_RELATIVE_VECTORS
-)
-
 from posemath import DEFAULT_ZERO_ANG_THRESH
-
-def getOutputsNN(model, scaler, hyp_calcer: HypotheticalInputsForNN,
-                 last_pts: NDArray, prev_pts: typing.Optional[NDArray] = None,
-                 rot_mats: typing.Optional[NDArray] = None,
-                 return_inputs: str = 'none'):
-    '''
-        For a given set of prior transformations, gets the world frame vec3
-        positions predicted by a model that outputs vec12 JAV multipliers.
-
-        Parameters:
-            model: The model (e.g., a neural net) that outputs the multipliers.
-                Any class that has a predict() method that takes in a 2D array
-                of prediction data matching the scaler's outputs and produces
-                an output array of shape (n, 12) can be used here.
-            scaler: A scaler that transforms the "raw" data columns generated.
-            hyp_calcer (HypotheticalInputsForNN): Used to calculate the raw
-                columns, pre-scaling, for input into the model.
-            last_pts (NDArray): Positions at the final timestep pre-prediction.
-                If None, it is assumed that hyp_calcer is set up with this
-                information already. Defaults to None.
-            prev_pts (NDArray): Positions leading up to last_pts.
-            rot_mats (NDArray): Rotation matrices up to and including final
-                timestep pre-prediction. If None, it is assumed that hyp_calcer
-                is set up with this information already. Defaults to None.
-            return_inputs (str): Specifies whether to just return predicted
-                vec3s ("none"), or to also return scaled ("scaled") or unscaled
-                ("unscaled") columns generated as the model's input. Defaults
-                to "none".
-
-        Returns:
-            NDArray or tuple: Depending on the value of return_inputs, either
-                an NDArray of shape (n, 3) of world frame positions predicted
-                by the model or else a 2-tuple which contains:    
-                    - The above-mentioned vec3s (ndarray).
-                    - The data columns generated as model input (ndarray).
-        '''
-
-    last_pts = np.atleast_2d(last_pts)
-    orig_write_status = last_pts.flags.writeable
-
-    last_pts.setflags(write=False)
-
-    unscaled_cols: NDArray
-    jav_mags: NDArray
-    w2ls: NDArray
-    if prev_pts is None or rot_mats is None:
-        if not (prev_pts is None and rot_mats is None):
-            raise ValueError("Cannot have just one of pts and mats be None!")
-        unscaled_cols, jav_mags, w2ls = hyp_calcer.getHypotheticalCalcs(
-            last_pts
-        )
-    else:
-        all_pts = np.concatenate([prev_pts, [last_pts]], axis=0)
-        unscaled_cols, jav_mags, w2ls = hyp_calcer.getSeparateCalcs(
-            all_pts, rot_mats
-        )
-
-    scaled_inputs = scaler.transform(unscaled_cols)
-    out_JAV = model.predict(scaled_inputs, batch_size=1024, verbose=0)
-    displacements = getWorldFrameDisplacements(jav_mags, out_JAV, w2ls)
-
-    final_positions = last_pts + displacements
-
-    last_pts.setflags(write=orig_write_status)
-    if return_inputs == "unscaled":
-        return final_positions, unscaled_cols
-    elif return_inputs == "scaled":
-        return final_positions, scaled_inputs
-    elif return_inputs != "none":
-        raise ValueError("Invalid return_inputs value of: " + return_inputs)
-    return final_positions
 
 def tfNormalizeAll(vecs: tf.Tensor) -> tf.Tensor:
     norms = tf.norm(vecs, axis=-1, keepdims=True)
@@ -112,9 +36,6 @@ def tfParallelAndOrthoParts(vectors: tf.Tensor, dirs: tf.Tensor, dirs_already_no
     return (parallels, orthos)
 
 def tfCross(x: tf.Tensor, y:tf.Tensor):
-    # i,  j,  k
-    # x0, x1, x2
-    # y0, y1, y2
     z0 = x[..., 1] * y[..., 2] - y[..., 1] * x[..., 2]
     z1 = x[..., 2] * y[..., 0] - y[..., 2] * x[..., 0]
     z2 = x[..., 0] * y[..., 1] - y[..., 0] * x[..., 1]
@@ -228,7 +149,7 @@ def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
 
 def ang_vel_extrapolate(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
     """
-    Computes the relative axis-angle rotations between two sets of axis-angle
+    Extrapolates the relative axis-angle rotations between two sets of axis-angle
     rotations using quaternions.
 
     Args:
@@ -281,141 +202,6 @@ def _get_JAV_muls(step: typing.Union[int, float]):
         _jav_muls[0, 1:3].assign(step ** 2)
         _jav_muls = tf.reshape(_jav_muls, [-1])
         return tf.constant(_jav_muls, dtype=tf.float32)
-
-# @tf.custom_gradient
-def safe_slice_ax0(x: tf.Tensor, start_index: int, end_index: int):
-    """
-    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
-    
-    Forward Pass: Native Slicing (Zero overhead).
-    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
-    """
-    # 1. Forward Pass: Standard efficient slicing
-    # We cast to int just to be safe if passed as Tensors, though python ints are best.
-    y = x[start_index:end_index]
-        
-    # 2. Define the Gradient
-    def grad(dy):
-        # dy is the gradient coming back from the next layer.
-        # It has shape (Batch, end - start).
-        # We need to turn it into shape (Batch, Full_Width) (dx).
-        
-        # Get input dimensions (Static is best for TFLite)
-        # Using .shape handles static shapes; tf.shape handles dynamic.
-        input_shape = x.shape
-        full_width = input_shape[0] 
-
-        # Calculate padding amounts
-        # We want: [0, 0] padding on axis 0 (Batch)
-        # We want: [start, full_width - end] padding on axis 1 (Features)
-
-        pad_right = full_width - end_index
-
-        paddings = tf.convert_to_tensor([[start_index, pad_right]])
-        
-        # Use tf.pad to reconstruct the gradient
-        # TFLite supports Pad/PadV2 natively.
-        dx = tf.pad(dy, paddings)
-        
-        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
-        return dx, None, None
-
-    return y#, grad
-
-# @tf.custom_gradient
-def safe_slice_ax1(x: tf.Tensor, start_index: int, end_index: int):
-    """
-    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
-    
-    Forward Pass: Native Slicing (Zero overhead).
-    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
-    """
-    # 1. Forward Pass: Standard efficient slicing
-    # We cast to int just to be safe if passed as Tensors, though python ints are best.
-    y = x[:, start_index:end_index]
-        
-    # 2. Define the Gradient
-    def grad(dy):
-        # dy is the gradient coming back from the next layer.
-        # It has shape (Batch, end - start).
-        # We need to turn it into shape (Batch, Full_Width) (dx).
-        
-        # Get input dimensions (Static is best for TFLite)
-        # Using .shape handles static shapes; tf.shape handles dynamic.
-        input_shape = x.shape
-        full_width = input_shape[1] 
-
-        # Calculate padding amounts
-        # We want: [0, 0] padding on axis 0 (Batch)
-        # We want: [start, full_width - end] padding on axis 1 (Features)
-
-        pad_right = full_width - end_index
-
-        paddings = tf.convert_to_tensor([[0, 0], [start_index, pad_right]])
-        
-        # Use tf.pad to reconstruct the gradient
-        # TFLite supports Pad/PadV2 natively.
-        dx = tf.pad(dy, paddings)
-        
-        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
-        return dx, None, None
-
-    return y#, grad
-
-# @tf.custom_gradient
-def safe_slice_ax2(x: tf.Tensor, start_index: int, end_index: int):
-    """
-    Slices x[:, start:end] in a way that is TFLite-Jacobian friendly.
-    
-    Forward Pass: Native Slicing (Zero overhead).
-    Backward Pass: Uses tf.pad instead of StridedSliceGrad/ZerosLike.
-    """
-    # 1. Forward Pass: Standard efficient slicing
-    # We cast to int just to be safe if passed as Tensors, though python ints are best.
-    y = x[:, :, start_index:end_index]
-        
-    # 2. Define the Gradient
-    def grad(dy):
-        # dy is the gradient coming back from the next layer.
-        # It has shape (Batch, end - start).
-        # We need to turn it into shape (Batch, Full_Width) (dx).
-        
-        # Get input dimensions (Static is best for TFLite)
-        # Using .shape handles static shapes; tf.shape handles dynamic.
-        input_shape = x.shape
-        full_width = input_shape[2] 
-
-        # Calculate padding amounts
-        # We want: [0, 0] padding on axis 0 (Batch)
-        # We want: [start, full_width - end] padding on axis 1 (Features)
-
-        pad_right = full_width - end_index
-
-        paddings = tf.convert_to_tensor([[0,0], [0,0], [start_index, pad_right]])
-        
-        # Use tf.pad to reconstruct the gradient
-        # TFLite supports Pad/PadV2 natively.
-        dx = tf.pad(dy, paddings)
-        
-        # Return gradient for 'x', and None for 'start'/'end' (they are integers)
-        return dx, None, None
-
-    return y#, grad
-
-class LayerPostOutJAV12(keras.layers.Layer):
-    def __init__(self, step: int, **kwargs):
-        super(LayerPostOutJAV12, self).__init__(**kwargs)
-
-        self.step = step
-        
-        self._jav_muls = _get_JAV_muls(step)
-
-
-    def call(self, inputs):
-        # Multiply the JAV outputs by the timestep powers
-        # inputs should be shape (batch_size, 12) - the 12 JAV components
-        return inputs * self._jav_muls[tf.newaxis, :]
-
 
 
 class DerivativeCollectionConstTimeTF:
@@ -476,8 +262,8 @@ class DerivativeCollectionWithTimestampsTF:
 
         # time_div = self.unflat_timestamps[deriv_power:] - self.unflat_timestamps[:-deriv_power]
         end = tf.shape(self.unflat_timestamps)[0]
-        next_times = safe_slice_ax0(self.unflat_timestamps, deriv_power, end)
-        prev_times = safe_slice_ax1(self.unflat_timestamps, 0, end - deriv_power)
+        next_times = self.unflat_timestamps[deriv_power:end]
+        prev_times = self.unflat_timestamps[0:(end - deriv_power)]
         time_div = next_times - prev_times
 
         # Do scalar math first for efficiency, as otherwise you perform
@@ -503,7 +289,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         # 8: vecs, accs, jerks, snaps, crackles, rot vel, rot acc, rot jerk
         self._n_vec_kinds = 8
-        self._n_other_vec_kinds = self._n_vec_kinds - 1
+        self._diag_stride = self._n_vec_kinds + 1
+        self._n_vec_kinds_sq = self._n_vec_kinds * self._n_vec_kinds
         
         self.to_nn_permut = tf.constant(to_nn_permut, dtype=tf.int32)
 
@@ -521,25 +308,11 @@ class PointsToInputsConstStep(keras.layers.Layer):
 
         self._jav_muls = _get_JAV_muls(step)
 
-        # CIND = ALL_RELATIVE_VECTORS.index(MOTION_DATA.JERK_ERR_VEC3)
-        # We don't divide by crackle's mag because it's not used as a relative
-        # axis.
-        # self._non_crackles = tuple([
-        #     i for i in range(1, self._n_vec_kinds) if i != CIND
-        # ])#, dtype=tf.int32)
         if self._n_vec_kinds != 8:
             raise Exception(
                 "Hardcoded 'loop' iterations and whatnot assume "
                 "self.n_vec_kinds == 8, but this is no longer true!"
             )
-
-        
-        # Calculate the size of non_vel_projs for fixed-size TensorArray
-        # For each i in _non_crackles: we add 1 tensor, plus 1 more if i < _n_other_vec_kinds
-        self._non_vel_projs_size = sum(
-            2 if i < self._n_other_vec_kinds else 1
-            for i in range(1, self._n_vec_kinds)# if i != CIND
-        )
 
     def get_config(self):
         config = super().get_config()
@@ -562,8 +335,6 @@ class PointsToInputsConstStep(keras.layers.Layer):
         scale_means = config["scale_means"]
         scale_scales = config["scale_scales"]
         to_nn_permut = config["to_nn_permut"]
-        
-
 
         # Create a new instance of the layer
         return cls(
@@ -573,12 +344,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
             to_nn_permut=np.array(to_nn_permut),
             zero_angle_thresh=zero_angle_thresh,
         )
-    # The below function is basically a version of HypotheticalInputsForNN
-    # but using tensorflow instead of numpy. Because I'm not very familiar with
-    # tensorflow's API I experimented by letting Claude Code take a shot at it.
-    # I've read through it and tested it a lot, and changed it a fair bit, with
-    # much of said revision coming from advice I read in the tf docs, so
-    # hopefully it's not too bad but maybe it's not as optimized as it could be.
+    
     @tf.function
     def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
 
@@ -600,358 +366,132 @@ class PointsToInputsConstStep(keras.layers.Layer):
         
         scaled_aas = aa0_through_5 #/ self.rot_scale
         angvel_aas = compute_relative_rotations(
-            scaled_aas[:-1], scaled_aas[1:]
+            scaled_aas[2:-1], scaled_aas[3:]
         )
 
         all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
-
-        all_prev_vels = all_pds.velocities[:-1]
-        # prev_vel = all_prev_vels[-1]
-        # prev_acc = all_pds.accelerations[-2]
-        # prev_jerk = all_pds.jerks[-2]
-        # prev_snap = all_pds.snaps[-2]
         
         # Calculate velocities, speeds, and indices where speed is 0.
         vels = all_pds.velocities[-1]
-        vel_mags: tf.Tensor = tf.norm(vels, axis=-1, keepdims=True)
         accs = all_pds.accelerations[-1]
         jerks = all_pds.jerks[-1]
         snaps = all_pds.snaps[-1]
         crackles = all_pds.crackles[-1]
 
-
-        # prev_vel_mags = tf.norm(all_prev_vels, axis=-1)
-        # # rev_prev_vel_mags = prev_vel_mags[..., ::-1]
-        # # last_nonzero_vels = all_prev_vels[-1]
-        
-        # # pm.handleCondsAtStart(
-        # #     rev_vel_mags == 0.0, rev_vel_mags, self._replaceAtInd,
-        # #     arr_to_mod=last_nonzero_vels
-        # # )
-        
-        # # last_nonzero_unit_vels = tfNormalizeAll(last_nonzero_vels)
-        # prev_speed = tf.norm(prev_vel, axis=-1, keepdims=True)
-        # prev_unit_vel = tf.math.divide_no_nan(prev_vel, prev_speed)
-
-        # prev_ang_vel = all_rds.velocities[-2]
-        # prev_ang_acc = all_rds.accelerations[-2]
-        # prev_ang_jerk = all_rds.jerks[-2]
-
         new_ang_vel = all_rds.velocities[-1]
         new_ang_acc = all_rds.accelerations[-1]
         new_ang_jerk = all_rds.jerks[-1]
-
-        # prev_ortho_mags, prev_ortho_dirs = tfOrthonormalFramesFromUnitVec0s(
-        #     True, prev_unit_vel, prev_acc, self.zero_angle_thresh
-        # )
-
-        # a0_is_0 = tf.equal(prev_ortho_mags[1], 0.0)
-        
-        # Only compute if any acceleration orthogonal components are zero
-        def update_ortho_dirs_with_jerk(ortho_dirs, jerk_vals, condition_mask):
-            """Update third orthogonal direction using jerk where condition is True."""
-            # If we don't specify tf.int32 here, the tf.cond fails in eager mode
-            # because the original ortho_dirs has a tf.int32 "dense_shape"
-            # for whatever reason, whereas the "default" when indices are
-            # constructed as below is int64. And tf wants the two "branches" of
-            # cond to match. TODO: Try to understand this more and maybe make
-            # it consistently int64 instead of int32, which would require
-            # figuring out why the original is int32....
-            indices = tf.cast(tf.where(condition_mask), tf.int32)
-            jerk_masked = tf.gather_nd(jerk_vals, indices)
-            ortho_dirs_0_masked = tf.gather_nd(ortho_dirs[:, 0, :], indices)
-            
-            _, j_orth = tfParallelAndOrthoParts(
-                jerk_masked, ortho_dirs_0_masked, True
-            )
-            j_orth_normalized = tfNormalizeAll(j_orth)
-            
-            # Build indices for scatter: we need to update ortho_dirs[i, 2, :] for each i in indices
-            # Cast to match indices dtype (int64 from tf.where)
-            # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
-            scatter_indices = tf.concat([
-                indices,
-                tf.cast(tf.fill([tf.shape(indices)[0], 1], 2), indices.dtype)
-            ], axis=1)
-            
-            # Update only the masked indices in the third orthogonal direction
-            return tf.tensor_scatter_nd_update(
-                ortho_dirs,
-                scatter_indices,
-                j_orth_normalized
-            )
-        
-        # prev_ortho_dirs = tf.cond(
-        #     tf.reduce_any(a0_is_0),
-        #     lambda: update_ortho_dirs_with_jerk(prev_ortho_dirs, prev_jerk, a0_is_0),
-        #     lambda: prev_ortho_dirs
-        # )
-
-        # # print("hyp pre:", prev_ortho_dirs)
-
-        # prev_relative_vecs = tf.stack(
-        #     (
-        #         prev_vel, prev_acc, prev_jerk, prev_snap,
-        #         prev_ang_vel, prev_ang_acc, prev_ang_jerk,
-        #         prev_ortho_dirs[..., 1, :], prev_ortho_dirs[..., 2, :]
-        #     ), axis=0
-        # )
-
-        # # Because the scales of the prev_ortho_dirs are just 1, we exclude these
-        # # from the array, hence the "-2" instances below.
-        # # num_scale_types = self._n_rel_axes_excl_ortho  # 7 relative axes (vel, acc, jerk, snap, ang_vel, ang_acc, ang_jerk)
-
-        # # inner_prev_vecs_shape = tf.shape(prev_relative_vecs)[1:-1]
-        # # n_ins = x0_through_5.shape[1]
-        # # prev_scale_shape = (num_scale_types, n_ins)
-
-        # # Build prev_relative_scales using tensor_scatter_nd_update for graph compatibility
-        # scale_0 = tf.reshape(prev_vel_mags[-1], [1, -1])
-        # scale_1 = tf.reshape(tf.sqrt(prev_ortho_mags[0]**2 + prev_ortho_mags[1]**2), [1, -1])
-        # scales_2_onwards = tf.norm(prev_relative_vecs[2:-2], axis=-1)  # Shape: (5, n_ins)
-        
-        # prev_relative_scales = tf.concat([scale_0, scale_1, scales_2_onwards], axis=0)
-
-        # Safely obtain unit velocities, 
-        unit_vels = tf.math.divide_no_nan(vels, vel_mags)
-        vel_mag_is_0 = tf.reshape(vel_mags, [-1]) < self.zero_angle_thresh
-        # unit_vels = tf.where(
-        #     vel_mag_is_0, last_nonzero_unit_vels, unit_vels
-        # )
 
         all_curr_vecs = tf.stack(
             (
                 vels, accs, jerks, snaps, crackles,
                 new_ang_vel, new_ang_acc, new_ang_jerk
-            ), axis=0
+            ), axis=1
         )
+        all_dots = tf.linalg.matmul(
+            all_curr_vecs, all_curr_vecs, transpose_b = True
+        )
+        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
+        n_ins = tf.shape(x0_through_5)[1]
+        _flatter_dots = tf.reshape(all_dots, [n_ins, self._n_vec_kinds_sq])
+        self_dots = _flatter_dots[:, ::self._diag_stride]
+        all_mags = tf.reshape(tf.sqrt(self_dots), [n_ins, self._n_vec_kinds, 1])
+
+        vel_mags = all_mags[:, 0]
+        unit_vels = tf.math.divide_no_nan(vels, vel_mags)
 
         tf.debugging.assert_equal(
-            self._n_vec_kinds, all_curr_vecs.shape[0],
+            self._n_vec_kinds, all_curr_vecs.shape[1],
             "Hardcoded value for self._n_vec_kinds no longer correct!"
         )
-
-        # all_dots_with_prev = tf.einsum(
-        #     'aik,bik->abi', all_curr_vecs, prev_relative_vecs
-        # )
-
-        # all_proj_with_prev = tf.math.divide_no_nan(
-        #     all_dots_with_prev[:, :-2], prev_relative_scales 
-        # )
 
         
         (a_proj_v, a_ortho_v), curr_ortho_mats = tfOrthonormalFramesFromUnitVec0s(
             True, unit_vels, accs, self.zero_angle_thresh 
         )
-        a0_is_0 = tf.equal(a_ortho_v, 0.0)
+        # a0_is_0 = tf.equal(a_ortho_v, 0.0)
         
-        curr_ortho_mats = tf.cond(
-            tf.reduce_any(a0_is_0),
-            lambda: update_ortho_dirs_with_jerk(curr_ortho_mats, jerks, a0_is_0),
-            lambda: curr_ortho_mats
-        )
-        # print("hyp curr:", curr_ortho_mats)
-
-        # For the various dot products between *current* frame values, we'll
-        # keep track of them in a list of tensors so that we don't duplicate
-        # dot products.
-        # We have 8 non-unit vec3s (vel..crackle and rot vel..jerk), but we'll 
-        # handle the unit-length orthogonal relative axes separately, so our
-        # dimensions will be 7x7x...
-        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
-        n_ins = tf.shape(x0_through_5)[1]
-        
-
-        accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
-        
-        # Rather than keep the self-dots in the "diagonal", I think it may be
-        # slightly more efficient to keep them separate; we'll need to divide
-        # by them later, so this prevents the need for diag indexing or copies.
-        # Build non_vel_mags using concat for graph compatibility
-        acc_mag = tf.norm(accs_2D, axis=-1, keepdims=True)  # Shape: (n_ins, 1)
-        other_mags = tf.norm(all_curr_vecs[2:], axis=-1)    # Shape: (6, n_ins)
-        non_vel_mags = tf.concat([tf.transpose(acc_mag), other_mags], axis=0)  # Shape: (7, n_ins)
-
-        all_mags = tf.concat([tf.reshape(vel_mags, (1, n_ins)), non_vel_mags], axis=0)
-
-        # Build tri_dots row by row using TensorArray for graph compatibility
-        # tri_dots_rows = tf.TensorArray(
-        #     dtype=tf.float32, size=self._n_other_vec_kinds - 1,
-        #     dynamic_size=False, clear_after_read=False
+        # curr_ortho_mats = tf.cond(
+        #     tf.reduce_any(a0_is_0),
+        #     lambda: update_ortho_dirs_with_jerk(curr_ortho_mats, jerks, a0_is_0),
+        #     lambda: curr_ortho_mats
         # )
-        
-        # First, the dots with velocity. Row looks like [v*a, 0, 0, ...]
-        row_0_val = tf.reshape(vel_mags, [-1]) * a_proj_v  # Shape: (n_ins,)
-        row_0 = tf.concat([
-            row_0_val[tf.newaxis, :],  # Element [0,0]
-            tf.zeros((self._n_other_vec_kinds - 1, n_ins), dtype=tf.float32)  # Rest are zeros
-        ], axis=0)
-        
 
-        # Rows 1 through n_other_vec_kinds-1: compute dot products
-        def loop_bod(i): #: _Try_Dot_Bod_Tup):
-            # Compute tri_dots[i-1, :i] = dot products with all previous vectors
-            # Conversion to TFLite converts einsum version of this into a
-            # batched matmul in an incorrect way, so I need to "manually" do it
-            # the correct way.
-            vecs_i = all_curr_vecs[i][..., tf.newaxis] # Shape: n_ins, 3, 1
-            post_i = tf.transpose(all_curr_vecs[:i], [1, 0, 2]) # shape: n_ins, i, 3
-            muls = tf.matmul(post_i, vecs_i) # shape: n_ins, i, 1
-            dots_i = tf.transpose(tf.reshape(muls, [-1, i]), [1, 0]) # shape: i, n_ins
-            # dots_i = tf.einsum('jk,ijk->ij', all_curr_vecs[i], all_curr_vecs[:i])
-
-            # Pad with zeros for the rest of the row
-            return tf.concat([
-                dots_i,  # Shape: (i, n_ins)
-                tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
-            ], axis=0)
-
-        def loop_bod_div(i):
-            v = all_mags[i] # shape: n_ins
-            w = all_mags[:i] # shape: i, n_ins
-            muls_i = v * w # shape i, n_ins
-
-            # Pad with zeros for the rest of the row
-            return tf.concat([
-                muls_i,  # Shape: (i, n_ins)
-                tf.zeros((self._n_other_vec_kinds - i, n_ins), dtype=tf.float32)
-            ], axis=0)
-        
-        # Stack all rows together
-        # Shape: (n_other_vec_kinds, n_other_vec_kinds, n_ins)
-        tri_dots = tf.stack((
-            row_0, loop_bod(2), loop_bod(3), loop_bod(4), loop_bod(5),
-            loop_bod(6), loop_bod(7)
-        ), axis=0) 
-
-        row_0_nm_val = tf.reshape(vel_mags, [-1]) * non_vel_mags[0]  # Shape: (n_ins,)
-        row_0_norm_mul = tf.concat([
-            row_0_nm_val[tf.newaxis, :],  # Element [0,0]
-            tf.zeros((self._n_other_vec_kinds - 1, n_ins), dtype=tf.float32)  # Rest are zeros
-        ], axis=0)
-        tri_norm_muls = tf.stack((
-            row_0_norm_mul, loop_bod_div(2), loop_bod_div(3), loop_bod_div(4),
-            loop_bod_div(5), loop_bod_div(6), loop_bod_div(7)
-        ), axis=0) 
-
-
-        # For the projections, we don't worry about "duplicates" since there are
-        # none: projecting jerk onto velocity is different from vice versa.
-        # However, we have the diagonal separated out already, so we can
-        # exclude that.
-        acc_vel_proj = tf.where(
-            vel_mag_is_0, tf.zeros_like(a_proj_v), a_proj_v
-        )
-        acc_vel_proj = acc_vel_proj[tf.newaxis]
-        other_projs_on_vel = tf.math.divide_no_nan(
-            tri_dots[1:, 0], tf.reshape(vel_mags, [-1])
+        # all_dots: (n, 8, 8), all_mags: (n, 8, 1)
+        all_proj = tf.math.divide_no_nan(all_dots, all_mags)
+        all_unit_dots = tf.math.divide_no_nan(
+            all_proj, tf.reshape(all_mags, [n_ins, 1, -1])
         )
 
-
-        # Collect non_vel_projs by flattening each piece before storing
-        # Since the final result needs to be concatenated anyway, we flatten to 1D first
-        # non_vel_projs = tf.TensorArray(
-        #     dtype=tf.float32, size=len(self._non_crackles), dynamic_size=False,
-        #     clear_after_read=False,
-        #     infer_shape=False  # Don't infer shape from first element - allow varying lengths
-        # )
+        # accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
+        # acc_mag = tf.norm(accs_2D, axis=-1, keepdims=True)  # Shape: (n_ins, 1)
         
-        def nvp_loop_bod(i_ind):
-            # i = self._non_crackles[i_ind]
-            i = i_ind + 1
-            prev_i = i_ind
-            mag_i = non_vel_mags[prev_i]
-            proj_val = tf.math.divide_no_nan(tri_dots[prev_i, :i], mag_i)
-            # Flatten to 1D: shape (i, n_ins) -> (i * n_ins,)
-            proj_val_flat = tf.reshape(proj_val, [-1])
-        # def nvp_loop_bod2(i_ind, arr_idx, non_vel_projs2):
-            # i = self._non_crackles[i_ind]
-            # if i < self._n_other_vec_kinds:
-            towrite = proj_val_flat
-            if i < self._n_other_vec_kinds:
-                proj_val_h = tf.math.divide_no_nan(tri_dots[i:, i], mag_i)
-                # Flatten to 1D: shape (n_other_vec_kinds - i, n_ins) -> ((n_other_vec_kinds - i) * n_ins,)
-                proj_val_h_flat = tf.reshape(proj_val_h, [-1])
-                towrite = tf.concat((proj_val_flat, proj_val_h_flat), axis=0)
-            return towrite
-        
-        non_vel_projs_flat = tf.concat((
-            nvp_loop_bod(0), #non_vel_projs2.read(0),
-            nvp_loop_bod(1), #non_vel_projs2.read(1),
-            nvp_loop_bod(2), #non_vel_projs2.read(2),
-            nvp_loop_bod(3), #non_vel_projs2.read(3),
-            nvp_loop_bod(4), #non_vel_projs2.read(4),
-            nvp_loop_bod(5), #, non_vel_projs2.read(5),
-            nvp_loop_bod(6) #, non_vel_projs2.read(0),
-        ), axis=0)
-        # Concatenate all flattened pieces into one 1D tensor, then reshape to (total_elements, n_ins)
-        # non_vel_projs_flat = non_vel_projs.concat()
-        # The total number of rows across all pieces
-        non_vel_projs_stacked = tf.reshape(non_vel_projs_flat, [-1, n_ins])
-        
-        a_proj_with_curr_rel = (
-            a_ortho_v, #curr_ortho_mags[4], curr_ortho_mags[5]
-        )
-        remaining_proj_with_curr_rel = tf.einsum(
-            'ijk,jbk->ibj', all_curr_vecs[2:], curr_ortho_mats[:, 1:]
-        ) # shape: 6, ?, n_ins
+        remaining_proj_with_curr_rel = tf.linalg.matmul(
+            all_curr_vecs[:, 2:], curr_ortho_mats[:, 1:], transpose_b=True
+        ) # shape: n_ins, 6, 2
 
         def unitDotToAng(tensorVal):
             return tf.acos(tf.clip_by_value(tensorVal, -1.0, 1.0))
 
-        tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
-        tri_nms_lower = tf.gather_nd(tri_norm_muls, self._tril_indices)
-        tri_angs_lower = unitDotToAng(
-            tf.math.divide_no_nan(tri_dots_lower, tri_nms_lower)
+        # tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
+
+        all_angs = unitDotToAng(all_unit_dots)
+        angs_and_projs_to_concat = (
+            all_angs[:, 1, :1], all_angs[:, 2, :2], all_angs[:, 3, :3],
+            all_angs[:, 4, :4], all_angs[:, 5, :5], all_angs[:, 6, :6],
+            all_angs[:, 7, :7],
+            all_proj[:, 0, 1:],
+            all_proj[:, 1, :1], all_proj[:, 1, 2:],
+            all_proj[:, 2, :2], all_proj[:, 2, 3:],
+            all_proj[:, 3, :3], all_proj[:, 3, 4:],
+            all_proj[:, 4, :4], all_proj[:, 4, 5:],
+            all_proj[:, 5, :5], all_proj[:, 5, 6:],
+            all_proj[:, 6, :6], all_proj[:, 6, 7:],
+            all_proj[:, 7, :7],
         )
 
-        a_ang_with_curr_rel = (
-            unitDotToAng(tf.math.divide_no_nan(a_ortho_v, non_vel_mags[0])),
-        )
+        a_ang_with_curr_rel = \
+            unitDotToAng(tf.math.divide_no_nan(a_ortho_v, all_mags[:, 1, 0]))
 
         remaining_ang_with_curr_rel = unitDotToAng(
             tf.math.divide_no_nan(
-                remaining_proj_with_curr_rel, tf.reshape(non_vel_mags[1:], (self._n_vec_kinds - 2, 1, n_ins))
+                remaining_proj_with_curr_rel, all_mags[:, 2:]
             )
         )
-        ret = tf.transpose(tf.concat(
-            (
-                tf.cast(tf.fill((1, n_ins), self.step), tf.float32),
-                # tf.reshape(all_dots_with_prev, [-1, n_ins]),
-                # tf.reshape(all_proj_with_prev, [-1, n_ins]),
-                tf.reshape(vel_mags, (1, n_ins)), non_vel_mags, tri_angs_lower,
-                acc_vel_proj, other_projs_on_vel, 
-                non_vel_projs_stacked,
-                a_proj_with_curr_rel,
-                tf.reshape(remaining_proj_with_curr_rel, [-1, n_ins]),
-                a_ang_with_curr_rel,
-                tf.reshape(remaining_ang_with_curr_rel, [-1, n_ins])
-            ), axis=0
+        ret_tup = ((
+            tf.cast(tf.fill((n_ins, 1), self.step), tf.float32),
+            tf.reshape(all_mags, [n_ins, -1]), 
+        ) + angs_and_projs_to_concat + 
+        (
+            tf.reshape(a_ortho_v, [n_ins, 1]),
+            tf.reshape(remaining_proj_with_curr_rel, [n_ins, -1]),
+            tf.reshape(a_ang_with_curr_rel, [n_ins, 1]),
+            tf.reshape(remaining_ang_with_curr_rel, [n_ins, -1])
         ))
-        # missing_zeros = tf.zeros((n_ins, 227))
-        # ret = tf.concat((ret, missing_zeros), axis=1)
+        ret = tf.concat(
+            ret_tup, axis=1
+        )
         
         # Apply column permutation to match the reference key order
-        ret = tf.gather(ret, self.to_nn_permut, axis=1)            
+        ret = tf.gather(ret, self.to_nn_permut, axis=1) # Should permute elsewhere!!!            
 
         ret = (ret - self.scale_means) / self.scale_scales
 
         # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
-        jsc_on_vel = tf.reshape(other_projs_on_vel[:3], [3, 1, -1]) # Jerk, Snap, Crackle are first 3, then comes the rotation stuff.
-        jsc_on_aj = remaining_proj_with_curr_rel[:3]
-        #(shape (3, 1, n) and (3, 2, n), respectively)
-
-        jsc_on_all = tf.concat((jsc_on_vel, jsc_on_aj), axis=1) # (3, 3, n)
-        jsc_on_all_t = tf.transpose(jsc_on_all, [2, 0, 1])
+        jsc_on_vel = tf.reshape(all_proj[:, 0, 2:5], [-1, 3]) # Jerk, Snap, Crackle are first 3, then comes the rotation stuff.
+        jsc_on_aj = remaining_proj_with_curr_rel[:, :3]
+        #(shape (n, 3) and (n, 3, 2), respectively)
 
         # Build the 12-component JAV vector plus 3 zeros
         zeros_3 = tf.zeros((n_ins, 3), dtype=tf.float32)
         jav_15 = tf.concat((
-            tf.reshape(vel_mags, [n_ins, 1]),    # velocity magnitude
+            vel_mags,    # velocity magnitude
             tf.reshape(a_proj_v, [n_ins, 1]),    # acceleration parallel
             tf.reshape(a_ortho_v, [n_ins, 1]),   # acceleration orthogonal
-            tf.reshape(jsc_on_all_t, [n_ins, 9]),
+            jsc_on_vel[:, :1], jsc_on_aj[:, 0],
+            jsc_on_vel[:, 1:2], jsc_on_aj[:, 1],
+            jsc_on_vel[:, 2:3], jsc_on_aj[:, 2],
             zeros_3
         ), axis=1)
         
@@ -988,57 +528,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         inputs_rs = tf.reshape(inputs, [input_shape[0], 6, 6])
         inputs_swapax = tf.transpose(inputs_rs, [1, 0, 2])
         # Split inputs into positions and axis-angles
-        positions = safe_slice_ax2(inputs_swapax, 0, 3)    # Shape: (batch_size, n_frames, 3)
-        axis_angles = safe_slice_ax2(inputs_swapax, 3, 6)  # Shape: (batch_size, n_frames, 3)
-        
-        # # Process each batch item separately using map_fn
-        # def process_single_window(single_input):
-        #     pos = single_input[0]   # Shape: (n_frames, 3)
-        #     aa = single_input[1]    # Shape: (n_frames, 3)
-            
-        #     # calculateOutputs returns (features, jav_stack, curr_ortho_mats)
-        #     # We only need features for the neural network input
-        #     features, _, _ = self.calculateOutputs(pos, aa)
-        #     return features
-        
-        # # Apply to all batch items
-        # batch_features = tf.map_fn(
-        #     process_single_window,
-        #     (positions, axis_angles),
-        #     dtype=tf.float32
-        # )
+        positions = inputs_swapax[:, :, 0:3]    # Shape: (batch_size, n_frames, 3)
+        axis_angles =  inputs_swapax[:, :, 3:6]  # Shape: (batch_size, n_frames, 3)
         
         return self.calculateOutputs(positions, axis_angles)
-    
-
-'''
-Some notes/references for myself:
-
-https://www.tensorflow.org/guide/advanced_autodiff
-https://www.tensorflow.org/guide/autodiff
-https://www.tensorflow.org/guide/intro_to_graphs
-https://stackoverflow.com/questions/42848322/what-does-my-choice-of-glfw-samples-actually-do
-
-`Don't rely on Python side effects like object mutation or LIST APPENDS.`
-tf.config.run_functions_eagerly(bool)
-
-When tf.function does decide to trace, the tracing stage is immediately followed by the second stage, so calling the tf.function both creates and runs the tf.Graph.
-    Later you will see how you can run only the tracing stage with get_concrete_function.
-
-You can use pretty_printed_concrete_signatures() to see all of the available traces:
-> print(double.pretty_printed_concrete_signatures())
-
-https://www.tensorflow.org/guide/function#obtaining_concrete_functions
-https://www.tensorflow.org/guide/saved_model
-https://www.tensorflow.org/api_docs/python/tf/print
-
-https://stackoverflow.com/questions/73267868/how-to-do-slice-and-update-operation-on-tensors-in-tensorflow-2-0
-https://stackoverflow.com/questions/62092147/how-to-efficiently-assign-to-a-slice-of-a-tensor-in-tensorflow
-https://www.tensorflow.org/api_docs/python/tf/tensor_scatter_nd_update
-
-
-https://stackoverflow.com/questions/56616485/equality-comparison-does-not-work-inside-tensorflow-2-0-tf-function
-
-
-
-'''

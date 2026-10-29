@@ -26,13 +26,10 @@ def poseLossLagrange(y_true, y_pred):
 def getVelFrameDisplacements(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
-    disp_0 = y_true[:, 0] * y_pred[:, 0] + y_true[:, 1] * y_pred[:, 1] \
-        + y_true[:, 3] * y_pred[:, 3] + y_true[:, 6] * y_pred[:, 6] \
-        + y_true[:, 9] * y_pred[:, 9]
-    disp_1 = y_true[:, 2] * y_pred[:, 2] + y_true[:, 4] * y_pred[:, 4] \
-        + y_true[:, 7] * y_pred[:, 7] + y_true[:, 10] * y_pred[:, 10]
-    disp_2 = y_true[:, 5] * y_pred[:, 5] + y_true[:, 8] * y_pred[:, 8] \
-        + y_true[:, 11] * y_pred[:, 11]
+    muls = y_true[..., :12] * y_pred # elementwise multiplication
+    disp_0 = muls[:, 0] + muls[:, 1] + muls[:, 3] + muls[:, 6] + muls[:, 9]
+    disp_1 = muls[:, 2] + muls[:, 4] + muls[:, 7] + muls[:, 10]
+    disp_2 = muls[:, 5] + muls[:, 8] + muls[:, 11]
 
     return tf.stack((disp_0, disp_1, disp_2), axis=-1)
 

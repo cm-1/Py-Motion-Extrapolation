@@ -125,12 +125,10 @@ jav_lstm_model = loadRun(load_lstm_dir, True, run_meta)
 # Define the getWorldFrameDisplacements function as a TensorFlow operation
 def getWorldFrameDisplacements(y_true, y_pred, world2locals):
     disp = getVelFrameDisplacements(y_true, y_pred)
-    # Convert local displacement into world displacement.
-    local2worlds = tf.transpose(world2locals, perm=[0, 2, 1])
     # Conversion to TFLite converts einsum version of this into a batched matmul
     # in an incorrect way, so I need to "manually" do it the correct way.
     disp_mats = disp[..., tf.newaxis] # pyright:ignore
-    mm = tf.matmul(local2worlds, disp_mats)
+    mm = tf.matmul(world2locals, disp_mats, transpose_a=True)
     return tf.reshape(mm, [-1, 3])
 
 class AbstractKalmanWrapper(AbstractModelWrapper):
