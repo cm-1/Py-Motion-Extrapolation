@@ -72,7 +72,7 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
     return ret_mags, mats
 
 
-def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
+def compute_in_between_rotations(axis_angles: tf.Tensor):
     """
     Computes the relative axis-angle rotations between two sets of axis-angle
     rotations using quaternions.
@@ -87,19 +87,17 @@ def compute_relative_rotations(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor)
         A tensor of shape (n, 3) representing the relative axis-angle rotations.
     """
 
-    angs1 = tf.norm(axis_angles1, axis=-1, keepdims=True)
-    angs2 = tf.norm(axis_angles2, axis=-1, keepdims=True)
+    angs = tf.norm(axis_angles, axis=-1, keepdims=True)
 
-    units1 = tf.math.divide_no_nan(axis_angles1, angs1)
-    units2 = tf.math.divide_no_nan(axis_angles2, angs2)
+    units = tf.math.divide_no_nan(axis_angles, angs)
 
     # Convert axis angles to quaternions
-    quaternions1 = tfg_transformation.quaternion.from_axis_angle(units1, angs1)
-    quaternions2 = tfg_transformation.quaternion.from_axis_angle(units2, angs2)
+    quaternions = tfg_transformation.quaternion.from_axis_angle(units, angs)
 
     # Compute the relative quaternion
     relative_quaternions = tfg_transformation.quaternion.multiply(
-        quaternions2, tfg_transformation.quaternion.conjugate(quaternions1)
+        quaternions[1:],
+        tfg_transformation.quaternion.conjugate(quaternions[:-1])
     )
 
     # Convert the relative quaternion back to axis angles
@@ -365,9 +363,7 @@ class PointsToInputsConstStep(keras.layers.Layer):
         )
         
         scaled_aas = aa0_through_5 #/ self.rot_scale
-        angvel_aas = compute_relative_rotations(
-            scaled_aas[2:-1], scaled_aas[3:]
-        )
+        angvel_aas = compute_in_between_rotations(scaled_aas[2:])
 
         all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
         
