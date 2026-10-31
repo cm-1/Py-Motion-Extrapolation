@@ -136,9 +136,7 @@ class AbstractKalmanWrapper(AbstractModelWrapper):
     Shared logic for models that map a state of N/6 stacked vec6 poses to the
     next state (shift the history by one pose, append a newly predicted pose).
 
-    Subclasses implement predict_translation and predict_rotation (each
-    returning [B, 3]). They may override predict_pose if the two halves
-    come from a single network call.
+    Subclasses implement predict_pose (returning [B, 6]).
     """
 
     def __init__(self, input_shape):
@@ -146,18 +144,8 @@ class AbstractKalmanWrapper(AbstractModelWrapper):
         self.num_prev_cells: int = input_shape[-1] - 6
 
     # ---- hooks ----
-    def predict_translation(self, x: tf.Tensor) -> tf.Tensor:
-        raise NotImplementedError
-
-    def predict_rotation(self, x: tf.Tensor) -> tf.Tensor:
-        raise NotImplementedError
-
-    # ---- shared ----
     def predict_pose(self, x: tf.Tensor) -> tf.Tensor:
-        """New vec6 = [translation, rotation]."""
-        return tf.concat(
-            (self.predict_translation(x), self.predict_rotation(x)), axis=-1
-        )
+        raise NotImplementedError
 
     def forward(self, x: tf.Tensor):
         x.set_shape(self.input_shape)
@@ -209,7 +197,7 @@ class FcnnKalmanWrapper(AbstractKalmanWrapper):
         self.preproc = preproc_layer
         self.fcnn = fcnn_model
 
-    def predict_translation(self, x):
+    def predict_pose(self, x):
         features = self.preproc(x)
 
         multiplier_predictions = self.fcnn(features[0])
@@ -222,10 +210,7 @@ class FcnnKalmanWrapper(AbstractKalmanWrapper):
         y_true, world2locals = features[1], features[2]
         orig_pos = x[:, -6:-3]
         disp = getWorldFrameDisplacements(y_true, multiplier_predictions, world2locals)
-        return orig_pos + disp
-
-    def predict_rotation(self, x):
-        return constant_angvel_rotation(x)
+        return tf.concat((orig_pos + disp, constant_angvel_rotation(x)), axis=-1)
 
 class LstmKalmanWrapper(AbstractKalmanWrapper):
     def __init__(self, lstm_model, input_shape, lstm_vec_dim: int,
@@ -263,12 +248,6 @@ class LstmKalmanWrapper(AbstractKalmanWrapper):
             return tf.concat((trans, self.rotation_fn(x)), axis=-1)
         else:
             raise Exception("Bad out dimension!")
-
-    def predict_translation(self, x):
-        return self.predict_pose(x)[:, :3]
-
-    def predict_rotation(self, x):
-        return self.predict_pose(x)[:, 3:]
 
 # %%
 

@@ -72,6 +72,30 @@ def tfOrthonormalFramesFromUnitVec0s(returned_mats_are_world2vecs: bool,
     return ret_mags, mats
 
 
+def tfAxisAngleVec3sToQuats(aa: tf.Tensor):
+    '''(w, v) quaternion parts from scaled axis-angle vectors of shape (..., 3).'''
+    ang = tf.norm(aa, axis=-1, keepdims=True)
+    half = 0.5 * ang
+    w = tf.cos(half)
+    v = aa * tf.math.divide_no_nan(tf.sin(half), ang)
+    return w, v
+
+def tfQuatsToAxisAngleVec3s(w: tf.Tensor, v: tf.Tensor):
+    '''Scaled axis-angle vectors with angle in [0, pi] from (w, v) parts.'''
+    v_norm = tf.norm(v, axis=-1, keepdims=True)
+    angle = 2.0 * tf.atan2(v_norm, tf.abs(w))
+    # q and -q are the same rotation; use the one with w >= 0. (Not
+    # tf.math.sign: that returns 0 at w == 0, which is a 180-degree rotation.)
+    sign = tf.where(w >= 0.0, 1.0, -1.0)
+    return sign * tf.math.divide_no_nan(v, v_norm) * angle
+
+def tfMulQuatLists(w0: tf.Tensor, v0: tf.Tensor, w1: tf.Tensor, v1: tf.Tensor):
+    '''Returns q0 * q1.'''
+    # q_final = q_disp * q_start
+    w = w0 * w1 - tf.reduce_sum(v0 * v1, axis=-1, keepdims=True)
+    v = w0 * v1 + w1 * v0 + tf.linalg.cross(v0, v1)
+    return w, v
+
 def compute_in_between_rotations(axis_angles: tf.Tensor):
     """
     Computes the relative axis-angle rotations between two sets of axis-angle
@@ -122,28 +146,12 @@ def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
     Returns:
         A tensor of shape (n, 3) representing the new axis-angle orientations.
     """
+    ws, vs = tfAxisAngleVec3sToQuats(axis_angles_start)
+    wd, vd = tfAxisAngleVec3sToQuats(axis_angles_disp)
 
-    angs_start = tf.norm(axis_angles_start, axis=-1, keepdims=True)
-    angs_disp = tf.norm(axis_angles_disp, axis=-1, keepdims=True)
+    w, v = tfMulQuatLists(wd, vd, ws, vs)
+    return tfQuatsToAxisAngleVec3s(w, v)
 
-    units_start = tf.math.divide_no_nan(axis_angles_start, angs_start)
-    units_disp = tf.math.divide_no_nan(axis_angles_disp, angs_disp)
-
-    # Convert axis angles to quaternions
-    qs_start = tfg_transformation.quaternion.from_axis_angle(units_start, angs_start)
-    qs_disp = tfg_transformation.quaternion.from_axis_angle(units_disp, angs_disp)
-
-    qs_final = tfg_transformation.quaternion.multiply(
-        qs_disp, qs_start
-    )
-
-    # Convert the new quaternion back to axis angles
-    axis_angles_final = tfg_transformation.axis_angle.from_quaternion(
-        qs_final
-    )
-
-    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
-    return axis_angles_final[0] * axis_angles_final[1]
 
 def ang_vel_extrapolate(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
     """
