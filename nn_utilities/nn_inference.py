@@ -96,41 +96,31 @@ def tfMulQuatLists(w0: tf.Tensor, v0: tf.Tensor, w1: tf.Tensor, v1: tf.Tensor):
     v = w0 * v1 + w1 * v0 + tf.linalg.cross(v0, v1)
     return w, v
 
-def compute_in_between_rotations(axis_angles: tf.Tensor):
+def tfGetDisplacementQuats(w0: tf.Tensor, v0: tf.Tensor, w1: tf.Tensor, v1: tf.Tensor):
+    w_rel = w1 * w0 + tf.reduce_sum(v1 * v0, axis=-1, keepdims=True)
+    v_rel = w0 * v1 - w1 * v0 + tfCross(v0, v1)
+    return (w_rel, v_rel)
+
+def tfGetQuatDisplacementsAsAAVec3s(w0: tf.Tensor, v0: tf.Tensor, w1: tf.Tensor, v1: tf.Tensor):
     """
-    Computes the relative axis-angle rotations between two sets of axis-angle
-    rotations using quaternions.
+    Computes the relative axis-angle rotations between two quaterions and
+    returns the scaled axis angle vec3s for it.
 
     Args:
-        axis_angles1: A tensor of shape (n, 3) representing the first set
-                      of axis-angle rotations.
-        axis_angles2: A tensor of shape (n, 3) representing the second set
-                      of axis-angle rotations.
+        w0: First quaternions' real component.
+        v0: First quaternions' vec3 component.
+        w1: Second quaternions' real component.
+        v1: Second quaternions' vec3 component.
 
     Returns:
         A tensor of shape (n, 3) representing the relative axis-angle rotations.
     """
 
-    angs = tf.norm(axis_angles, axis=-1, keepdims=True)
-
-    units = tf.math.divide_no_nan(axis_angles, angs)
-
-    # Convert axis angles to quaternions
-    quaternions = tfg_transformation.quaternion.from_axis_angle(units, angs)
-
-    # Compute the relative quaternion
-    relative_quaternions = tfg_transformation.quaternion.multiply(
-        quaternions[1:],
-        tfg_transformation.quaternion.conjugate(quaternions[:-1])
-    )
-
-    # Convert the relative quaternion back to axis angles
-    relative_axis_angles = tfg_transformation.axis_angle.from_quaternion(
-        relative_quaternions
-    )
-
-    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
-    return relative_axis_angles[0] * relative_axis_angles[1]
+    w_rel, v_rel = tfGetDisplacementQuats(w0, v0, w1, v1)
+    v_norm = tf.norm(v_rel, axis=-1, keepdims=True)
+    angle = 2.0 * tf.atan2(v_norm, w_rel)                # see caveat below
+    scale = tf.math.divide_no_nan(angle, v_norm)
+    return v_rel * scale
 
 def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
     """
@@ -370,8 +360,11 @@ class PointsToInputsConstStep(keras.layers.Layer):
             typing.cast(tf.Tensor, scaled_disps), 5, self.step
         )
         
-        scaled_aas = aa0_through_5 #/ self.rot_scale
-        angvel_aas = compute_in_between_rotations(scaled_aas[2:])
+        w0_through_5, v0_through_5 = tfAxisAngleVec3sToQuats(aa0_through_5)
+        angvel_aas = tfGetQuatDisplacementsAsAAVec3s(
+            w0_through_5[:-1], v0_through_5[:-1],
+            w0_through_5[1:], v0_through_5[1:]
+        )
 
         all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
         
