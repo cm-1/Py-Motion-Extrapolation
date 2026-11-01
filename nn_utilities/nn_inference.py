@@ -6,7 +6,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 import tensorflow as tf
-import tensorflow_graphics.geometry.transformation as tfg_transformation
 import keras
 
 from posemath import DEFAULT_ZERO_ANG_THRESH
@@ -141,50 +140,6 @@ def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
 
     w, v = tfMulQuatLists(wd, vd, ws, vs)
     return tfQuatsToAxisAngleVec3s(w, v)
-
-
-def ang_vel_extrapolate(axis_angles1: tf.Tensor, axis_angles2: tf.Tensor):
-    """
-    Extrapolates the relative axis-angle rotations between two sets of axis-angle
-    rotations using quaternions.
-
-    Args:
-        axis_angles1: A tensor of shape (n, 3) representing the first set
-                      of axis-angle rotations.
-        axis_angles2: A tensor of shape (n, 3) representing the second set
-                      of axis-angle rotations.
-
-    Returns:
-        A tensor of shape (n, 3) representing the relative axis-angle rotations.
-    """
-
-    angs1 = tf.norm(axis_angles1, axis=-1, keepdims=True)
-    angs2 = tf.norm(axis_angles2, axis=-1, keepdims=True)
-
-    units1 = tf.math.divide_no_nan(axis_angles1, angs1)
-    units2 = tf.math.divide_no_nan(axis_angles2, angs2)
-
-    # Convert axis angles to quaternions
-    quaternions1 = tfg_transformation.quaternion.from_axis_angle(units1, angs1)
-    quaternions2 = tfg_transformation.quaternion.from_axis_angle(units2, angs2)
-
-    # Compute the relative quaternion
-    relative_quaternions = tfg_transformation.quaternion.multiply(
-        quaternions2, tfg_transformation.quaternion.conjugate(quaternions1)
-    )
-
-    new_quaternions = tfg_transformation.quaternion.multiply(
-        relative_quaternions, quaternions2
-    )
-
-    # Convert the new quaternion back to axis angles
-    relative_axis_angles = tfg_transformation.axis_angle.from_quaternion(
-        new_quaternions
-    )
-
-    # Convert from (axis, angles) tuple to scaled vec3 axis-angles.
-    return relative_axis_angles[0] * relative_axis_angles[1]
-
 
 def _get_JAV_muls(step: typing.Union[int, float]):
         _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.float32))

@@ -23,7 +23,9 @@ from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.nn_export import AbstractModelWrapper
 from nn_utilities.nn_inference import (
-    PointsToInputsConstStep, ang_vel_extrapolate, ang_vel_displace
+    PointsToInputsConstStep, ang_vel_displace,
+    tfGetDisplacementQuats, tfAxisAngleVec3sToQuats, tfMulQuatLists,
+    tfQuatsToAxisAngleVec3s
 )
 from nn_utilities.nn_modification import create_hardcoded_model
 from nn_utilities.nn_losses import getVelFrameDisplacements
@@ -186,7 +188,14 @@ class AbstractKalmanWrapper(AbstractModelWrapper):
 
 def constant_angvel_rotation(x: tf.Tensor) -> tf.Tensor:
     """Default rotation model: constant angular velocity from the last two poses."""
-    return ang_vel_extrapolate(x[:, -9:-6], x[:, -3:])
+    aas1 = x[:, -3:]
+    aas0 = x[:, -9:-6]
+    ws0, vs0 = tfAxisAngleVec3sToQuats(aas0)
+    ws1, vs1 = tfAxisAngleVec3sToQuats(aas1)
+    wd, vd = tfGetDisplacementQuats(ws0, vs0, ws1, vs1)
+    wf, vf = tfMulQuatLists(wd, vd, ws1, vs1)
+    const_angvel = tfQuatsToAxisAngleVec3s(wf, vf)
+    return const_angvel
 
 
 class FcnnKalmanWrapper(AbstractKalmanWrapper):
