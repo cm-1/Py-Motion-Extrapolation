@@ -207,7 +207,26 @@ class FcnnKalmanWrapper(AbstractKalmanWrapper):
         self.fcnn = fcnn_model
 
     def predict_pose(self, x):
-        features = self.preproc(x)
+        input_shape = tf.shape(x)
+        x_rs = tf.reshape(x, [input_shape[0], 6, 6])
+
+        positions = x_rs[:, :, 0:3]    # Shape: (batch_size, n_frames, 3)
+        axis_angles =  x_rs[:, :, 3:6]  # Shape: (batch_size, n_frames, 3)
+
+        w0_through_5, v0_through_5 = tfAxisAngleVec3sToQuats(axis_angles)
+        wd, vd = tfGetDisplacementQuats(
+            w0_through_5[:, :-1], v0_through_5[:, :-1],
+            w0_through_5[:, 1:], v0_through_5[:, 1:]
+        )
+
+        angvel_aas = tfQuatsToAxisAngleVec3s(wd, vd)
+        features = self.preproc((positions, angvel_aas))
+
+        # Constant angular velocity prediction for rotation for now.
+        wf, vf = tfMulQuatLists(
+            wd[:, -1], vd[:, -1], w0_through_5[:, -1], v0_through_5[:, -1]
+        )
+        const_angvel_pred = tfQuatsToAxisAngleVec3s(wf, vf)
 
         multiplier_predictions = self.fcnn(features[0])
         if isinstance(multiplier_predictions, list):
@@ -219,7 +238,7 @@ class FcnnKalmanWrapper(AbstractKalmanWrapper):
         y_true, world2locals = features[1], features[2]
         orig_pos = x[:, -6:-3]
         disp = getWorldFrameDisplacements(y_true, multiplier_predictions, world2locals)
-        return tf.concat((orig_pos + disp, constant_angvel_rotation(x)), axis=-1)
+        return tf.concat((orig_pos + disp, const_angvel_pred), axis=-1)
 
 class LstmKalmanWrapper(AbstractKalmanWrapper):
     def __init__(self, lstm_model, input_shape, lstm_vec_dim: int,

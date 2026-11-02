@@ -157,10 +157,11 @@ def _get_JAV_muls(step: typing.Union[int, float]):
 
 class DerivativeCollectionConstTimeTF:
     def __init__(self, displacements: tf.Tensor, max_derivative_order: int,
-                 time_step: typing.Union[int, float]):
+                 time_step: typing.Union[int, float], disp_ax: int):
                         
         self.time_step = time_step
         self.velocities = displacements / time_step
+        self.disp_ax = disp_ax
 
         if max_derivative_order >= 2:
             self.accelerations = self._recursiveDeriv(self.velocities, 2)
@@ -177,7 +178,7 @@ class DerivativeCollectionConstTimeTF:
         """Compute higher-order derivatives recursively.
         E.g., prev_vals are the last accelerations, deriv_power is 3 
         (for jerk)."""
-        ret_val = keras.ops.diff(prev_vals, 1, axis=0)
+        ret_val = keras.ops.diff(prev_vals, 1, axis=self.disp_ax)
         ret_val = ret_val / self.time_step
         return ret_val
 
@@ -297,11 +298,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
         )
     
     @tf.function
-    def calculateOutputs(self, x0_through_5: tf.Tensor, aa0_through_5: tf.Tensor):
+    def calculateOutputs(self, x0_through_5: tf.Tensor, angvel_aas: tf.Tensor):
 
-        # n_ins = tf.shape(x0_through_5)[1]
+        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
+        n_ins = tf.shape(x0_through_5)[0]
 
-        # test_concat = tf.concat((x0_through_5[0], aa0_through_5[0]), axis=-1)
+        # test_concat = tf.concat((x00_through_5[0], aa00_through_5[0]), axis=-1)
         # num_remaining_zeros = 227 - tf.shape(test_concat)[1]
         # remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
 
@@ -310,29 +312,24 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
         # return ret0, ret1, ret2
 
-        scaled_disps = keras.ops.diff(x0_through_5, 1, axis=0)
+        scaled_disps = keras.ops.diff(x0_through_5, 1, axis=1)
         all_pds = DerivativeCollectionConstTimeTF(
-            typing.cast(tf.Tensor, scaled_disps), 5, self.step
+            typing.cast(tf.Tensor, scaled_disps), 5, self.step, 1
         )
         
-        w0_through_5, v0_through_5 = tfAxisAngleVec3sToQuats(aa0_through_5)
-        angvel_aas = tfGetQuatDisplacementsAsAAVec3s(
-            w0_through_5[:-1], v0_through_5[:-1],
-            w0_through_5[1:], v0_through_5[1:]
-        )
 
-        all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step)
+        all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step, 1)
         
         # Calculate velocities, speeds, and indices where speed is 0.
-        vels = all_pds.velocities[-1]
-        accs = all_pds.accelerations[-1]
-        jerks = all_pds.jerks[-1]
-        snaps = all_pds.snaps[-1]
-        crackles = all_pds.crackles[-1]
+        vels = all_pds.velocities[:, -1]
+        accs = all_pds.accelerations[:, -1]
+        jerks = all_pds.jerks[:, -1]
+        snaps = all_pds.snaps[:, -1]
+        crackles = all_pds.crackles[:, -1]
 
-        new_ang_vel = all_rds.velocities[-1]
-        new_ang_acc = all_rds.accelerations[-1]
-        new_ang_jerk = all_rds.jerks[-1]
+        new_ang_vel = all_rds.velocities[:, -1]
+        new_ang_acc = all_rds.accelerations[:, -1]
+        new_ang_jerk = all_rds.jerks[:, -1]
 
         all_curr_vecs = tf.stack(
             (
@@ -343,8 +340,6 @@ class PointsToInputsConstStep(keras.layers.Layer):
         all_dots = tf.linalg.matmul(
             all_curr_vecs, all_curr_vecs, transpose_b = True
         )
-        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
-        n_ins = tf.shape(x0_through_5)[1]
         _flatter_dots = tf.reshape(all_dots, [n_ins, self._n_vec_kinds_sq])
         self_dots = _flatter_dots[:, ::self._diag_stride]
         all_mags = tf.reshape(tf.sqrt(self_dots), [n_ins, self._n_vec_kinds, 1])
@@ -476,11 +471,8 @@ class PointsToInputsConstStep(keras.layers.Layer):
         Returns:
             Tensor of shape (batch_size, n_features) containing computed features.
         """
-        input_shape = tf.shape(inputs)
-        inputs_rs = tf.reshape(inputs, [input_shape[0], 6, 6])
-        inputs_swapax = tf.transpose(inputs_rs, [1, 0, 2])
         # Split inputs into positions and axis-angles
-        positions = inputs_swapax[:, :, 0:3]    # Shape: (batch_size, n_frames, 3)
-        axis_angles =  inputs_swapax[:, :, 3:6]  # Shape: (batch_size, n_frames, 3)
+        positions = inputs[0] #[:, :, 0:3]    # Shape: (batch_size, n_frames, 3)
+        axis_angle_aas =  inputs[1] #[:, :, 3:6]  # Shape: (batch_size, n_frames, 3)
         
-        return self.calculateOutputs(positions, axis_angles)
+        return self.calculateOutputs(positions, axis_angle_aas)
