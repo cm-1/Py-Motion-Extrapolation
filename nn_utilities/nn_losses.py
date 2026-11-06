@@ -27,9 +27,9 @@ def getVelFrameDisplacements(y_true, y_pred):
     # y_pred2 = y_pred + y_true[:, 9:15]
     # Calculating the local displacement is the same as custom tf loss function.
     muls = y_true[..., :12] * y_pred # elementwise multiplication
-    disp_0 = muls[:, 0] + muls[:, 1] + muls[:, 3] + muls[:, 6] + muls[:, 9]
-    disp_1 = muls[:, 2] + muls[:, 4] + muls[:, 7] + muls[:, 10]
-    disp_2 = muls[:, 5] + muls[:, 8] + muls[:, 11]
+    disp_0 = tf.reduce_sum(muls[:, :5], axis=1)
+    disp_1 = tf.reduce_sum(muls[:, 5:9], axis=1)
+    disp_2 = tf.reduce_sum(muls[:, 9:12], axis=1)
 
     return tf.stack((disp_0, disp_1, disp_2), axis=-1)
 

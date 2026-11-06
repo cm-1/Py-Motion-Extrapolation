@@ -1,4 +1,5 @@
 import typing
+import warnings
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,16 +25,11 @@ class HypotheticalInputsForNN:
 
         # Some calculations we'll reuse that we can precalculate here.
         # ---
-        # We *sorta* have "4" sets of "xyz" multipliers.
-        self._jav_muls = np.empty((4, 3))
-        # Jerk through crackle each have 3 components we must multiply by a
-        # respective power of the step assuming it's also the next "delta T".
-        self._jav_muls[1:] = self.step ** np.arange(3, 6).reshape(3, 1)
-        # Then velocity and acceleration are special because they only have 1
-        # and 2 multipliers, respectively.
-        self._jav_muls = self._jav_muls.flatten()
-        self._jav_muls[0] = self.step
-        self._jav_muls[1:3] = self.step ** 2
+        s1 = step
+        s2, s3, s4, s5 = float(step) ** np.arange(2, 6)
+        self._jav_muls = np.array(
+            [s1, s2, s3, s4, s5, s2, s3, s4, s5, s3, s4, s5]
+        )
 
 
         # Attributes we'll set in the following function calls.
@@ -77,18 +73,18 @@ class HypotheticalInputsForNN:
         kp_m = [
             SpecifiedMotionData(bc, bc, AM.MAG_PROJ, False, False) for bc in v3s
         ]
-        kp_nd = []
-        # ANGS WITH VECTORS
-        for i in range(1, len(v3s)):
-            for j in range(i):
-                base_vec = v3s[i]
-                rel_vec = v3s[j]
-                if rel_vec not in ALL_RELATIVE_VECTORS:
-                    base_vec = v3s[j]
-                    rel_vec = v3s[i]
-                kp_nd.append(SpecifiedMotionData(
-                    base_vec, rel_vec, AM.ANG, False, False
-                ))
+        # kp_nd = []
+        # # ANGS WITH VECTORS
+        # for i in range(1, len(v3s)):
+        #     for j in range(i):
+        #         base_vec = v3s[i]
+        #         rel_vec = v3s[j]
+        #         if rel_vec not in ALL_RELATIVE_VECTORS:
+        #             base_vec = v3s[j]
+        #             rel_vec = v3s[i]
+        #         kp_nd.append(SpecifiedMotionData(
+        #             base_vec, rel_vec, AM.ANG, False, False
+        #         ))
         # PROJS_WITH_VECTORS
         kp_np = [
             SpecifiedMotionData(bc, ra, AM.MAG_PROJ, False, False)
@@ -106,25 +102,34 @@ class HypotheticalInputsForNN:
             for bc in v3s[2:] for ax in OTHER_DIRECTION
         ]
 
-        ka_np2 = []
-        ka_np2.append(SpecifiedMotionData(
-            MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
-            AM.ANG, False, False
-        ))
-        ka_np2 += [
-            SpecifiedMotionData(bc, ax, AM.ANG, False, False)
-            for bc in v3s[2:] for ax in OTHER_DIRECTION
-        ]
+        # ka_np2 = []
+        # ka_np2.append(SpecifiedMotionData(
+        #     MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
+        #     AM.ANG, False, False
+        # ))
+        # ka_np2 += [
+        #     SpecifiedMotionData(bc, ax, AM.ANG, False, False)
+        #     for bc in v3s[2:] for ax in OTHER_DIRECTION
+        # ]
 
 
         # kp = kp_t + kp_pd + kp_pp + kp_m + kp_nd + kp_np + kp_np2
-        kp = kp_t + kp_m + kp_nd + kp_np + kp_np2 + ka_np2
+        # kp = kp_t + kp_m + kp_nd + kp_np + kp_np2 + ka_np2
+        kp = kp_t + kp_m + kp_np + kp_np2
         return kp
         
     def _keyPermutation(self):
         kp = self._generated_key_order()
         self._orig_key_order = kp
-        self.to_nn_permut = np.asarray([kp.index(k) for k in self.ref_keys])
+        ref_set = set(self.ref_keys)
+        if len(ref_set) != len(self.ref_keys):
+            raise ValueError("Reference keys contain duplicate entries!")
+        filtered_ref = [k for k in self.ref_keys if k in kp]
+        if len(filtered_ref) != self.ref_keys:
+            warnings.warn(
+                "Reference keys include cols not created by HypotheticalInputsForNN!"
+            )
+        self.to_nn_permut = np.asarray([kp.index(k) for k in filtered_ref])
         return
     
     @staticmethod
@@ -186,7 +191,8 @@ class HypotheticalInputsForNN:
         self.new_ang_jerk = self.all_rds.jerks[-1]
 
         self.rel_ax_order = tuple(
-            k for k in ALL_RELATIVE_VECTORS if k != MOTION_DATA.VEL_DEG2_VEC3
+            k for k in ALL_RELATIVE_VECTORS
+            if k != MOTION_DATA.VEL_DEG2_VEC3 and k != MOTION_DATA.CRACKLE_VEC3
         )
 
         prev_ortho_mags, prev_ortho_dirs = pm.getOrthonormalFrames(
@@ -265,15 +271,15 @@ class HypotheticalInputsForNN:
             ), axis=0
         )
 
-        pr_str = 'bk' if self.prev_relative_vecs.ndim == 2 else 'bik'
-        all_dots_with_prev = typing.cast(NDArray, np.einsum(
-            'aik,' + pr_str + '->abi', all_curr_vecs, self.prev_relative_vecs
-        ))
+        # pr_str = 'bk' if self.prev_relative_vecs.ndim == 2 else 'bik'
+        # all_dots_with_prev = typing.cast(NDArray, np.einsum(
+        #     'aik,' + pr_str + '->abi', all_curr_vecs, self.prev_relative_vecs
+        # ))
 
-        all_proj_with_prev = pm.safeDivideElseZero(
-            all_dots_with_prev[:, :-2], self.prev_relative_scales,
-            self.prev_relative_scales_nonzero
-        )
+        # all_proj_with_prev = pm.safeDivideElseZero(
+        #     all_dots_with_prev[:, :-2], self.prev_relative_scales,
+        #     self.prev_relative_scales_nonzero
+        # )
 
         
         (_, a_proj_v, a_ortho_v), curr_ortho_mats = pm.getOrthonormalFrames(
@@ -330,13 +336,9 @@ class HypotheticalInputsForNN:
 
         vel_projs.append(other_projs_on_vel)
 
-        CIND = 4 # Crackle's index
-        # We don't divide by crackle's mag because it's not used as a relative
-        # axis.
-        non_crackles = [i for i in range(1, n_vec_kinds) if i != CIND]
         non_vel_mags_nonzero = (non_vel_mags != 0.0)
         non_vel_projs = []
-        for i in non_crackles:
+        for i in range(1, n_vec_kinds):
             prev_i = i - 1
             mag_i = non_vel_mags[prev_i]
             mag_i_nonzero = non_vel_mags_nonzero[prev_i]
@@ -369,9 +371,9 @@ class HypotheticalInputsForNN:
         ret = np.concatenate(
             (
                 np.full((1, n_ins), self.step),
-                all_dots_with_prev.reshape(-1, n_ins),
-                all_proj_with_prev.reshape(-1, n_ins),
-                vel_mags.reshape(1, n_ins), non_vel_mags, tri_dots[tri_inds],
+                # all_dots_with_prev.reshape(-1, n_ins),
+                # all_proj_with_prev.reshape(-1, n_ins),
+                vel_mags.reshape(1, n_ins), non_vel_mags, #tri_dots[tri_inds],
                 *vel_projs, *non_vel_projs, a_proj_with_curr_rel,
                 remaining_proj_with_curr_rel.reshape(-1, n_ins)
             ), axis=0
@@ -401,6 +403,8 @@ class HypotheticalInputsForNN:
         if self.step != 1:
             jav_stack[..., :12] *= self._jav_muls
 
+        if len(self.to_nn_permut) != ret.shape[1]:
+            warnings.warn("Permutation changing shape!")
         return ret[:, self.to_nn_permut], jav_stack, curr_ortho_mats
 
     def getSeparateCalcs(self, all_xs: NDArray, all_rmats: NDArray):

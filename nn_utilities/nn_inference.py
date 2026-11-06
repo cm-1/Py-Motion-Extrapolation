@@ -8,6 +8,10 @@ from numpy.typing import NDArray
 import tensorflow as tf
 import keras
 
+from motiontools.key_and_vec_specs import (
+    MOTION_DATA, SpecifiedMotionData, ANG_OR_MAG, OTHER_DIRECTION,
+)
+
 from posemath import DEFAULT_ZERO_ANG_THRESH
 
 def tfNormalizeAll(vecs: tf.Tensor) -> tf.Tensor:
@@ -86,6 +90,7 @@ def tfQuatsToAxisAngleVec3s(w: tf.Tensor, v: tf.Tensor):
     # q and -q are the same rotation; use the one with w >= 0. (Not
     # tf.math.sign: that returns 0 at w == 0, which is a 180-degree rotation.)
     sign = tf.where(w >= 0.0, 1.0, -1.0)
+    # TODO: Below fails if w and v are float64.
     return sign * tf.math.divide_no_nan(v, v_norm) * angle
 
 def tfMulQuatLists(w0: tf.Tensor, v0: tf.Tensor, w1: tf.Tensor, v1: tf.Tensor):
@@ -142,17 +147,23 @@ def ang_vel_displace(axis_angles_start: tf.Tensor, axis_angles_disp: tf.Tensor):
     return tfQuatsToAxisAngleVec3s(w, v)
 
 def _get_JAV_muls(step: typing.Union[int, float]):
-        _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.float32))
-        # Jerk through crackle each have 3 components we must multiply by a
-        # respective power of the step assuming it's also the next "delta T".
-        range_rs = tf.cast(tf.reshape(tf.range(3, 6), (3, 1)), tf.float32)
-        _jav_muls[1:].assign(float(step) ** range_rs)
-        # Then velocity and acceleration are special because they only have 1
-        # and 2 multipliers, respectively.
-        _jav_muls[0, :1].assign([step])
-        _jav_muls[0, 1:3].assign(step ** 2)
-        _jav_muls = tf.reshape(_jav_muls, [-1])
-        return tf.constant(_jav_muls, dtype=tf.float32)
+        s1 = step
+        s2, s3, s4, s5 = step ** np.arange(2, 6)
+        return tf.constant(
+            [s1, s2, s3, s4, s5, s2, s3, s4, s5, s3, s4, s5], dtype=tf.float32
+        )
+
+        # _jav_muls = tf.Variable(tf.zeros((4, 3), dtype=tf.float32))
+        # # Jerk through crackle each have 3 components we must multiply by a
+        # # respective power of the step assuming it's also the next "delta T".
+        # range_rs = tf.cast(tf.reshape(tf.range(3, 6), (3, 1)), tf.float32)
+        # _jav_muls[1:].assign(float(step) ** range_rs)
+        # # Then velocity and acceleration are special because they only have 1
+        # # and 2 multipliers, respectively.
+        # _jav_muls[0, :1].assign([step])
+        # _jav_muls[0, 1:3].assign(step ** 2)
+        # _jav_muls = tf.reshape(_jav_muls, [-1])
+        # return tf.constant(_jav_muls, dtype=tf.float32)
 
 
 class DerivativeCollectionConstTimeTF:
@@ -230,7 +241,6 @@ class DerivativeCollectionWithTimestampsTF:
 class PointsToInputsConstStep(keras.layers.Layer):
     def __init__(self, step: typing.Union[int, float],
                  scale_means: NDArray, scale_scales: NDArray,
-                 to_nn_permut: NDArray,
                  zero_angle_thresh: float = DEFAULT_ZERO_ANG_THRESH, **kwargs):
         super(PointsToInputsConstStep, self).__init__(**kwargs)
 
@@ -243,19 +253,12 @@ class PointsToInputsConstStep(keras.layers.Layer):
         self._n_vec_kinds = 8
         self._diag_stride = self._n_vec_kinds + 1
         self._n_vec_kinds_sq = self._n_vec_kinds * self._n_vec_kinds
-        
-        self.to_nn_permut = tf.constant(to_nn_permut, dtype=tf.int32)
-
 
         # Pre-compute lower triangle indices in __init__ for efficiency
         # Create index arrays using NumPy, then convert to TensorFlow constants
-        np_tril_rows, np_tril_cols = np.tril_indices(7)
-        
-        # Stack them together: shape (num_tril_elements, 2)
-        tl_inds = np.column_stack([np_tril_rows, np_tril_cols]).astype(np.int32)
-        
+        # np_tril_rows, np_tril_cols = np.tril_indices(8, -1)
         # Store as a TensorFlow constant
-        self._tril_indices = tf.constant(tl_inds)
+        # self._tril_indices_flat = tf.constant(np_tril_rows * 8 + np_tril_cols)
 
 
         self._jav_muls = _get_JAV_muls(step)
@@ -273,7 +276,6 @@ class PointsToInputsConstStep(keras.layers.Layer):
             "zero_angle_thresh": self.zero_angle_thresh,
             "scale_means": self.scale_means.numpy().tolist(),
             "scale_scales": self.scale_scales.numpy().tolist(),
-            "to_nn_permut": self.to_nn_permut.numpy().tolist(),
         })
         return config
     
@@ -286,32 +288,17 @@ class PointsToInputsConstStep(keras.layers.Layer):
         zero_angle_thresh = config["zero_angle_thresh"]
         scale_means = config["scale_means"]
         scale_scales = config["scale_scales"]
-        to_nn_permut = config["to_nn_permut"]
 
         # Create a new instance of the layer
         return cls(
             step=step,
             scale_means=np.array(scale_means),
             scale_scales=np.array(scale_scales),
-            to_nn_permut=np.array(to_nn_permut),
             zero_angle_thresh=zero_angle_thresh,
         )
     
     @tf.function
-    def calculateOutputs(self, x0_through_5: tf.Tensor, angvel_aas: tf.Tensor):
-
-        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
-        n_ins = tf.shape(x0_through_5)[0]
-
-        # test_concat = tf.concat((x00_through_5[0], aa00_through_5[0]), axis=-1)
-        # num_remaining_zeros = 227 - tf.shape(test_concat)[1]
-        # remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
-
-        # ret0 = tf.concat((test_concat, remaining_zeros), axis=-1)
-        # ret1 = safe_slice_ax1(ret0, 0, 15)
-        # ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
-        # return ret0, ret1, ret2
-
+    def featsFromWindows(self, x0_through_5: tf.Tensor, angvel_aas: tf.Tensor):
         scaled_disps = keras.ops.diff(x0_through_5, 1, axis=1)
         all_pds = DerivativeCollectionConstTimeTF(
             typing.cast(tf.Tensor, scaled_disps), 5, self.step, 1
@@ -337,6 +324,54 @@ class PointsToInputsConstStep(keras.layers.Layer):
                 new_ang_vel, new_ang_acc, new_ang_jerk
             ), axis=1
         )
+        return self.featsFromVelAccEtc(vels, accs, all_curr_vecs)
+
+    def featsForAllFrames1Video(self, all_x, all_aas):
+        scaled_disps = keras.ops.diff(all_x, 1, axis=0)
+        all_pds = DerivativeCollectionConstTimeTF(
+            typing.cast(tf.Tensor, scaled_disps), 5, self.step, 1
+        )
+
+        all_w, all_v = tfAxisAngleVec3sToQuats(all_aas)
+        wd, vd = tfGetDisplacementQuats(
+            all_w[:-1], all_v[:-1], all_w[1:], all_v[1:]
+        )
+
+        angvel_aas = tfQuatsToAxisAngleVec3s(wd, vd)
+
+        all_rds = DerivativeCollectionConstTimeTF(angvel_aas, 3, self.step, 1)
+
+        # Calculate velocities, speeds, and indices where speed is 0.
+        vels = all_pds.velocities[4:]
+        accs = all_pds.accelerations[3:]
+        jerks = all_pds.jerks[2:]
+        snaps = all_pds.snaps[1:]
+
+        new_ang_vel = all_rds.velocities[4:]
+        new_ang_acc = all_rds.accelerations[3:]
+        new_ang_jerk = all_rds.jerks[2:]
+
+        all_curr_vecs = tf.stack(
+            (
+                vels, accs, jerks, snaps, all_pds.crackles,
+                new_ang_vel, new_ang_acc, new_ang_jerk
+            ), axis=1
+        )
+        return self.featsFromVelAccEtc(vels, accs, all_curr_vecs)
+
+    def featsFromVelAccEtc(self, vels, accs, all_curr_vecs):
+        # NOTE: Need to use tf.shape(...) instead of x.shape in graph mode!
+        n_ins = tf.shape(vels)[0]
+
+        # test_concat = tf.concat((x00_through_5[0], aa00_through_5[0]), axis=-1)
+        # num_remaining_zeros = 227 - tf.shape(test_concat)[1]
+        # remaining_zeros = tf.zeros((n_ins, num_remaining_zeros))
+
+        # ret0 = tf.concat((test_concat, remaining_zeros), axis=-1)
+        # ret1 = safe_slice_ax1(ret0, 0, 15)
+        # ret2 = tf.reshape(safe_slice_ax1(ret0, 0, 9), [n_ins, 3, 3])
+        # return ret0, ret1, ret2
+        
         all_dots = tf.linalg.matmul(
             all_curr_vecs, all_curr_vecs, transpose_b = True
         )
@@ -373,73 +408,61 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # accs_2D = tf.stack((a_proj_v, a_ortho_v), axis=-1)
         # acc_mag = tf.norm(accs_2D, axis=-1, keepdims=True)  # Shape: (n_ins, 1)
         
+        # (n, 2, 3)  (n, 6, 3)
         remaining_proj_with_curr_rel = tf.linalg.matmul(
-            all_curr_vecs[:, 2:], curr_ortho_mats[:, 1:], transpose_b=True
-        ) # shape: n_ins, 6, 2
+            curr_ortho_mats[:, 1:], all_curr_vecs[:, 2:], transpose_b=True
+        ) # shape: n_ins, 2, 6
 
         def unitDotToAng(tensorVal):
             return tf.acos(tf.clip_by_value(tensorVal, -1.0, 1.0))
 
-        # tri_dots_lower = tf.gather_nd(tri_dots, self._tril_indices)
-
         all_angs = unitDotToAng(all_unit_dots)
-        angs_and_projs_to_concat = (
+        # Doing a concat on this tuple seems to be slightly faster than doing:
+        #   flat_angs = tf.reshape(all_angs, [n_ins, self._n_vec_kinds_sq])
+        #   lower_angs = tf.gather(flat_angs, self._tril_indices_flat, axis=1)
+        angs_to_concat = (
             all_angs[:, 1, :1], all_angs[:, 2, :2], all_angs[:, 3, :3],
             all_angs[:, 4, :4], all_angs[:, 5, :5], all_angs[:, 6, :6],
             all_angs[:, 7, :7],
-            all_proj[:, 0, 1:],
-            all_proj[:, 1, :1], all_proj[:, 1, 2:],
-            all_proj[:, 2, :2], all_proj[:, 2, 3:],
-            all_proj[:, 3, :3], all_proj[:, 3, 4:],
-            all_proj[:, 4, :4], all_proj[:, 4, 5:],
-            all_proj[:, 5, :5], all_proj[:, 5, 6:],
-            all_proj[:, 6, :6], all_proj[:, 6, 7:],
-            all_proj[:, 7, :7],
         )
-
         a_ang_with_curr_rel = \
             unitDotToAng(tf.math.divide_no_nan(a_ortho_v, all_mags[:, 1, 0]))
 
         remaining_ang_with_curr_rel = unitDotToAng(
             tf.math.divide_no_nan(
-                remaining_proj_with_curr_rel, all_mags[:, 2:]
+                remaining_proj_with_curr_rel,
+                tf.reshape(all_mags[:, 2:], [n_ins, 1, 6])
             )
         )
         ret_tup = ((
             tf.cast(tf.fill((n_ins, 1), self.step), tf.float32),
-            tf.reshape(all_mags, [n_ins, -1]), 
-        ) + angs_and_projs_to_concat + 
+            tf.reshape(all_proj, [n_ins, -1]),
+        ) + angs_to_concat + 
         (
             tf.reshape(a_ortho_v, [n_ins, 1]),
             tf.reshape(remaining_proj_with_curr_rel, [n_ins, -1]),
             tf.reshape(a_ang_with_curr_rel, [n_ins, 1]),
-            tf.reshape(remaining_ang_with_curr_rel, [n_ins, -1])
+            tf.reshape(remaining_ang_with_curr_rel, [n_ins, -1]),
         ))
         ret = tf.concat(
             ret_tup, axis=1
         )
-        
-        # Apply column permutation to match the reference key order
-        ret = tf.gather(ret, self.to_nn_permut, axis=1) # Should permute elsewhere!!!            
 
         ret = (ret - self.scale_means) / self.scale_scales
 
-        # 1 + 8*(7+9) + 8 + 1+2+3+4+5+6+7 + (7*6 + 7) + (8*2 - 3)
 
-        jsc_on_vel = tf.reshape(all_proj[:, 0, 2:5], [-1, 3]) # Jerk, Snap, Crackle are first 3, then comes the rotation stuff.
-        jsc_on_aj = remaining_proj_with_curr_rel[:, :3]
+        # Jerk, Snap, Crackle are first 3, then comes the rotation stuff.
+        jsc_on_vel = tf.reshape(all_proj[:, 0, 2:5], [-1, 3])
+        jsc_on_aj = remaining_proj_with_curr_rel[:, :, :3]
         #(shape (n, 3) and (n, 3, 2), respectively)
 
-        # Build the 12-component JAV vector plus 3 zeros
-        zeros_3 = tf.zeros((n_ins, 3), dtype=tf.float32)
-        jav_15 = tf.concat((
+        # Build the 12-component JAV vector
+        jav_12 = tf.concat((
             vel_mags,    # velocity magnitude
             tf.reshape(a_proj_v, [n_ins, 1]),    # acceleration parallel
+            jsc_on_vel,
             tf.reshape(a_ortho_v, [n_ins, 1]),   # acceleration orthogonal
-            jsc_on_vel[:, :1], jsc_on_aj[:, 0],
-            jsc_on_vel[:, 1:2], jsc_on_aj[:, 1],
-            jsc_on_vel[:, 2:3], jsc_on_aj[:, 2],
-            zeros_3
+            tf.reshape(jsc_on_aj, [n_ins, 6])
         ), axis=1)
         
         # TODO: The way I handle non-1 timesteps in my other JAV calculations
@@ -455,10 +478,9 @@ class PointsToInputsConstStep(keras.layers.Layer):
         # Because of the above, here I need to do said JAV multiplications.
         if self.step != 1:
             # Multiply the first 12 components by the appropriate power of step
-            jav_first_12 = jav_15[:, :12] * self._jav_muls #[tf.newaxis, :]
-            jav_15 = tf.concat((jav_first_12, zeros_3), axis=1)
+            jav_12 = jav_12 * self._jav_muls #[tf.newaxis, :]
 
-        return ret, jav_15, curr_ortho_mats 
+        return ret, jav_12, curr_ortho_mats 
     
     @tf.function
     def call(self, inputs):
@@ -475,4 +497,51 @@ class PointsToInputsConstStep(keras.layers.Layer):
         positions = inputs[0] #[:, :, 0:3]    # Shape: (batch_size, n_frames, 3)
         axis_angle_aas =  inputs[1] #[:, :, 3:6]  # Shape: (batch_size, n_frames, 3)
         
-        return self.calculateOutputs(positions, axis_angle_aas)
+        return self.featsFromWindows(positions, axis_angle_aas)
+
+    @staticmethod
+    def generated_key_order():
+        MD = MOTION_DATA
+        AM = ANG_OR_MAG
+        key_ord = [MD.TIMESTEP]
+        v3s = (
+            MD.VEL_DEG1_VEC3, MD.ACC_VEC3, MD.JERK_VEC3, MD.JERK_ERR_VEC3,
+            MD.CRACKLE_VEC3, MD.ROTATION_VEC3, MD.ROT_ACC_VEC3, MD.ROT_JERK_VEC3
+        )
+
+        # PROJS_WITH_VECTORS
+        key_ord += [
+            SpecifiedMotionData(bc, ra, AM.MAG_PROJ, False, False)
+            for ra in v3s for bc in v3s
+        ]
+
+        # ANGS WITH VECTORS
+        for i in range(1, len(v3s)):
+            for j in range(i):
+                base_vec = v3s[i]
+                rel_vec = v3s[j]
+                key_ord.append(SpecifiedMotionData(
+                    base_vec, rel_vec, AM.ANG, False, False
+                ))
+
+        # PROJS_WITH_DIRS
+        key_ord.append(SpecifiedMotionData(
+            MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
+            AM.MAG_PROJ, False, False
+        ))
+        key_ord += [
+            SpecifiedMotionData(bc, ax, AM.MAG_PROJ, False, False)
+            for ax in OTHER_DIRECTION for bc in v3s[2:] 
+        ]
+
+        key_ord.append(SpecifiedMotionData(
+            MD.ACC_VEC3, OTHER_DIRECTION.ACC_ORTHO_DEG1,
+            AM.ANG, False, False
+        ))
+        key_ord += [
+            SpecifiedMotionData(bc, ax, AM.ANG, False, False)
+            for ax in OTHER_DIRECTION for bc in v3s[2:]
+        ]
+
+        return key_ord
+    

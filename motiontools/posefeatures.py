@@ -1352,8 +1352,11 @@ def dataForPositionsJAV(vec_order: OrderForJAV, gt_translations: NDArray,
     # (i.e. [a_p, a_o, 0]), etc. And since we don't need to return 0s,
     # we can just return the following:
     c_res = (
-        first_mags.flatten(), second_proj_first, second_ortho_first,
-        *(local_third_order.T), *(local_snaps.T), *(local_crackles.T),
+        first_mags.flatten(), second_proj_first,
+        local_third_order[:, 0], local_snaps[:, 0], local_crackles[:, 0],
+        second_ortho_first,
+        local_third_order[:, 1], local_snaps[:, 1], local_crackles[:, 1],
+        local_third_order[:, 2], local_snaps[:, 2], local_crackles[:, 2],
         *(local_diffs.T)
     )
 

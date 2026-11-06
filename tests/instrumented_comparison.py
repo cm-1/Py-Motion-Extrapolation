@@ -174,7 +174,7 @@ def instrumented_numpy_calculation(x0_through_4, rmats0_through_5, x5, step, ref
 
 def instrumented_tf_calculation(x0_through_5, aa0_through_5, step, ref_keys, recorder: ValueRecorder):
     """
-    Instrumented version of PointsToInputsConstStep.calculateOutputs
+    Instrumented version of PointsToInputsConstStep.featsFromWindows
     that records intermediate values.
     """
     from nn_utilities.nn_inference import (
@@ -188,7 +188,7 @@ def instrumented_tf_calculation(x0_through_5, aa0_through_5, step, ref_keys, rec
     # Create the calculator
     calc = PointsToInputsConstStep(step, ref_keys)
     
-    # Manually execute calculateOutputs with recording
+    # Manually execute featsFromWindows with recording
     all_pds = DerivativeCollectionConstTimeTF(
         keras.ops.diff(x0_through_5, 1, axis=0), 5, step
     )

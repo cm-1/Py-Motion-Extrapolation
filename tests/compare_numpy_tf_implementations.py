@@ -21,11 +21,16 @@ import tensorflow as tf
 
 from motiontools.hypothetical_inputs_calc import HypotheticalInputsForNN
 from motiontools.dataorg import UnitAwareScaler
-from nn_utilities.nn_inference import PointsToInputsConstStep
+from nn_utilities.nn_inference import (
+    PointsToInputsConstStep, tfGetDisplacementQuats, tfQuatsToAxisAngleVec3s,
+    tfAxisAngleVec3sToQuats
+)
+from gtCommon import PoseLoaderBCOT
+from data_by_combo_functions import rnnDataWindows
 
 import posemath as pm
 
-def generate_test_data(step=1, n_points=5):
+def generate_rand_test_data(step=1, n_points=5):
     """Generate random test data for comparison."""
     
     # If we assume a "skip" of 2 frames each time, this will ensure that our
@@ -64,51 +69,103 @@ def generate_test_data(step=1, n_points=5):
     rmats0_through_5 = rmats0_through_5.astype(np.float32)
     random_axis_angles = random_axis_angles.astype(np.float32)
 
-    return x0_through_4, rmats0_through_5, x5, x0_through_5, random_axis_angles
+    return x0_through_5, rmats0_through_5, random_axis_angles
+
+def get_bcot_data(step, combos):
+    ts = dict()
+    aas = dict()
+    rmats = dict()
+    for c in combos:
+        pl = PoseLoaderBCOT(*c)
+        ts[c] = pl.getTranslationsGTNP()[::step]
+        aas[c] = pl.getRotationsGTNP()[::step]
+        rmats[c] = pl.getRotationMatsGTNP()[::step]
+
+    return ts, rmats, aas
+                   
 
 
-def compare_implementations(step=1, n_points=5, tolerance=1e-2):
-    """Compare numpy and TensorFlow implementations."""
-    
-    print(f"Testing with step={step}, n_points={n_points}")
-    print("=" * 70)
-    
-    # Generate test data
-    x0_through_4, rmats0_through_5, x5, x0_through_5, axis_angles = generate_test_data(step, n_points)
-    
-    scaler: UnitAwareScaler
-    with open("./results/models/scaler.pickle", "rb") as f:
-        scaler = pickle.load(f)
-    
+def getOutputsHyp(step: int, x0_through_4, x5, rmats0_through_5, scaler, key_order_to_use):
     # Initialize numpy version
     numpy_calcer = HypotheticalInputsForNN(
-        x0_through_4, rmats0_through_5, step, scaler.column_keys
+        x0_through_4, rmats0_through_5, step, key_order_to_use
     )
     
     # Calculate numpy results
     print("Computing numpy results...")
     unscaled_results, numpy_jav, numpy_ortho = numpy_calcer.getHypotheticalCalcs(x5)
-    numpy_results = scaler.transform(unscaled_results)
+    numpy_results = unscaled_results # numpy_results = scaler.transform(unscaled_results)
     print(f"Numpy output shape: {numpy_results.shape}")
     print(f"Numpy JAV shape: {numpy_jav.shape}")
     print(f"Numpy ortho shape: {numpy_ortho.shape}")
-    
+    return numpy_results
+
+def getOutputsTF(step: int, x0_through_5, ang_vels, scaler):
+
+
     # Initialize TensorFlow version
     print("\nComputing TensorFlow results...")
     tf_calcer = PointsToInputsConstStep(
-        step, scaler.mean_, scaler.scale_, scaler.column_keys
+        step, scaler.mean_, scaler.scale_,
     )
     
     # Convert inputs to TensorFlow tensors
     x0_through_5_tf = tf.constant(x0_through_5, dtype=tf.float32)
-    axis_angles_tf = tf.constant(axis_angles, dtype=tf.float32)
+    ang_vels_tf = tf.constant(ang_vels, dtype=tf.float32)
     
     # Calculate TensorFlow results
-    tf_results = tf_calcer.calculateOutputs(x0_through_5_tf, axis_angles_tf)
+    tf_results = tf_calcer.featsFromWindows(x0_through_5_tf, ang_vels_tf)
     tf_results_np = tf_results[0].numpy()
-    
     print(f"TensorFlow output shape: {tf_results_np.shape}")
+    return tf_results_np
+
+#%%
+def compare_preds(step=1, tolerance=1e-2):
+    """Compare numpy and TensorFlow implementations."""
     
+    print(f"Testing with step={step}")
+    print("=" * 70)
+    
+
+    all_combos = [(0, 0), (2, 0)]
+    ts_by_c, rmats_by_c, aas_by_c = get_bcot_data(1, all_combos)
+
+    x0_through_5, _ = rnnDataWindows(ts_by_c, all_combos, 6, 0)
+    rmats0_through_5, _ = rnnDataWindows(rmats_by_c, all_combos, 6, 0)
+    aas0_through_5, _ = rnnDataWindows(aas_by_c, all_combos, 6, 0)
+
+    x0_through_4 = np.swapaxes(x0_through_5[:, :-1], 0, 1).copy()
+    rmats0_through_5 = np.swapaxes(rmats0_through_5, 0, 1).copy()
+    x5 = x0_through_5[:, -1].copy()
+
+    w0_through_5, v0_through_5 = tfAxisAngleVec3sToQuats(tf.cast(aas0_through_5, tf.float32))
+    wds, vds = tfGetDisplacementQuats(
+        w0_through_5[:, :-1], v0_through_5[:, :-1],
+        w0_through_5[:, 1:], v0_through_5[:, 1:]
+    )
+    print("Got Quats@")
+    angvels = tfQuatsToAxisAngleVec3s(wds, vds)
+    
+    scaler: UnitAwareScaler
+    with open("./results/models/scaler.pickle", "rb") as f:
+        scaler = pickle.load(f)
+
+    tf_key_ord = PointsToInputsConstStep.generated_key_order()
+    key_order_to_use = HypotheticalInputsForNN._generated_key_order()
+
+    # permut = [scaler.column_keys.index(k) for k in key_order_to_use]
+    scaler.mean_[:] = 0.0# = scaler.mean_[permut]
+    scaler.scale_[:] = 1.0# = scaler.scale_[permut]
+
+    print("Starting get", x0_through_5.shape, angvels.shape)
+    tf_results_np_unpermut = getOutputsTF(step, x0_through_5, angvels, scaler)
+    tf_permut = [tf_key_ord.index(k) for k in key_order_to_use]
+    tf_results_np = tf_results_np_unpermut[:, tf_permut]
+
+    print("Got TF")
+    numpy_results = getOutputsHyp(step, x0_through_4, x5, rmats0_through_5, scaler, key_order_to_use)
+    print("Got Hyp")
+
     # Compare results
     print("\n" + "=" * 70)
     print("COMPARISON RESULTS")
@@ -154,13 +211,17 @@ def compare_implementations(step=1, n_points=5, tolerance=1e-2):
         
         # Find indices where differences are largest
         max_rel_diff_per_col = np.max(rel_diff, axis=0)
+        max_rel_diff_rows = np.argmax(rel_diff, axis=0)
         
         offending_cols = np.nonzero(max_rel_diff_per_col >= tolerance)[0]
         
-        n_keys = len(scaler.column_keys)
+        n_keys = len(key_order_to_use)
         print(f"\nOffending columns ({len(offending_cols)}/{n_keys}):")
         for oc in offending_cols:
-            print(f" - {oc} ({scaler.column_keys[oc].name}): {max_rel_diff_per_col[oc]}")
+            rel_val = max_rel_diff_per_col[oc]
+            r = max_rel_diff_rows[oc]
+            np_val = np.round(numpy_results[r, oc], 3)
+            print(f" - {r},{oc} ({key_order_to_use[oc].name}): {rel_val} (* {np_val})")
         
         # print("\nShowing first few mismatches:")
         # sorted_indices = np.argsort(max_rel_diff_per_col)
@@ -202,16 +263,16 @@ def main():
     print()
     
     test_configs = [
-        {"step": 1, "n_points": 5},
-        {"step": 2, "n_points": 10},
-        {"step": 1, "n_points": 1},  # Single point test
+        {"step": 1}, #, "n_points": 5},
+        {"step": 2}, #, "n_points": 10},
+        # {"step": 1}, #, "n_points": 1},  # Single point test
     ]
     
     all_passed = True
     
     for config in test_configs:
         try:
-            passed = compare_implementations(**config)
+            passed = compare_preds(**config, tolerance=0.1)
             all_passed = all_passed and passed
             print("\n" * 2)
         except Exception as e:

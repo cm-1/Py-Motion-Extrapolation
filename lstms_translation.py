@@ -377,7 +377,8 @@ if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
         test_jav_out
     )
 
-const_acc_pred = np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
+const_acc_pred = np.zeros(12)
+const_acc_pred[[0, 1, 5]] = 1.0
 if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
     if not USE_VEL_IN:
         const_acc_pred = 3 * test_jav_in[:, -1] - 3 * test_jav_in[:, -2] + test_jav_in[:, -3]

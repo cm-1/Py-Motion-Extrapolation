@@ -33,6 +33,7 @@ from nn_utilities.nn_loading import loadLatestModels
 from nn_utilities.data_cache import (
     gen_cache_key, save_cached_data, load_cached_data, CacheKeys
 )
+from nn_utilities.nn_inference import PointsToInputsConstStep
 
 from datatools.data_splitting import DataSubsetKind
 
@@ -75,37 +76,14 @@ bcot_test_ids = dog.subset_ids[DataSubsetKind.TEST] # Find test data subset.
 # use to construct the displacement from the current position to the position
 # we predict for the next timestamp.
 
-
-
-
 #%%
 chosen_preset = SUBSET_PRESET.MINIMAL
-col_subset_mask, key_subset = dog.maskAndKeysForSubsetPreset(chosen_preset)
+# col_subset_mask, key_subset_unpermut = dog.maskAndKeysForSubsetPreset(chosen_preset)
+# key_subset = key_subset_unpermut
 
-# select_cols = np.where(nonco_cols)[0][[0, 1, 2, 3, 13, 26, 27]]
-# nonco_cols[:] = False
-# nonco_cols[list(select_cols)] = True
-
-# Custom importance weighting layer suggested/described "in theory" by a friend.
-# Then, I had the class written by ChatGPT and manually verified.
-# (But I'm not a big tensorflow expert, so maybe my verification was faulty...)
-class ImportanceLayer(keras.layers.Layer):
-    def __init__(self, input_dim, weight_decay=1e-4, **kwargs):
-        super().__init__(**kwargs)
-        self.input_dim = input_dim
-        self.weight_decay = weight_decay
-
-    def build(self, input_shape):
-        # Define per-feature weights with L2 regularization (weight decay)
-        self.importance_weights = self.add_weight(
-            shape=(self.input_dim,), 
-            initializer="ones",  # Start with all weights = 1
-            regularizer=keras.regularizers.l2(self.weight_decay),
-            trainable=True
-        )
-
-    def call(self, inputs):
-        return inputs * self.importance_weights  # Element-wise multiplication
+tf_key_ord = PointsToInputsConstStep.generated_key_order()
+col_subset_mask = np.array([dog.motion_data_keys.index(k) for k in tf_key_ord])
+key_subset = [dog.motion_data_keys[i] for i in col_subset_mask]
 
 
 WORLD_VEC_MODES = (OutVecMode.WORLD_VEC3, OutVecMode.WORLD_DISP)
@@ -113,8 +91,6 @@ ROT_VEC_MODES = (
     OutVecMode.ROT_AA, OutVecMode.ROT_VEL_AA, OutVecMode.ROT_FIXED_AX
 )
 #%%
-# JAV_MULTIPLIERS, VEL_ALIGNED_VEC3, WORLD_VEC3, WORLD_DISP, ROT_ALIGNED_VEC3
-# ROT_AA, ROT_VEL_AA, ROT_FIXED_AX
 
 chosen_mode = OutVecMode.JAV_MULTIPLIERS
 
@@ -170,11 +146,6 @@ if chosen_mode != OutVecMode.JAV_MULTIPLIERS:
     
 JAV_order = (JAV.JERK, JAV.ACCELERATION, JAV.VELOCITY)[::-1]
 
-# # Convert from numpy array to tf tensor.
-# bcs_train = tf.convert_to_tensor(bcs_train, dtype=tf.float32)
-# bcs_test = tf.convert_to_tensor(bcs_test, dtype=tf.float32)
-
-# Z-scale each column to standard normal distribution.
 bcs_scaler = UnitAwareScaler(key_subset) #, False)
 
 class DataForJAV:
@@ -478,8 +449,10 @@ class DataForJAV:
         # TODO: All reference predictions, for all modes, assume constant
         # timesteps for now.
         self.ref_prediction_name = "Const vel" if _rot_output else "Quadratic" 
+        _const_acc_jav = np.zeros(12)
+        _const_acc_jav[[0, 1, 5]] = 1.0
         self.ref_predictions = { # Quadratic acc JAV multipliers.
-            k: np.repeat((1.0, 0.0), (3, 9)).reshape(1, -1)
+            k: _const_acc_jav.reshape(1, -1)
             for k in DataSubsetKind
         }
         # TODO: Left off here!

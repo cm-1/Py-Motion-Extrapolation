@@ -84,16 +84,11 @@ with open("./results/models/scaler.pickle", "rb") as f:
     loaded_scaler = pickle.load(f)
 ref_keys = loaded_scaler.column_keys
 # Get the column permutation using the static method from HypotheticalInputsForNN
-_orig_key_order = HypotheticalInputsForNN._generated_key_order()
-permutation_np = np.asarray([_orig_key_order.index(k) for k in ref_keys])
-
-
 
 # Create custom layer that, from last poses, creates columns for FCNN.
 custom_layer = PointsToInputsConstStep(
     step=custom_step,
     scale_means=loaded_scaler.mean_, scale_scales=loaded_scaler.scale_,
-    to_nn_permut=permutation_np,
     zero_angle_thresh=0.01
 )
 
@@ -104,7 +99,7 @@ print("Creating combined model with custom layer...")
 model_key = "JAV_MULTIPLIERS"
 bcs_model = loadLatestModels((model_key, ), SUBSET_PRESET.MINIMAL, USE_NOISE)[model_key]
 hardcoded_model = create_hardcoded_model(bcs_model, [
-    1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
+    1.0, 1.0, 0.0, 0.0, 0.0, 1.0,
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 ])
 

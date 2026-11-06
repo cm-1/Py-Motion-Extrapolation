@@ -356,7 +356,7 @@ class RowsAndColsHandler:
         ],
         skip_bounds: typing.Dict[DataSubsetKind, NDArray],
         motion_data_keys: typing.List[MOTION_DATA_KEY_TYPE],
-        motion_mod_keys: typing.List[MOTION_MODEL],
+        # motion_mod_keys: typing.List[MOTION_MODEL],
         subset_ids: typing.Dict[DataSubsetKind, typing.List],
         rows_per_subset: typing.Dict[DataSubsetKind, int],
         supported_skips: typing.Optional[typing.List[SkipSubsetKind]] = None
@@ -364,7 +364,7 @@ class RowsAndColsHandler:
         self.single_vid_bounds = single_vid_bounds
         self.skip_bounds = skip_bounds
         self.motion_data_keys = motion_data_keys
-        self.motion_mod_keys = motion_mod_keys
+        # self.motion_mod_keys = motion_mod_keys
         self.subset_ids = subset_ids
         self.rows_per_subset = rows_per_subset
 
@@ -522,28 +522,18 @@ class RowsAndColsHandler:
         row_idxs = bounds_in_skip[id_ind:(id_ind + 2)]
         return skip_subset[row_idxs[0]:row_idxs[1]] # Values for this video.
 
-
-class DataOrganizer(RowsAndColsHandler):
-    class _SubsetConcats(typing.NamedTuple):
-        ids: typing.List
-        concat_data: NDArray
-        concat_labels: typing.Optional[NDArray]
-        concat_class_errs: typing.Optional[NDArray]
-        single_vid_bounds: typing.Dict[SkipSubsetKind, NDArray]
-        skip_bounds: NDArray
-    
+class FeaturesOrganizer(RowsAndColsHandler):
+    _GEN_FNAME_NP = "feat_cols"
     def __init__(self, row_col_handler: RowsAndColsHandler,
-                 concat_whole_data: NDArray,
-                 concat_whole_class_errs: typing.Optional[NDArray],
-                 concat_whole_labels: typing.Optional[NDArray],
-                 loader_class: typing.Type[gtc.PoseLoader],
-                 has_noise_added: bool
-                 ):
-        super(DataOrganizer, self).__init__(
+                concat_whole_data: NDArray,
+                loader_class: typing.Type[gtc.PoseLoader],
+                has_noise_added: bool
+                ):
+        super(FeaturesOrganizer, self).__init__(
             single_vid_bounds=row_col_handler.single_vid_bounds,
             skip_bounds=row_col_handler.skip_bounds,
             motion_data_keys=row_col_handler.motion_data_keys,
-            motion_mod_keys=row_col_handler.motion_mod_keys,
+            # motion_mod_keys=row_col_handler.motion_mod_keys,
             subset_ids=row_col_handler.subset_ids,
             rows_per_subset=row_col_handler.rows_per_subset,
             supported_skips=row_col_handler.supported_skips
@@ -556,21 +546,6 @@ class DataOrganizer(RowsAndColsHandler):
         self.concat_train_data = slices[DataSubsetKind.TRAIN]
         self.concat_validation_data = slices[DataSubsetKind.VALIDATION]
         self.concat_test_data = slices[DataSubsetKind.TEST]
-        
-        if concat_whole_class_errs is not None:
-            self.concat_whole_class_errs = concat_whole_class_errs
-            slices = self._all_slices_by_subset(concat_whole_class_errs)
-            self.concat_train_class_errs = slices[DataSubsetKind.TRAIN]
-            self.concat_validation_class_errs = slices[DataSubsetKind.VALIDATION]
-            self.concat_test_class_errs = slices[DataSubsetKind.TEST]
-
-        if concat_whole_labels is not None:
-            self.concat_whole_labels = concat_whole_labels
-            slices = self._all_slices_by_subset(concat_whole_labels)
-            self.concat_train_labels = slices[DataSubsetKind.TRAIN]
-            self.concat_validation_labels = slices[DataSubsetKind.VALIDATION]
-            self.concat_test_labels = slices[DataSubsetKind.TEST]
-
         self.LoaderClass = loader_class
 
         # Optional attributes to be set in later code.
@@ -603,7 +578,146 @@ class DataOrganizer(RowsAndColsHandler):
         self.col_subset_test = slices[DataSubsetKind.TEST]
         return
 
-    @ staticmethod
+    def maskAndKeysForSubsetPreset(self, preset: SUBSET_PRESET):
+        if preset != SUBSET_PRESET.MINIMAL:
+            raise ValueError("Not yet a valid preset for FeaturesOrganizer!")
+        return self.motion_data_keys
+    
+    @staticmethod
+    def generatedDataPath():
+        DATA_PATH = "./generated_data/"
+        if not os.path.exists(DATA_PATH):
+            os.mkdir(DATA_PATH)
+        return pathlib.Path(DATA_PATH)
+
+    @classmethod
+    def getDumpFilenameNP(cls, loaderClass: typing.Type[gtc.PoseLoader],
+                          has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
+        return DataOrganizer.generatedDataPath() / (
+            noise_str + cls._GEN_FNAME_NP + loaderClass.datasetName() + ".npz"
+        )
+    
+    @staticmethod
+    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
+        noise_str = "noisy_" if has_noise_added else ""
+        return DataOrganizer.generatedDataPath() / (
+            noise_str + "other_processed_data_" + loaderClass.datasetName() + ".pkl"
+        )
+
+    def _get_dump_dict_np(self):    
+        return {"concat_whole_data": self.concat_whole_data}    
+        
+    def dump(self, compress: bool,
+                np_file: typing.Optional[typing.Union[str, os.PathLike]] = None,
+                pkl_file: typing.Optional[typing.Union[str, os.PathLike]] = None):
+        
+        if pkl_file is None:
+            pkl_file = self.getDumpFilenamePkl(self.LoaderClass, self.noisy)
+        if np_file is None:
+            np_file = self.getDumpFilenameNP(self.LoaderClass, self.noisy)
+
+        non_np = RowsAndColsHandler(
+            self.single_vid_bounds, self.skip_bounds,
+            self.motion_data_keys, self.subset_ids,
+            self.rows_per_subset
+        )
+
+        save_dict = self._get_dump_dict_np()
+        if compress:
+            np.savez_compressed(np_file, **save_dict)
+        else:
+            np.savez(np_file, **save_dict)
+        
+        with open(pkl_file, "wb") as f:
+            pickle.dump(non_np, f)
+
+    @classmethod
+    def _load_rowcolhandler_and_slices(cls,
+                                       loader_class: typing.Type[gtc.PoseLoader],
+                                       has_noise_added: bool,
+                                       np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+                                       pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+                                       *,
+                                       skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all
+                                       ):
+        if np_file is None:
+            np_file = cls.getDumpFilenameNP(loader_class, has_noise_added)
+        if pkl_file is None:
+            pkl_file = FeaturesOrganizer.getDumpFilenamePkl(loader_class, has_noise_added)
+
+        with open(pkl_file, "rb") as f:
+            nnpl = typing.cast(RowsAndColsHandler, pickle.load(f))
+
+        npl = np.load(np_file, allow_pickle=False)
+
+        arrs_dict = {k: npl[k] for k in npl.files}
+        sliced = nnpl.skip_selection(arrs_dict, skip_filter, delete_orig=True)
+
+        npl.close()
+        return nnpl, sliced
+
+    @classmethod
+    def load(cls, loader_class: typing.Type[gtc.PoseLoader],
+             has_noise_added: bool,
+             np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+             pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
+             *,
+             skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all
+             ):
+
+        rowcolhandler, sliced = cls._load_rowcolhandler_and_slices(
+            loader_class, has_noise_added, np_file, pkl_file,
+            skip_filter=skip_filter
+        )
+        ret = FeaturesOrganizer(
+            rowcolhandler,
+            sliced["concat_whole_data"],
+            loader_class, has_noise_added
+        )
+
+        return ret
+    
+class DataOrganizer(FeaturesOrganizer):
+    _GEN_FNAME_NP = "beyond_feat_cols_"
+
+    class _SubsetConcats(typing.NamedTuple):
+        ids: typing.List
+        concat_data: NDArray
+        concat_labels: typing.Optional[NDArray]
+        concat_class_errs: typing.Optional[NDArray]
+        single_vid_bounds: typing.Dict[SkipSubsetKind, NDArray]
+        skip_bounds: NDArray
+    
+    def __init__(self, row_col_handler: RowsAndColsHandler,
+                 concat_whole_data: NDArray,
+                 concat_whole_class_errs: typing.Optional[NDArray],
+                 concat_whole_labels: typing.Optional[NDArray],
+                 loader_class: typing.Type[gtc.PoseLoader],
+                 has_noise_added: bool
+                 ):
+        super(DataOrganizer, self).__init__(
+            row_col_handler=row_col_handler,
+            concat_whole_data=concat_whole_data,
+            loader_class=loader_class,
+            has_noise_added=has_noise_added
+        )
+
+        if concat_whole_class_errs is not None:
+            self.concat_whole_class_errs = concat_whole_class_errs
+            slices = self._all_slices_by_subset(concat_whole_class_errs)
+            self.concat_train_class_errs = slices[DataSubsetKind.TRAIN]
+            self.concat_validation_class_errs = slices[DataSubsetKind.VALIDATION]
+            self.concat_test_class_errs = slices[DataSubsetKind.TEST]
+
+        if concat_whole_labels is not None:
+            self.concat_whole_labels = concat_whole_labels
+            slices = self._all_slices_by_subset(concat_whole_labels)
+            self.concat_train_labels = slices[DataSubsetKind.TRAIN]
+            self.concat_validation_labels = slices[DataSubsetKind.VALIDATION]
+            self.concat_test_labels = slices[DataSubsetKind.TEST]        
+
+    @staticmethod
     def FromCalcs(loader_class: typing.Type[gtc.PoseLoader],
                   has_noise_added: bool, all_motion_data,
                   min_norm_labels, err_norm_lists, 
@@ -697,7 +811,7 @@ class DataOrganizer(RowsAndColsHandler):
             del concat_test_labels
 
         non_np = RowsAndColsHandler(
-            single_vid_bounds, skip_bounds, motion_data_keys, motion_mod_keys,
+            single_vid_bounds, skip_bounds, motion_data_keys, #motion_mod_keys,
             subset_ids, rows_per_dsk
         )
 
@@ -1104,85 +1218,36 @@ class DataOrganizer(RowsAndColsHandler):
             self.skip_bounds_structured[DataSubsetKind.TEST]
         )
 
-    @staticmethod
-    def generatedDataPath():
-        DATA_PATH = "./generated_data/"
-        if not os.path.exists(DATA_PATH):
-            os.mkdir(DATA_PATH)
-        return pathlib.Path(DATA_PATH)
 
-    @staticmethod
-    def getDumpFilenameNP(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
-        noise_str = "noisy_" if has_noise_added else ""
-        return DataOrganizer.generatedDataPath() / (
-            noise_str + "processed_columns_" + loaderClass.datasetName() + ".npz"
-        )
-    
-    @staticmethod
-    def getDumpFilenamePkl(loaderClass: typing.Type[gtc.PoseLoader], has_noise_added: bool):
-        noise_str = "noisy_" if has_noise_added else ""
-        return DataOrganizer.generatedDataPath() / (
-            noise_str + "other_processed_data_" + loaderClass.datasetName() + ".pkl"
-        )
-    
-    def dump(self, compress: bool,
-             np_file: typing.Optional[typing.Union[str, os.PathLike]] = None,
-             pkl_file: typing.Optional[typing.Union[str, os.PathLike]] = None):
-        if np_file is None:
-            np_file = self.getDumpFilenameNP(self.LoaderClass, self.noisy)
-        if pkl_file is None:
-            pkl_file = self.getDumpFilenamePkl(self.LoaderClass, self.noisy)
-
-        save_dict = {
+    def _get_dump_dict_np(self):
+        return {
             "concat_whole_data": self.concat_whole_data,
             "concat_whole_class_errs": self.concat_whole_class_errs,
             "concat_whole_labels": self.concat_whole_labels,
         }
 
-        non_np = RowsAndColsHandler(
-            self.single_vid_bounds, self.skip_bounds,
-            self.motion_data_keys, self.motion_mod_keys, self.subset_ids,
-            self.rows_per_subset
-        )
-
-        if compress:
-            np.savez_compressed(np_file, **save_dict)
-        else:
-            np.savez(np_file, **save_dict)
-        
-        with open(pkl_file, "wb") as f:
-            pickle.dump(non_np, f)
-
-
-    @staticmethod
-    def load(loader_class: typing.Type[gtc.PoseLoader], has_noise_added: bool,
+    @classmethod
+    def load(cls, loader_class: typing.Type[gtc.PoseLoader],
+             has_noise_added: bool,
              np_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              pkl_file: typing.Optional[typing.Union[str, bytes, os.PathLike]] = None,
              *,
-             skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all):
-        if np_file is None:
-            np_file = DataOrganizer.getDumpFilenameNP(loader_class, has_noise_added)
-        if pkl_file is None:
-            pkl_file = DataOrganizer.getDumpFilenamePkl(loader_class, has_noise_added)
+             skip_filter: typing.Union[int, SkipSubsetKind] = SkipSubsetKind._all
+             ):
 
-        with open(pkl_file, "rb") as f:
-            nnpl = typing.cast(RowsAndColsHandler, pickle.load(f))
-
-        npl = np.load(np_file, allow_pickle=False)
-
-        arrs_dict = {k: npl[k] for k in npl.files}
-        sliced = nnpl.skip_selection(arrs_dict, skip_filter, delete_orig=True)
+        rowcolhandler, sliced = cls._load_rowcolhandler_and_slices(
+            loader_class, has_noise_added, np_file, pkl_file,
+            skip_filter=skip_filter
+        )
         ret = DataOrganizer(
-            nnpl,
+            rowcolhandler,
             sliced["concat_whole_data"],
             sliced["concat_whole_class_errs"],
             sliced["concat_whole_labels"],
             loader_class, has_noise_added
         )
 
-        npl.close()
         return ret
-
 
 
 def joinArrays(pts_lists: typing.List[NDArray]):
