@@ -1,6 +1,7 @@
 ################################################################################
 # Velocity-Aligned-Frame Networks
 ################################################################################
+import json
 import typing
 
 import numpy as np
@@ -14,7 +15,7 @@ import rnn_models as rnnm
 from nn_utilities.nn_losses import *
 from nn_utilities.lstm_io import (
     saveRun, loadRun, findRun, makeRunDir, comboHash, LSTM_OUT_MODE,
-    exportWorldFrameModel
+    exportWorldFrameModel, listRuns
 )
 
 # Local code imports ===========================================================
@@ -192,19 +193,29 @@ scaler_obj.scale_[-3:] = temp_mag_scaler.scale_
 if USE_VEL_IN:
     scaler_obj.mean_[-3:] = 0.0
 
-train_jav_in = scaleWindows(train_jav_in, scaler_obj)
-test_jav_in = scaleWindows(test_jav_in, scaler_obj)
-val_jav_in = scaleWindows(val_jav_in, scaler_obj)
+# Keep the unscaled windows (train, val, test) so that the data can be re-scaled
+# with a different scaler; see the input-scale sweep at the end of this file.
+raw_jav_ins = (train_jav_in, val_jav_in, test_jav_in)
+raw_jav_outs = (train_jav_out, val_jav_out, test_jav_out)
 
-if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
-    train_jav_out = scaler_obj.transform(train_jav_out)
-    test_jav_out = scaler_obj.transform(test_jav_out)
-    val_jav_out = scaler_obj.transform(val_jav_out)
+def scaleDataSplits(scaler):
+    '''Returns the scaled [train, val, test] inputs and the scaled [train, val]
+    targets for the given scaler, built from the unscaled windows. The test
+    inputs must be scaled to be fed to the model, but the test targets are
+    deliberately NOT scaled: they stay in mm (test_gt_mm), and predictions are
+    converted to mm (see predictionsMM) before being compared with them.'''
+    ins = [scaleWindows(x, scaler, ensureCopy=True) for x in raw_jav_ins]
+    outs = list(raw_jav_outs[:2])
+    if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
+        outs = [scaler.transform(o) for o in outs]
+        if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
+            outs = [o - i[:, -1] for o, i in zip(outs, ins[:2])]
+    return ins, outs
 
-    if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
-        train_jav_out -= train_jav_in[:, -1]
-        test_jav_out -= test_jav_in[:, -1]
-        val_jav_out -= val_jav_in[:, -1]
+(train_jav_in, val_jav_in, test_jav_in), \
+    (train_jav_out, val_jav_out) = scaleDataSplits(scaler_obj)
+# Test ground truth, in mm (for DISP, the next position, not the displacement).
+test_gt_mm = raw_jav_outs[2]
 
 # The context must use the same frame as rnnDataWindows applies to each window,
 # i.e. w2ls index (i + WIN_SIZE - shift) for window i, where shift is the number
@@ -218,19 +229,25 @@ def getContextData(combo_subset):
     concat_w2ls = concat_w2ls.reshape(-1, 9)
     return concat_w2ls
 
-train_in = train_jav_in
-val_in = val_jav_in
-test_in = test_jav_in
+# The context doesn't depend on the input scaling, so it's computed only once.
+contexts = (None, None, None)
 if USE_CONTEXT:
     train_context = getContextData(train_combos)
     val_context = getContextData(val_combos)
     test_context = getContextData(test_combos)
     assert len(train_context) == len(train_jav_out)
     assert len(val_context) == len(val_jav_out)
-    assert len(test_context) == len(test_jav_out)
-    train_in = (train_jav_in, train_context)
-    val_in = (val_jav_in, val_context)
-    test_in = (test_jav_in, test_context)
+    assert len(test_context) == len(test_gt_mm)
+    contexts = (train_context, val_context, test_context)
+
+def packInputs(jav_ins):
+    '''Turns [train, val, test] scaled windows into the model's inputs (adding
+    the context if used).'''
+    if not USE_CONTEXT:
+        return list(jav_ins)
+    return list(zip(jav_ins, contexts))
+
+train_in, val_in, test_in = packInputs((train_jav_in, val_jav_in, test_jav_in))
 #%%
 ################################################################################
 # BUILDING THE NETWORK
@@ -244,6 +261,15 @@ input_win_len = WIN_SIZE
 if USE_VEL_IN:
     input_win_len = WIN_SIZE - 1
 LSTM_UNITS = (128, 128, 128)
+
+def buildLSTMModel():
+    if USE_CONTEXT:
+        return rnnm.get_frame_context_lstm(
+            loss_to_use, input_win_len, 9, units=LSTM_UNITS, out_size=out_dims
+        )
+    return rnnm.get_simple_lstm(
+        loss_to_use, out_dims, 'adam', units=LSTM_UNITS
+    )
 
 # Settings that define the data and model. Saved with each run and checked when
 # loading one. (The random seed is recorded with the run but not checked.)
@@ -287,20 +313,8 @@ else:
         _units_str, SEED
     )
 
-    if USE_CONTEXT:
-        jav_lstm_model = rnnm.get_frame_context_lstm(
-            loss_to_use, input_win_len, 9, units=LSTM_UNITS, out_size=out_dims
-        )
-    else:
-        jav_lstm_model = rnnm.get_simple_lstm(
-            loss_to_use, out_dims, 'adam', units=LSTM_UNITS
-        )
+    jav_lstm_model = buildLSTMModel()
 
-# Log the loss in mm, rather than just scaled coordinates.
-logger_scaler = None if _mode_is_jav15 else scaler_obj
-jav_lstm_logger = UnscaledDistanceLogger(
-    train_in, train_jav_out, logger_scaler, loss_func=loss_to_use
-)
 print("Note: The default reported \"loss\" will not be in millimeters, because training data was normalized.")
 print("Actual MAE in millimeters will be printed explicitly/separately.")
 
@@ -309,16 +323,27 @@ print("Actual MAE in millimeters will be printed explicitly/separately.")
 # TRAINING THE NETWORK
 ################################################################################
 
-run_dir = loaded_run_dir # Stays None if a new model is trained but not saved.
-if not loaded_run_dir:
+def fitLSTM(model, tr_in, tr_out, va_in, va_out, scaler):
+    '''Trains model on the given (already scaled) data. Returns the Keras
+    history and the logger, which records the training loss in mm.'''
+    # Log the loss in mm, rather than just scaled coordinates.
+    logger_scaler = None if _mode_is_jav15 else scaler
+    logger = UnscaledDistanceLogger(
+        tr_in, tr_out, logger_scaler, loss_func=loss_to_use
+    )
     early = keras.callbacks.EarlyStopping(monitor="val_loss", patience=7,
                                           restore_best_weights=True)
     plateau = keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=5)
+    hist = model.fit(
+        tr_in, tr_out, epochs=500, validation_data=[va_in, va_out],
+        callbacks=[logger, early, plateau]
+    )
+    return hist, logger
 
-    jav_lstm_hist = jav_lstm_model.fit(
-        train_in, train_jav_out, epochs=500,
-        validation_data=[val_in, val_jav_out],
-        callbacks=[jav_lstm_logger, early, plateau]
+run_dir = loaded_run_dir # Stays None if a new model is trained but not saved.
+if not loaded_run_dir:
+    jav_lstm_hist, jav_lstm_logger = fitLSTM(
+        jav_lstm_model, train_in, train_jav_out, val_in, val_jav_out, scaler_obj
     )
     if SAVE_RUNS_DIR:
         run_dir = makeRunDir(SAVE_RUNS_DIR, run_tag)
@@ -361,22 +386,24 @@ if EXPORT_MODEL:
 
 jav_lstm_test_pred = jav_lstm_model.predict(test_in)
 
-def getErrsLSTM(scaler, unscaled_preds, scaled_gt):
+raw_test_jav_in = raw_jav_ins[2]
 
-    scaled_preds = unscaled_preds
-    if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
-        scaled_preds = scaler.inverse_transform(unscaled_preds)
+def unscalePredictionsToMM(scaler, scaled_preds, raw_test_in):
+    '''Runs model on the (scaled) test inputs and returns its predictions in mm,
+    the same units as test_gt_mm. raw_test_in is the unscaled test windows, needed
+    to turn predicted displacements into positions.'''
+    if CHOSEN_OUT == LSTM_OUT_MODE.JAV15:
+        return scaled_preds # Already unscaled.
+    if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
+        # Scaled displacement d -> mm is d * scale (the mean cancels).
+        return raw_test_in[:, -1] + scaled_preds * scaler.scale_
+    return scaler.inverse_transform(scaled_preds)
 
-    return loss_to_use(scaled_gt, scaled_preds)
+mm_test_preds = unscalePredictionsToMM(
+    scaler_obj, jav_lstm_test_pred, raw_test_jav_in
+)
 
-# Transform the coordinates back into non-normalized form to get the errors
-# in millimeters.
-jav_scaled_lstm_gt_test = test_jav_out
-if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
-    jav_scaled_lstm_gt_test = scaler_obj.inverse_transform(
-        test_jav_out
-    )
-
+# Constant-acceleration baseline, computed directly on the unscaled windows.
 const_acc_pred = np.zeros(12)
 const_acc_pred[[0, 1, 5]] = 1.0
 if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
@@ -390,16 +417,11 @@ if CHOSEN_OUT != LSTM_OUT_MODE.JAV15:
         if CHOSEN_OUT == LSTM_OUT_MODE.DISP:
             const_acc_pred = const_acc_pred - test_jav_in[:, -1]
 
-const_acc_errs = getErrsLSTM(
-    scaler_obj, const_acc_pred, jav_scaled_lstm_gt_test
+const_acc_pred_mm = unscalePredictionsToMM(
+    scaler_obj, const_acc_pred, raw_test_jav_in
 )
-
-# jav_scaled_lstm_gt_train = scaler_obj.inverse_transform(
-#     train_jav_out[:, -3:]
-# )
-jav_lstm_test_errs = getErrsLSTM(
-    scaler_obj, jav_lstm_test_pred, jav_scaled_lstm_gt_test
-)
+const_acc_errs = loss_to_use(test_gt_mm, const_acc_pred_mm)
+jav_lstm_test_errs = loss_to_use(test_gt_mm, mm_test_preds)
 print("\n\nAcc score (millimeters) on test data:", np.mean(const_acc_errs))
 print("\n\nJAV LSTM score (millimeters) on test data:", np.mean(jav_lstm_test_errs))
 print("Above score is for skip{} data.".format(jav_lstm_skip))
@@ -420,3 +442,103 @@ if not loaded_run_dir: # No training curve when a saved model was loaded.
     plt.show()
 
 print("Done program.")
+
+#%%
+################################################################################
+# INPUT-SCALE SENSITIVITY SWEEP
+################################################################################
+# Trains (or loads) one LSTM per value in SWEEP_SCALES (per seed in
+# SWEEP_SEEDS). Each uses the same data and settings as the main model, except
+# that the scaler's scale_ (the number the inputs are divided by) is replaced by
+# the sweep value, for all three axes; the means are those of scaler_obj. Runs
+# are saved to SWEEP_RUNS_DIR, with the scale in meta.json ("input_scale") and
+# the test MAE in mm in "info" ("test_mae_mm"), so that loadSweepResults() can
+# rebuild the table for a graph later without loading any models.
+import copy
+
+RUN_SCALE_SWEEP = True
+SWEEP_RUNS_DIR = "results/lstms_scale_sweep"
+# Scale values (mm per scaled unit). Here, multiples of the ground-truth scale
+# (1.0 is the normal model); any array of positive numbers works.
+# scaler_naive = scalerForWindows(ts_main, dim=1)
+SWEEP_SCALES = [2.9754, 25.2044, 100, 200, 300, 400, 500]
+# A fixed seed per model keeps the comparison between scales fair. Add more
+# seeds to see the run-to-run variation.
+SWEEP_SEEDS = [0]
+
+def scalerWithScale(base_scaler, scale):
+    s = copy.deepcopy(base_scaler)
+    s.scale_ = np.full_like(base_scaler.scale_, scale)
+    s.var_ = s.scale_ ** 2
+    return s
+
+def testErrorMM(model, scaler, test_inputs):
+    unscaledPreds = model.predict(test_inputs)
+    predsMM = unscalePredictionsToMM(scaler, unscaledPreds, raw_test_jav_in)
+    return float(np.mean(loss_to_use(test_gt_mm, predsMM)))
+
+def loadSweepResults(runs_dir=SWEEP_RUNS_DIR):
+    '''Returns a list of (input_scale, seed, test_mae_mm, run_dir) for the
+    saved sweep runs whose other settings match the current ones.'''
+    rows = []
+    for d, saved_meta, info in listRuns(runs_dir):
+        others = {k: v for k, v in saved_meta.items() if k != "input_scale"}
+        if "input_scale" not in saved_meta or others != json.loads(json.dumps(run_meta)):
+            continue
+        rows.append((saved_meta["input_scale"], info.get("seed"),
+                     info.get("test_mae_mm"), d))
+    return sorted(rows, key=lambda r: (r[0], r[1] if r[1] is not None else -1))
+
+if RUN_SCALE_SWEEP:
+    for sweep_seed in SWEEP_SEEDS:
+        for scale_ind, sweep_scale in enumerate(SWEEP_SCALES):
+            sweep_scale = float(sweep_scale)
+            print("\n=== Run {}, Input scale {:.6g} (seed {}) ===".format(
+                scale_ind + 1, sweep_scale, sweep_seed))
+            sweep_scaler = scalerWithScale(scaler_obj, sweep_scale)
+            sweep_meta = dict(run_meta, input_scale=sweep_scale)
+            sweep_arrays = {"scaler_mean": sweep_scaler.mean_,
+                            "scaler_scale": sweep_scaler.scale_}
+
+            sw_ins, sw_outs = scaleDataSplits(sweep_scaler)
+            sw_train_in, sw_val_in, sw_test_in = packInputs(sw_ins)
+
+            sweep_run = None
+            if LOAD_SAVED_RUN:
+                sweep_run = findRun(SWEEP_RUNS_DIR, sweep_meta, sweep_arrays,
+                                    seed=sweep_seed)
+            if sweep_run:
+                sweep_model = loadRun(sweep_run, False, sweep_meta, sweep_arrays)
+                sweep_mae = testErrorMM(sweep_model, sweep_scaler, sw_test_in)
+            else:
+                keras.utils.set_random_seed(sweep_seed)
+                sweep_model = buildLSTMModel()
+                fitLSTM(sweep_model, sw_train_in, sw_outs[0], sw_val_in,
+                        sw_outs[1], sweep_scaler)
+                sweep_mae = testErrorMM(sweep_model, sweep_scaler, sw_test_in)
+                saveRun(
+                    makeRunDir(SWEEP_RUNS_DIR, "trans_scalesweep_{:.4g}_s{}".format(
+                        sweep_scale, sweep_seed)),
+                    sweep_model, sweep_meta, sweep_arrays,
+                    info={"seed": sweep_seed, "input_scale": sweep_scale,
+                          "test_mae_mm": sweep_mae}
+                )
+            print("Test MAE (mm): {:.4f}".format(sweep_mae))
+            del sweep_model, sw_ins, sw_outs, sw_train_in, sw_val_in, sw_test_in
+            keras.backend.clear_session()
+
+    # Summary table and quick plot, from what's on disk.
+    sweep_rows = loadSweepResults()
+    print("\nscale (mm)   seed   test MAE (mm)")
+    for sc_, sd_, mae_, _ in sweep_rows:
+        print("{:10.5g}   {}   {:.4f}".format(sc_, sd_, mae_))
+    if sweep_rows:
+        plt.plot([r[0] for r in sweep_rows], [r[2] for r in sweep_rows], "o-")
+        plt.axhline(np.mean(const_acc_errs), ls="--", c="gray",
+                    label="Const. acceleration")
+        plt.xlabel("Input scale (mm per scaled unit)")
+        plt.ylabel("Test MAE (mm)")
+        plt.title("LSTM sensitivity to input scale (skip{})".format(jav_lstm_skip))
+        plt.legend()
+        plt.grid(True)
+        plt.show()

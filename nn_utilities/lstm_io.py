@@ -136,6 +136,22 @@ def findRun(base_dir, expected_meta: dict,
     return max(matches, key=lambda d: (d / "model.keras").stat().st_mtime)
 
 
+def listRuns(base_dir) -> typing.List[tuple]:
+    '''Returns (run_dir, meta, info) for every readable run in base_dir, in
+    name order. Doesn't load any models or check the settings; useful for
+    collecting the results of a set of runs (e.g. a parameter sweep) that were
+    recorded in "info".'''
+    base = pathlib.Path(base_dir)
+    if not base.is_dir():
+        return []
+    ret = []
+    for d in sorted(base.iterdir()):
+        saved = _readMeta(d) if d.is_dir() else None
+        if saved is not None:
+            ret.append((d, saved["meta"], saved["info"]))
+    return ret
+
+
 def loadRun(run_dir, load_scaled: bool, expected_meta: dict,
             expected_arrays: typing.Optional[typing.Dict[str, np.ndarray]] = None,
             rtol: float = 1e-6, atol: float = 1e-8):

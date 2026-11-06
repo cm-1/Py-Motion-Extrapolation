@@ -78,7 +78,7 @@ def rnnDataWindows(data, combo_subset: typing.List[typing.Tuple],
     data_out_np = np.array(data_out)
     return (data_in_np, data_out_np)
 
-def scaleWindows(data: NDArray, scaler: ScalerType):
+def scaleWindows(data: NDArray, scaler: ScalerType, ensureCopy: bool = True):
     orig_shape = data.shape
     data_rs: NDArray
     if data.ndim == 2:
@@ -87,8 +87,11 @@ def scaleWindows(data: NDArray, scaler: ScalerType):
         data_rs = data.reshape((-1,) + data.shape[2:])
     else:
         raise NotImplementedError("Unsupported windowed data ndim > 3!")
-    
-    scaled = scaler.transform(data_rs)
+
+    data_rs_c = data_rs
+    if ensureCopy and not scaler.copy:
+        data_rs_c = data_rs.copy()
+    scaled = scaler.transform(data_rs_c)
     return scaled.reshape(orig_shape)
 
 
