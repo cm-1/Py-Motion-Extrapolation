@@ -274,19 +274,26 @@ class UnitAwareScaler:
         ]
         self._nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
 
-    def fit(self, X):
+    def fit(self, X, pos_scale: typing.Optional[float] = None,
+            rot_scale: typing.Optional[float] = None):
+        
         if len(X) <= 0:
             raise ValueError("No data provided to fit for!")
         if len(X[0]) != self._n_keys:
             raise ValueError("Number of data columns does not match keys!")
-            
-        pos_scale = np.mean(np.std(X[:, self._nc_pos_proj_inds], axis=0))
-        rot_scale = 1.0
-        if self.scale_rots:
-            rot_scale = np.mean(np.std(X[:, self._nc_rot_proj_inds], axis=0))
-        self.fitWithScales(X, pos_scale, rot_scale)
 
-    def fitWithScales(self, X, pos_scale, rot_scale):
+        if pos_scale is None:
+            pos_scale = np.mean(
+                np.std(X[:, self._nc_pos_proj_inds], axis=0)
+            )
+
+        if rot_scale is None:
+            rot_scale = 1.0
+            if self.scale_rots:
+                rot_scale = np.mean(
+                    np.std(X[:, self._nc_rot_proj_inds], axis=0)
+                )
+
         self.pos_scale = pos_scale
         self.rot_scale = rot_scale
         
@@ -926,7 +933,8 @@ class DataOrganizer(FeaturesOrganizer):
         )
 
     def setPickAndTransform(self, columns: NDArray, transformer = None,
-                            free_orig_mem: bool = False):
+                            free_orig_mem: bool = False,
+                            pos_scale_override: typing.Optional[float] = None):
         # Get the data subset for the selected non-collinear columns.
         self.col_subset_whole = self.concat_whole_data[:, columns]
         
@@ -943,7 +951,9 @@ class DataOrganizer(FeaturesOrganizer):
         if transformer is not None:
             if not _isFitted(transformer):
                 transformer.fit(
-                    self.col_subset_whole[:self.train_val_border_ind]
+                    self.col_subset_whole[:self.train_val_border_ind],
+                    pos_scale=pos_scale_override
+                    # 25.2044616, 1.0
                 )
             # I've written _isfitted() to use hasattr with the assumption that
             # transformers/calers will not have the n_features_in_ attr until

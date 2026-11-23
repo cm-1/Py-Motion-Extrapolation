@@ -161,12 +161,13 @@ class DataForJAV:
                  col_mask: NDArray, JAV_order: OrderForJAV,
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
-                 *, save_data_for_conf: bool = False,
-                 use_cache: bool = False):
+                 *, save_data_for_conf: bool = False, use_cache: bool = False,
+                 pos_scale_override: typing.Optional[float] = None):
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(
-            col_mask, bcs_scaler, free_orig_mem=True
+            col_mask, bcs_scaler, free_orig_mem=True,
+            pos_scale_override=pos_scale_override
         )
         _dog = self.data_organizer
         self._val_start = len(_dog.col_subset_train)
@@ -845,6 +846,39 @@ if TRAIN_NEW_MODEL:
         chosen_mode.name, chosen_preset.name, noise_str, datetime.datetime.now()
     )
     bcs_model.save(model_name)
+
+#%%
+SWEEP_SCALES = [2.9754, 25.2044, 100, 200, 300, 400, 500]
+sweep_scores = []
+
+# Disabling for now; didn't yield much insight. Maybe different scales would.
+if False:
+
+    for scal in SWEEP_SCALES:
+        noise_str = "--noised" if USE_NOISE else ""
+        scal_model_name = "results/sweep_scale_models/{}--{}{}--{:.4g}.keras".format(
+            chosen_mode.name, chosen_preset.name, noise_str, scal
+        )
+        scal_model = getUntrainedNN(bcotjav.in_train.shape[1], sel_dim, sel_loss)
+        sweep_scaler = UnitAwareScaler(key_subset, scale_rots=False)
+        sweep_bcotjav = DataForJAV(
+            dog, sweep_scaler, col_subset_mask, JAV_order, chosen_mode,
+            save_data_for_conf=True, pos_scale_override=scal
+        )
+        sw_val_param = (
+            sweep_bcotjav.in_validation[v_s2_ind:],
+            sweep_bcotjav.gt_validation[v_s2_ind:]
+        )
+
+        sw_hist = scal_model.fit(
+            sweep_bcotjav.in_train[tr_s2_ind:],
+            sweep_bcotjav.gt_train[tr_s2_ind:], epochs=500, shuffle=True,
+            validation_data=sw_val_param, callbacks=[early, plateau]
+        )
+        sw_pred = scal_model.predict(bcotjav.in_test, batch_size = 1024)
+        sw_score = sweep_bcotjav.getScoresTest(sw_pred)
+        scal_model.save(scal_model_name)
+        sweep_scores.append(sw_score[SkipSubsetKind.skip2])
 
 #%% Granular per-model scores on test data.
 median_store_shape = (3, len(bcot_test_ids))
