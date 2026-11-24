@@ -762,11 +762,12 @@ bcotjav = DataForJAV(
     save_data_for_conf=True, #skip=2
 )
 #%%
-print("Reference scores for whole dataset (i.e., no train/test split).")
+print("Reference scores for test set.")
 print("Reference method:", bcotjav.ref_prediction_name)
 print("Reference scores:")
 bcotjav.getScoresSubset(DataSubsetKind.TEST, bcotjav.ref_predictions[DataSubsetKind.TEST], True)
 
+print("\nSkip2 portion shape:")
 print(dog.col_subset_test[dog.col_subset_test[:, 0] > 1].shape)
 
 #%%
