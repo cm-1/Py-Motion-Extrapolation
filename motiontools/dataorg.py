@@ -275,7 +275,8 @@ class UnitAwareScaler:
         self._nc_ang_inds = [i for i, k in smd_cols if k.ang_or_mag == ANG_OR_MAG.ANG]
 
     def fit(self, X, pos_scale: typing.Optional[float] = None,
-            rot_scale: typing.Optional[float] = None):
+            rot_scale: typing.Optional[float] = None,
+            keep_units_consistent: bool = True):
         
         if len(X) <= 0:
             raise ValueError("No data provided to fit for!")
@@ -294,25 +295,26 @@ class UnitAwareScaler:
                     np.std(X[:, self._nc_rot_proj_inds], axis=0)
                 )
 
-        self.pos_scale = pos_scale
-        self.rot_scale = rot_scale
-        
-        self.scale_ = np.empty(self._n_keys)
-        self.scale_[self._nc_ang_inds] = 1.0
-        self.scale_[self._nc_pos_proj_inds] = self.pos_scale
-        self.scale_[self._nc_rot_proj_inds] = self.rot_scale
-        self.scale_[self._nc_pos_pos_inds] = self.pos_scale * self.pos_scale
-        self.scale_[self._nc_pos_rot_inds] = self.pos_scale * self.rot_scale
-        self.scale_[self._nc_rot_rot_inds] = self.rot_scale * self.rot_scale
-
-        self.mean_ = np.zeros(self._n_keys)
-
         scale_not_filled = np.full(self._n_keys, True)
-        filled_int_inds = np.concatenate((
-            self._nc_ang_inds, self._nc_pos_proj_inds, self._nc_rot_proj_inds,
-            self._nc_pos_pos_inds, self._nc_pos_rot_inds, self._nc_rot_rot_inds
-        )).astype(int)
-        scale_not_filled[filled_int_inds] = False
+        self.scale_ = np.empty(self._n_keys)
+        self.mean_ = np.zeros(self._n_keys)
+        if keep_units_consistent:
+            self.pos_scale = pos_scale
+            self.rot_scale = rot_scale
+            
+            self.scale_[self._nc_ang_inds] = 1.0
+            self.scale_[self._nc_pos_proj_inds] = self.pos_scale
+            self.scale_[self._nc_rot_proj_inds] = self.rot_scale
+            self.scale_[self._nc_pos_pos_inds] = self.pos_scale * self.pos_scale
+            self.scale_[self._nc_pos_rot_inds] = self.pos_scale * self.rot_scale
+            self.scale_[self._nc_rot_rot_inds] = self.rot_scale * self.rot_scale
+
+
+            filled_int_inds = np.concatenate((
+                self._nc_ang_inds, self._nc_pos_proj_inds, self._nc_rot_proj_inds,
+                self._nc_pos_pos_inds, self._nc_pos_rot_inds, self._nc_rot_rot_inds
+            )).astype(int)
+            scale_not_filled[filled_int_inds] = False
 
         self.mean_[scale_not_filled] = np.mean(X[:, scale_not_filled], axis=0)
         self.scale_[scale_not_filled] = np.std(X[:, scale_not_filled], axis=0)
@@ -934,7 +936,8 @@ class DataOrganizer(FeaturesOrganizer):
 
     def setPickAndTransform(self, columns: NDArray, transformer = None,
                             free_orig_mem: bool = False,
-                            pos_scale_override: typing.Optional[float] = None):
+                            pos_scale_override: typing.Optional[float] = None,
+                            keep_units_consistent: bool = True):
         # Get the data subset for the selected non-collinear columns.
         self.col_subset_whole = self.concat_whole_data[:, columns]
         
@@ -952,7 +955,8 @@ class DataOrganizer(FeaturesOrganizer):
             if not _isFitted(transformer):
                 transformer.fit(
                     self.col_subset_whole[:self.train_val_border_ind],
-                    pos_scale=pos_scale_override
+                    pos_scale=pos_scale_override,
+                    keep_units_consistent=keep_units_consistent
                     # 25.2044616, 1.0
                 )
             # I've written _isfitted() to use hasattr with the assumption that

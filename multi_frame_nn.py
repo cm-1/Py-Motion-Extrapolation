@@ -162,12 +162,14 @@ class DataForJAV:
                  outVecMode: OutVecMode,
                  skip: typing.Union[int,SkipSubsetKind] = SkipSubsetKind._all,
                  *, save_data_for_conf: bool = False, use_cache: bool = False,
-                 pos_scale_override: typing.Optional[float] = None):
+                 pos_scale_override: typing.Optional[float] = None,
+                 keep_units_consistent: bool = True):
 
         self.data_organizer = data_organizer
         self.data_organizer.setPickAndTransform(
             col_mask, bcs_scaler, free_orig_mem=True,
-            pos_scale_override=pos_scale_override
+            pos_scale_override=pos_scale_override,
+            keep_units_consistent=keep_units_consistent
         )
         _dog = self.data_organizer
         self._val_start = len(_dog.col_subset_train)
@@ -642,7 +644,7 @@ class DataForJAV:
 
         return no_rot_cols_np, rot_cols_np
     
-    def _fitWorldScaler(self, scale: float):
+    def _fitWorldScaler(self, scale: float = 0.0):
         scaler = StandardScaler()
         if self._cache_help.translations_JAV is None:
             raise Exception("No translations stored to set scaler with!")
@@ -653,7 +655,8 @@ class DataForJAV:
                 self.data_organizer.subset_ids[DataSubsetKind.TRAIN]
             )[0]
         )
-        scaler.scale_[:] = scale
+        if scale != 0.0:
+            scaler.scale_[:] = scale
         
         self.translationScaler = scaler
     
